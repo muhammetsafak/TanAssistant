@@ -17,6 +17,14 @@ const TEST_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="
 fn main() {
     tauri_build::build();
 
+    // `screencapturekit` links a Swift bridge that needs the Swift runtime
+    // (`libswift_Concurrency.dylib`, ...). `rustc-link-arg` emitted by a dependency's build
+    // script does not propagate to the final binary, so every binary that links the macOS
+    // capture adapter has to add the system Swift runtime directory to its rpath itself.
+    if env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "macos") {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+    }
+
     let is_windows_msvc = env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "windows")
         && env::var("CARGO_CFG_TARGET_ENV").is_ok_and(|e| e == "msvc");
     if is_windows_msvc {
