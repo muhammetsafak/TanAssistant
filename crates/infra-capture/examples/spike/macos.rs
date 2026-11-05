@@ -214,8 +214,10 @@ impl SCStreamOutputTrait for AudioHandler {
         } else if planes.len() == 1 {
             // Already interleaved.
             planes[0]
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
                 .collect()
         } else {
             return;
@@ -277,7 +279,7 @@ impl SCStreamOutputTrait for ScreenHandler {
         let mut rgba = Vec::with_capacity(width * height * 4);
         for row in 0..height {
             let line = &bytes[row * stride..row * stride + width * 4];
-            for px in line.chunks_exact(4) {
+            for px in line.as_chunks::<4>().0 {
                 rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
             }
         }
