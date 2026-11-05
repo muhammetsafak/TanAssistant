@@ -94,7 +94,10 @@ pub(super) fn start(
     let display = match request.display_id.as_deref() {
         Some(id) => displays
             .iter()
-            .find(|d| d.display_id().to_string() == id)
+            .find(|d| {
+                id.parse::<u32>()
+                    .is_ok_and(|wanted| d.display_id() == wanted)
+            })
             .ok_or_else(|| {
                 CaptureError::device_not_found("the selected display is not available")
             })?,

@@ -104,7 +104,7 @@ impl AudioStream for SckAudioStream {
         self.format
     }
 
-    fn device_name(&self) -> &str {
+    fn device_name(&self) -> &'static str {
         "System audio (ScreenCaptureKit)"
     }
 
@@ -159,8 +159,11 @@ impl SCStreamOutputTrait for AudioHandler {
         let Ok(list) = sample.audio_buffer_list() else {
             return;
         };
-        let planes: Vec<&[u8]> = list.iter().map(|buffer| buffer.data()).collect();
-        let samples = if planes.len() == usize::from(channels) && planes.len() > 1 {
+        let planes: Vec<&[u8]> = list
+            .iter()
+            .map(screencapturekit::AudioBuffer::data)
+            .collect();
+        let pcm = if planes.len() == usize::from(channels) && planes.len() > 1 {
             interleave_planar(&planes)
         } else if planes.len() == 1 {
             // Already interleaved.
@@ -181,7 +184,7 @@ impl SCStreamOutputTrait for AudioHandler {
                 channels,
             },
             captured_at: Instant::now(),
-            samples,
+            samples: pcm,
         });
     }
 }
@@ -191,13 +194,13 @@ impl SCStreamOutputTrait for AudioHandler {
 fn interleave_planar(planes: &[&[u8]]) -> Vec<f32> {
     let frames = planes
         .iter()
-        .map(|plane| plane.len() / 4)
+        .map(|channel| channel.len() / 4)
         .min()
         .unwrap_or(0);
     let mut out = Vec::with_capacity(frames * planes.len());
     for frame in 0..frames {
-        for plane in planes {
-            let bytes = &plane[frame * 4..frame * 4 + 4];
+        for channel in planes {
+            let bytes = &channel[frame * 4..frame * 4 + 4];
             out.push(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
         }
     }
