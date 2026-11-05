@@ -8,28 +8,31 @@ publish.workspace = true
 tan-application.workspace = true
 tan-domain.workspace = true
 
-# Spike-only dependencies (Phase 02). They are dev-dependencies on purpose: the
-# dependency-direction check ignores them and production code in `src/` must not use them
-# until Phase 08 promotes the chosen ones to real dependencies.
-[dev-dependencies]
+# Microphone on every OS; system audio on Windows (WASAPI loopback) and Linux (PulseAudio
+# monitor source). The spike also uses these from `examples/`.
 cpal = "0.18"
+# 16-bit PCM WAV files with a durable header (`WavWriter::flush`).
 hound = "3.5"
+# PNG encoding of the kept frames.
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Windows: capture frames through Windows Graphics Capture (ADR-009) instead of GDI/DXGI.
-[target.'cfg(target_os = "windows")'.dev-dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
 xcap = { version = "0.9", features = ["wgc"] }
 
 # Linux: record the PulseAudio/PipeWire monitor source through the pure-Rust PulseAudio
 # protocol backend of cpal (also served by pipewire-pulse), so no libpulse headers are
 # needed. Frames come from xcap (X11 through xcb, Wayland through the desktop portal).
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 cpal = { version = "0.18", features = ["pulseaudio"] }
 xcap = "0.9"
 
 # macOS 13+: system audio and screen frames through ScreenCaptureKit.
-[target.'cfg(target_os = "macos")'.dev-dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "11", features = ["macos_13_0"] }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -1,6 +1,7 @@
 //! Ports: the traits adapters implement.
 
 pub mod ai;
+pub mod capture;
 pub mod repositories;
 pub mod secrets;
 
@@ -11,6 +12,12 @@ pub use ai::{
     ChatRequest, ChatResponse, ChatRole, ImageInput, JsonSchema, ModelCatalog, ProviderFactory,
     TokenUsage, TranscriptSegmentDto, TranscriptionModel, TranscriptionRequest, VisionModel,
     VisionRequest,
+};
+pub use capture::{
+    AudioCapture, AudioDevice, AudioFileInfo, AudioFormat, AudioSink, AudioStream,
+    AudioStreamRequest, AudioWriter, CaptureError, CaptureErrorKind, CaptureResult, DisplayInfo,
+    FrameHasher, FrameSink, MediaStore, PcmChunk, RawFrame, ScreenAvailability, ScreenCapture,
+    ScreenStream, ScreenStreamRequest, ScreenUnavailableReason,
 };
 pub use repositories::{
     FrameRepository, NoteRepository, ProviderProfileRepository, SearchHit, SearchIndex,

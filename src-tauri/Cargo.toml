@@ -23,7 +23,11 @@ tan-infra-secrets.workspace = true
 tan-infra-ai.workspace = true
 tan-infra-capture.workspace = true
 tan-infra-transcription.workspace = true
-tauri = { version = "2", features = [] }
+# `tray-icon`: the recording status icon and menu (Phase 08).
+tauri = { version = "2", features = ["tray-icon"] }
+# A second launch must not open a second process: it would share the database and the
+# capture devices, and its startup recovery would mark the live recording as finished.
+tauri-plugin-single-instance = "2"
 serde.workspace = true
 tracing.workspace = true
 # Pre-release crates: the `=` pins are required (specta APIs break between rcs).

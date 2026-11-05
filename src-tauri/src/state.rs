@@ -15,14 +15,16 @@ use tan_application::credentials::{
     UpsertVariable,
 };
 use tan_application::ports::{Clock, IdGenerator};
+use tan_application::recording::{RecordingEvents, RecordingPorts, RecordingService};
 use tan_application::settings::{GetSettings, UpdateSettings};
 use tan_domain::EpochMs;
 use tan_infra_ai::AiProviderFactory;
+use tan_infra_capture::{DHasher, FileMediaStore, PlatformAudioCapture, PlatformScreenCapture};
 use tan_infra_secrets::{open_secret_store, SelectedSecretStore};
 use tan_infra_storage::{
-    new_id, DataLayout, Database, SqliteProviderProfileRepository, SqliteSecretMetadataRepository,
-    SqliteSettingsRepository, SqliteTaskAssignmentRepository, SqliteVariableRepository,
-    StorageError,
+    new_id, DataLayout, Database, SqliteFrameRepository, SqliteProviderProfileRepository,
+    SqliteSecretMetadataRepository, SqliteSessionRepository, SqliteSettingsRepository,
+    SqliteTaskAssignmentRepository, SqliteVariableRepository, StorageError,
 };
 
 /// Environment variable that overrides the data directory (development, tests, portable use).
@@ -98,6 +100,9 @@ type Variables = SqliteVariableRepository;
 type Profiles = SqliteProviderProfileRepository;
 type Assignments = SqliteTaskAssignmentRepository;
 type AiFactory = AiProviderFactory<Metadata, SelectedSecretStore>;
+/// The recording use case wired to the SQLite repositories.
+pub type Recording =
+    RecordingService<SqliteSessionRepository, SqliteFrameRepository, SqliteSettingsRepository>;
 
 /// Everything the IPC commands need, built once at startup and managed by Tauri.
 pub struct AppState {
@@ -148,6 +153,12 @@ pub struct AppState {
     /// Builds chat/vision/transcription adapters from profiles. For the processing pipeline;
     /// deliberately not exposed over IPC.
     pub ai_factory: Arc<AiFactory>,
+    /// Records meetings: microphone, system audio and changed screen frames.
+    pub recording: Arc<Recording>,
+    /// Lists microphones for the recording options.
+    pub audio_capture: Arc<PlatformAudioCapture>,
+    /// Lists displays for the recording options.
+    pub screen_capture: Arc<PlatformScreenCapture>,
 }
 
 /// The data directory: `TAN_DATA_DIR` if set, otherwise the OS application data directory.
@@ -160,7 +171,11 @@ pub fn resolve_layout() -> Result<DataLayout, StartupError> {
 
 impl AppState {
     /// Opens the database and the secret store under `layout` and wires every use case.
-    pub fn build(layout: DataLayout) -> Result<Self, StartupError> {
+    /// `recording_events` receives the progress and state of recordings (the UI shell).
+    pub fn build(
+        layout: DataLayout,
+        recording_events: Arc<dyn RecordingEvents>,
+    ) -> Result<Self, StartupError> {
         layout.ensure_root().map_err(StartupError::DataDirectory)?;
         let database = Database::open(&layout.database_path()).map_err(StartupError::Database)?;
         let secret_store =
@@ -172,11 +187,30 @@ impl AppState {
         let metadata = Arc::new(SqliteSecretMetadataRepository::new(database.clone()));
         let profiles = Arc::new(SqliteProviderProfileRepository::new(database.clone()));
         let assignments = Arc::new(SqliteTaskAssignmentRepository::new(database.clone()));
+        let sessions = Arc::new(SqliteSessionRepository::new(database.clone()));
+        let frames = Arc::new(SqliteFrameRepository::new(database.clone()));
         let settings = Arc::new(SqliteSettingsRepository::new(database));
         let resolve_secret = Arc::new(ResolveSecret::new(metadata.clone(), secret_store.clone()));
         let ai_factory = Arc::new(
             AiProviderFactory::new(resolve_secret.clone()).map_err(StartupError::AiClient)?,
         );
+
+        let audio_capture = Arc::new(PlatformAudioCapture);
+        let screen_capture = Arc::new(PlatformScreenCapture);
+        let recording = Arc::new(RecordingService::new(
+            sessions,
+            frames,
+            settings.clone(),
+            RecordingPorts {
+                audio: audio_capture.clone(),
+                screen: screen_capture.clone(),
+                hasher: Arc::new(DHasher),
+                media: Arc::new(FileMediaStore::new(layout.sessions_dir())),
+                ids: ids.clone(),
+                clock: clock.clone(),
+                events: recording_events,
+            },
+        ));
 
         Ok(Self {
             layout,
@@ -211,6 +245,9 @@ impl AppState {
             get_task_assignments: GetTaskAssignments::new(assignments.clone()),
             clear_task_assignment: ClearTaskAssignment::new(assignments),
             ai_factory,
+            recording,
+            audio_capture,
+            screen_capture,
         })
     }
 }

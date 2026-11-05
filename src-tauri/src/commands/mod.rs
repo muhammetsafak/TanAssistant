@@ -2,6 +2,7 @@
 
 pub mod ai;
 pub mod credentials;
+pub mod recording;
 pub mod settings;
 
 /// Returns the application version (from the crate manifest).

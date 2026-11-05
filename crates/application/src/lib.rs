@@ -4,6 +4,7 @@ pub mod ai;
 pub mod credentials;
 pub mod error;
 pub mod ports;
+pub mod recording;
 pub mod settings;
 
 pub use error::{RepositoryError, RepositoryResult};

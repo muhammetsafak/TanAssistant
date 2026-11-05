@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Merged into the app bundle Info.plist by Tauri (and embedded in dev builds). -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Tan records your microphone so your side of a meeting can be transcribed into notes.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Tan captures the screen and the system audio of a meeting, so that what other participants say and share ends up in your notes.</string>
+</dict>
+</plist>
