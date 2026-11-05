@@ -37,8 +37,7 @@
       "empty": "Henüz kayıt yok. Kayıt ve not özellikleri sonraki sürümlerde eklenecek."
     },
     "providers": {
-      "title": "AI Sağlayıcıları",
-      "empty": "AI sağlayıcı ayarları sonraki sürümlerde eklenecek."
+      "title": "AI Sağlayıcıları"
     },
     "settings": {
       "title": "Ayarlar",
@@ -130,6 +129,119 @@
       "submit": "Parolayı belirle",
       "passwordRequired": "Ana parola zorunludur.",
       "mismatch": "Parolalar eşleşmiyor."
+    }
+  },
+  "providers": {
+    "intro": "Transkripsiyon, görsel analiz ve özet için kullanılacak AI sağlayıcı profillerini buradan yönetin. API anahtarları Credentials kasasındaki secret'lardan seçilir.",
+    "tasks": {
+      "transcription": "Transkripsiyon",
+      "vision": "Görsel analiz",
+      "summary": "Özet"
+    },
+    "capabilities": {
+      "chat": "Özet",
+      "vision": "Görsel",
+      "transcription": "Transkripsiyon"
+    },
+    "list": {
+      "title": "Profiller",
+      "hint": "Her profil bir sağlayıcı, model ve (gerekiyorsa) API anahtarı birleşimidir.",
+      "add": "Profil ekle",
+      "empty": "Henüz profil yok. Başlamak için bir sağlayıcı profili ekleyin.",
+      "loadFailed": "Profiller yüklenemedi.",
+      "name": "Ad",
+      "provider": "Sağlayıcı",
+      "model": "Model",
+      "capabilities": "Yetenekler",
+      "actions": "İşlemler",
+      "edit": "Düzenle: {{name}}",
+      "delete": "Sil: {{name}}",
+      "deleteTitle": "Profil silinsin mi?",
+      "deleteMessage": "“{{name}}” profili silinecek; bu profile yapılan görev atamaları da kalkar.",
+      "deleted": "Profil silindi."
+    },
+    "form": {
+      "addTitle": "Profil ekle",
+      "editTitle": "Profili düzenle",
+      "kind": "Sağlayıcı",
+      "kindLocked": "Mevcut bir profilin sağlayıcısı değiştirilemez; yeni bir profil ekleyin.",
+      "kindsFailed": "Sağlayıcı bilgileri yüklenemedi.",
+      "displayName": "Görünen ad",
+      "displayNameRequired": "Görünen ad zorunludur.",
+      "model": "Model",
+      "modelHint": "Bir öneri seçin ya da model adını elle yazın.",
+      "modelRequired": "Model zorunludur.",
+      "suggestions": "Model önerileri",
+      "supportsVision": "Bu model görsel girdiyi anlıyor (vision destekli)",
+      "supportsVisionHint": "Yalnız görsel girdiyi destekleyen modeller için işaretleyin; görsel analiz ataması buna bağlıdır.",
+      "baseUrl": "Base URL",
+      "baseUrlHint": "İsteğe bağlı. Boş bırakılırsa varsayılan kullanılır: {{url}}",
+      "baseUrlInvalid": "Geçerli bir http:// ya da https:// adresi girin.",
+      "secret": "API anahtarı (secret)",
+      "optional": "isteğe bağlı",
+      "secretChoose": "Bir secret seçin",
+      "secretNone": "Kullanılmıyor",
+      "secretHint": "Anahtarın kendisi burada gösterilmez; yalnız secret adı seçilir.",
+      "secretHintOptional": "Bu sağlayıcı anahtar gerektirmez. Anahtar isteyen bir sunucuya bağlanıyorsanız seçin.",
+      "secretRequired": "Bu sağlayıcı için bir secret seçin.",
+      "secretsFailed": "Secret listesi yüklenemedi.",
+      "secretVaultUnavailable": "Bu makinede gizli bilgi kasası kullanılamıyor.",
+      "secretGone": "Bulunamayan secret",
+      "secretUnlistable": "Kayıtlı secret (liste okunamadı)",
+      "secretGoneWarning": "Seçili secret artık yok. Başka bir secret seçin ya da yenisini oluşturun.",
+      "vaultStatusFailed": "Kasa durumu okunamadı; secret listesi gösterilemiyor.",
+      "vaultLocked": "Kasa kilitli; secret seçmek için önce açın.",
+      "openCredentials": "Credentials sayfasına git",
+      "newSecret": "Yeni secret oluştur",
+      "saved": "Profil kaydedildi."
+    },
+    "test": {
+      "button": "Bağlantıyı test et: {{name}}",
+      "buttonText": "Bağlantıyı test et",
+      "running": "Test ediliyor…",
+      "success": "Bağlantı başarılı.",
+      "failed": "Bağlantı kurulamadı.",
+      "latency": "Yanıt süresi: {{ms}} ms.",
+      "modelFound": "Model sunucuda kurulu.",
+      "modelMissingTitle": "Sunucuya ulaşıldı ama model yok.",
+      "modelMissing": "“{{model}}” modeli bu sunucuda kurulu değil.",
+      "availableModels": "Kurulu modeller: {{models}}.",
+      "reply": "Modelin yanıtı: “{{text}}”"
+    },
+    "assign": {
+      "title": "Görev atamaları",
+      "hint": "Her iş için hangi profilin kullanılacağını seçin. İlgili yeteneği olmayan profiller seçilemez.",
+      "loadFailed": "Görev atamaları yüklenemedi.",
+      "localWhisper": "Yerel whisper (varsayılan)",
+      "none": "Atanmadı",
+      "saved": "{{task}} ataması kaydedildi.",
+      "taskHint": {
+        "transcription": "Konuşmayı yazıya çevirir. Profil seçilmezse yerel whisper kullanılır.",
+        "vision": "Ekran karelerini yorumlar. Görsel girdiyi destekleyen bir profil gerekir.",
+        "summary": "Transkriptten not ve özeti üretir."
+      },
+      "unsupported": {
+        "transcription": "{{provider}} transkripsiyon yapamaz",
+        "vision": "{{provider}} görsel analiz yapamaz",
+        "summary": "{{provider}} özet üretemez"
+      },
+      "ollamaNoVision": "profilde “vision destekli” işaretli değil",
+      "stale": "Atanan profil bu işi artık yapamıyor: {{reason}}."
+    },
+    "errors": {
+      "validation": "Girilen bilgiler geçersiz.",
+      "not_found": "Profil bulunamadı; liste yenilenmiş olabilir.",
+      "conflict": "Bu işlem profillerin mevcut durumuyla çakışıyor.",
+      "capability_missing": "Bu sağlayıcı bu işi yapamıyor.",
+      "provider_auth": "API anahtarı reddedildi. Seçili secret’ın doğru anahtarı içerdiğini kontrol edin.",
+      "provider_rate_limited": "Sağlayıcı istek sınırına ulaştı. Biraz bekleyip yeniden deneyin.",
+      "provider_timeout": "Sağlayıcı zamanında yanıt vermedi. Daha sonra yeniden deneyin.",
+      "provider_invalid_request": "Sağlayıcı isteği reddetti. Model adını ve base URL’yi kontrol edin.",
+      "provider_unsupported": "Sağlayıcı bu modelde ya da bu uç noktada istenen özelliği sunmuyor.",
+      "provider_network": "Sağlayıcıya ulaşılamadı. İnternet bağlantınızı ve base URL’yi kontrol edin.",
+      "provider_error": "Sağlayıcı beklenmeyen bir hata döndürdü.",
+      "secret_unavailable": "API anahtarı kasadan okunamadı. Kasa kilitli ya da secret silinmiş olabilir.",
+      "internal": "Beklenmeyen bir hata oluştu."
     }
   },
   "errors": {

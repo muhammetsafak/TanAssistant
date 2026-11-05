@@ -37,8 +37,7 @@
       "empty": "No recordings yet. Recording and notes will arrive in later releases."
     },
     "providers": {
-      "title": "AI Providers",
-      "empty": "AI provider settings will arrive in later releases."
+      "title": "AI Providers"
     },
     "settings": {
       "title": "Settings",
@@ -130,6 +129,119 @@
       "submit": "Set password",
       "passwordRequired": "Master password is required.",
       "mismatch": "The passwords do not match."
+    }
+  },
+  "providers": {
+    "intro": "Manage the AI provider profiles used for transcription, image analysis and summaries. API keys are picked from the secrets in the Credentials vault.",
+    "tasks": {
+      "transcription": "Transcription",
+      "vision": "Image analysis",
+      "summary": "Summary"
+    },
+    "capabilities": {
+      "chat": "Summary",
+      "vision": "Vision",
+      "transcription": "Transcription"
+    },
+    "list": {
+      "title": "Profiles",
+      "hint": "A profile combines a provider, a model and (when needed) an API key.",
+      "add": "Add profile",
+      "empty": "No profiles yet. Add a provider profile to get started.",
+      "loadFailed": "Could not load the profiles.",
+      "name": "Name",
+      "provider": "Provider",
+      "model": "Model",
+      "capabilities": "Capabilities",
+      "actions": "Actions",
+      "edit": "Edit: {{name}}",
+      "delete": "Delete: {{name}}",
+      "deleteTitle": "Delete this profile?",
+      "deleteMessage": "“{{name}}” will be deleted, and so will the task assignments pointing at it.",
+      "deleted": "Profile deleted."
+    },
+    "form": {
+      "addTitle": "Add profile",
+      "editTitle": "Edit profile",
+      "kind": "Provider",
+      "kindLocked": "The provider of an existing profile cannot be changed; add a new profile instead.",
+      "kindsFailed": "Could not load the provider information.",
+      "displayName": "Display name",
+      "displayNameRequired": "Display name is required.",
+      "model": "Model",
+      "modelHint": "Pick a suggestion or type the model name.",
+      "modelRequired": "Model is required.",
+      "suggestions": "Model suggestions",
+      "supportsVision": "This model understands images (vision-capable)",
+      "supportsVisionHint": "Tick it only for models that accept image input; the image analysis assignment depends on it.",
+      "baseUrl": "Base URL",
+      "baseUrlHint": "Optional. When empty, the default is used: {{url}}",
+      "baseUrlInvalid": "Enter a valid http:// or https:// address.",
+      "secret": "API key (secret)",
+      "optional": "optional",
+      "secretChoose": "Choose a secret",
+      "secretNone": "Not used",
+      "secretHint": "The key itself is never shown here; only the secret name is chosen.",
+      "secretHintOptional": "This provider needs no key. Pick one if you connect to a server that asks for it.",
+      "secretRequired": "Choose a secret for this provider.",
+      "secretsFailed": "Could not load the secret list.",
+      "secretVaultUnavailable": "The secret vault cannot be used on this machine.",
+      "secretGone": "Secret not found",
+      "secretUnlistable": "Saved secret (list unavailable)",
+      "secretGoneWarning": "The selected secret no longer exists. Choose another one or create a new one.",
+      "vaultStatusFailed": "Could not read the vault status; the secret list cannot be shown.",
+      "vaultLocked": "The vault is locked; unlock it first to choose a secret.",
+      "openCredentials": "Go to Credentials",
+      "newSecret": "Create new secret",
+      "saved": "Profile saved."
+    },
+    "test": {
+      "button": "Test connection: {{name}}",
+      "buttonText": "Test connection",
+      "running": "Testing…",
+      "success": "Connection succeeded.",
+      "failed": "Could not connect.",
+      "latency": "Response time: {{ms}} ms.",
+      "modelFound": "The model is installed on the server.",
+      "modelMissingTitle": "Server reached, but the model is missing.",
+      "modelMissing": "The model “{{model}}” is not installed on this server.",
+      "availableModels": "Installed models: {{models}}.",
+      "reply": "Model reply: “{{text}}”"
+    },
+    "assign": {
+      "title": "Task assignments",
+      "hint": "Choose which profile does each job. Profiles without the needed capability cannot be selected.",
+      "loadFailed": "Could not load the task assignments.",
+      "localWhisper": "Local whisper (default)",
+      "none": "Not assigned",
+      "saved": "{{task}} assignment saved.",
+      "taskHint": {
+        "transcription": "Turns speech into text. Local whisper is used when no profile is chosen.",
+        "vision": "Interprets screen frames. Needs a profile that accepts image input.",
+        "summary": "Produces the notes and summary from the transcript."
+      },
+      "unsupported": {
+        "transcription": "{{provider}} cannot transcribe",
+        "vision": "{{provider}} cannot analyse images",
+        "summary": "{{provider}} cannot write summaries"
+      },
+      "ollamaNoVision": "the profile is not marked as vision-capable",
+      "stale": "The assigned profile can no longer do this job: {{reason}}."
+    },
+    "errors": {
+      "validation": "The information entered is not valid.",
+      "not_found": "Profile not found; the list may have changed.",
+      "conflict": "This conflicts with the current state of the profiles.",
+      "capability_missing": "This provider cannot do that job.",
+      "provider_auth": "The API key was rejected. Check that the selected secret holds the right key.",
+      "provider_rate_limited": "The provider is rate limiting. Wait a moment and try again.",
+      "provider_timeout": "The provider did not answer in time. Try again later.",
+      "provider_invalid_request": "The provider refused the request. Check the model name and the base URL.",
+      "provider_unsupported": "The provider does not offer the requested feature for this model or endpoint.",
+      "provider_network": "Could not reach the provider. Check your connection and the base URL.",
+      "provider_error": "The provider returned an unexpected error.",
+      "secret_unavailable": "The API key could not be read from the vault. It may be locked or the secret deleted.",
+      "internal": "An unexpected error occurred."
     }
   },
   "errors": {
