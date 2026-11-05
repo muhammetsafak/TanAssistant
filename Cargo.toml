@@ -25,6 +25,13 @@ tan-infra-ai = { path = "crates/infra-ai" }
 tan-infra-capture = { path = "crates/infra-capture" }
 tan-infra-transcription = { path = "crates/infra-transcription" }
 
+# Third-party (storage phase)
+rusqlite = { version = "0.41", features = ["bundled"] }
+directories = "6"
+uuid = { version = "1", features = ["v7"] }
+tempfile = "3"
+futures-executor = "0.3"
+
 [workspace.lints.rust]
 # Platform capture adapters (later phases) need narrowly-scoped unsafe; allow it
 # explicitly per module with a justification instead of forbidding it globally.

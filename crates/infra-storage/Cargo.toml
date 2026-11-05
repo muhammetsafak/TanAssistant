@@ -7,6 +7,13 @@ publish.workspace = true
 [dependencies]
 tan-application.workspace = true
 tan-domain.workspace = true
+rusqlite.workspace = true
+directories.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+futures-executor.workspace = true
 
 [lints]
 workspace = true

@@ -1,5 +1,10 @@
 //! Application layer: use cases and ports (traits). Depends only on `tan-domain`.
 
+pub mod error;
+pub mod ports;
+
+pub use error::{RepositoryError, RepositoryResult};
+
 /// Name of the architectural layer this crate implements.
 pub const LAYER: &str = "application";
 
