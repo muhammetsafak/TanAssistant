@@ -1,0 +1,150 @@
+{
+  "app": { "name": "Tan" },
+  "common": {
+    "edit": "Edit",
+    "delete": "Delete",
+    "cancel": "Cancel",
+    "save": "Save",
+    "retry": "Try again",
+    "loading": "Loading…",
+    "close": "Close",
+    "notAvailable": "—",
+    "version": "Version {{version}}"
+  },
+  "nav": {
+    "label": "Main navigation",
+    "recordings": "Recordings",
+    "providers": "AI Providers",
+    "credentials": "Credentials",
+    "settings": "Settings"
+  },
+  "topBar": {
+    "language": "Language",
+    "theme": "Theme",
+    "themeSystem": "System",
+    "themeLight": "Light",
+    "themeDark": "Dark"
+  },
+  "languages": { "tr": "Türkçe", "en": "English" },
+  "consent": {
+    "title": "Recording notice",
+    "body": "Tan records the audio and screen captures of meetings and conversations. Before you start recording, you must let the other people in the conversation know that it is being recorded; the obligations under personal data protection law (KVKK) are yours.",
+    "acknowledge": "I understand"
+  },
+  "pages": {
+    "recordings": {
+      "title": "Recordings",
+      "empty": "No recordings yet. Recording and notes will arrive in later releases."
+    },
+    "providers": {
+      "title": "AI Providers",
+      "empty": "AI provider settings will arrive in later releases."
+    },
+    "settings": {
+      "title": "Settings",
+      "empty": "Settings will arrive in later releases."
+    }
+  },
+  "credentials": {
+    "title": "Credentials",
+    "intro": "Manage the variables and secrets the app uses here. Secret values are kept in a secure vault.",
+    "variables": {
+      "title": "Variables",
+      "hint": "Non-secret settings. Their values are shown in the list.",
+      "add": "Add variable",
+      "empty": "No variables yet.",
+      "key": "Key",
+      "value": "Value",
+      "description": "Description",
+      "actions": "Actions",
+      "addTitle": "Add variable",
+      "editTitle": "Edit variable",
+      "edit": "Edit: {{name}}",
+      "delete": "Delete: {{name}}",
+      "deleteTitle": "Delete this variable?",
+      "deleteMessage": "“{{name}}” will be deleted permanently. This cannot be undone.",
+      "keyRequired": "Key is required.",
+      "valueRequired": "Value is required.",
+      "loadFailed": "Could not load variables.",
+      "saved": "Variable saved.",
+      "deleted": "Variable deleted."
+    },
+    "secrets": {
+      "title": "Secrets",
+      "hint": "Values are listed masked and only shown when you ask.",
+      "add": "Add secret",
+      "empty": "No secrets yet.",
+      "name": "Name",
+      "description": "Description",
+      "createdAt": "Created",
+      "value": "Value",
+      "actions": "Actions",
+      "masked": "Value hidden",
+      "reveal": "Show: {{name}}",
+      "hide": "Hide: {{name}}",
+      "copy": "Copy: {{name}}",
+      "edit": "Replace: {{name}}",
+      "delete": "Delete: {{name}}",
+      "revealText": "Show",
+      "hideText": "Hide",
+      "copyText": "Copy",
+      "editText": "Replace",
+      "revealNote": "A revealed value is hidden again after 30 seconds.",
+      "addTitle": "Add secret",
+      "editTitle": "Replace secret",
+      "nameRequired": "Name is required.",
+      "valueRequired": "Value is required.",
+      "valueLabel": "Value",
+      "valueLabelEdit": "New value",
+      "valueHintEdit": "Leave empty to keep the current value.",
+      "deleteTitle": "Delete this secret?",
+      "deleteMessage": "“{{name}}” and its value will be deleted from the vault permanently. This cannot be undone.",
+      "loadFailed": "Could not load secrets.",
+      "saved": "Secret saved.",
+      "deleted": "Secret deleted.",
+      "copied": "Value copied to the clipboard."
+    },
+    "vault": {
+      "unavailableTitle": "The secret vault is unavailable",
+      "unavailableBody": "Secrets cannot be stored on this machine. You can keep using variables.",
+      "lockedTitle": "The vault is locked",
+      "lockedBody": "Enter the master password to access your secrets.",
+      "setupTitle": "A master password is required",
+      "setupBody": "On this machine secrets are kept in a file encrypted with a master password. Set one to get started.",
+      "unlock": "Unlock",
+      "setup": "Set master password",
+      "statusFailed": "Could not read the vault status."
+    },
+    "unlock": {
+      "title": "Unlock the vault",
+      "description": "Enter the master password to access your secrets.",
+      "password": "Master password",
+      "submit": "Unlock",
+      "passwordRequired": "Master password is required."
+    },
+    "setup": {
+      "title": "Set master password",
+      "description": "Secrets are encrypted with this password. If you forget it, the secrets cannot be recovered.",
+      "password": "New master password",
+      "confirm": "Confirm master password",
+      "submit": "Set password",
+      "passwordRequired": "Master password is required.",
+      "mismatch": "The passwords do not match."
+    }
+  },
+  "errors": {
+    "validation": "The information entered is not valid.",
+    "not_found": "The record was not found.",
+    "conflict": "This name or key is already in use.",
+    "secret_store_locked": "The vault is locked. Enter the master password.",
+    "secret_store_not_configured": "Set a master password for the vault first.",
+    "invalid_password": "The master password is wrong.",
+    "secret_store_unavailable": "The secret vault is unavailable on this machine.",
+    "secret_value_missing": "This secret's value was not found in the vault.",
+    "internal": "An unexpected error occurred.",
+    "unknown": "The operation could not be completed.",
+    "clipboard": "Could not copy to the clipboard.",
+    "settingsLoad": "Could not load settings."
+  },
+  "toast": { "dismiss": "Dismiss notification" }
+}

@@ -1,0 +1,150 @@
+{
+  "app": { "name": "Tan" },
+  "common": {
+    "edit": "Düzenle",
+    "delete": "Sil",
+    "cancel": "Vazgeç",
+    "save": "Kaydet",
+    "retry": "Yeniden dene",
+    "loading": "Yükleniyor…",
+    "close": "Kapat",
+    "notAvailable": "—",
+    "version": "Sürüm {{version}}"
+  },
+  "nav": {
+    "label": "Ana gezinme",
+    "recordings": "Kayıtlar",
+    "providers": "AI Sağlayıcıları",
+    "credentials": "Credentials",
+    "settings": "Ayarlar"
+  },
+  "topBar": {
+    "language": "Dil",
+    "theme": "Tema",
+    "themeSystem": "Sistem",
+    "themeLight": "Açık",
+    "themeDark": "Koyu"
+  },
+  "languages": { "tr": "Türkçe", "en": "English" },
+  "consent": {
+    "title": "Kayıt hakkında bilgilendirme",
+    "body": "Tan, toplantı ve görüşmelerin sesini ve ekran görüntülerini kaydeder. Kayda başlamadan önce görüşmedeki diğer kişilere kaydın yapıldığını bildirmeniz gerekir; kişisel verilerin korunmasına ilişkin (KVKK) yükümlülükler size aittir.",
+    "acknowledge": "Anladım"
+  },
+  "pages": {
+    "recordings": {
+      "title": "Kayıtlar",
+      "empty": "Henüz kayıt yok. Kayıt ve not özellikleri sonraki sürümlerde eklenecek."
+    },
+    "providers": {
+      "title": "AI Sağlayıcıları",
+      "empty": "AI sağlayıcı ayarları sonraki sürümlerde eklenecek."
+    },
+    "settings": {
+      "title": "Ayarlar",
+      "empty": "Ayarlar sonraki sürümlerde eklenecek."
+    }
+  },
+  "credentials": {
+    "title": "Credentials",
+    "intro": "Uygulamanın kullandığı variable ve secret'ları buradan yönetirsiniz. Secret değerleri güvenli bir kasada saklanır.",
+    "variables": {
+      "title": "Variable'lar",
+      "hint": "Gizli olmayan ayarlar. Değerleri liste içinde açıkça görünür.",
+      "add": "Variable ekle",
+      "empty": "Henüz variable yok.",
+      "key": "Anahtar",
+      "value": "Değer",
+      "description": "Açıklama",
+      "actions": "İşlemler",
+      "addTitle": "Variable ekle",
+      "editTitle": "Variable düzenle",
+      "edit": "Düzenle: {{name}}",
+      "delete": "Sil: {{name}}",
+      "deleteTitle": "Variable silinsin mi?",
+      "deleteMessage": "“{{name}}” kalıcı olarak silinecek. Bu işlem geri alınamaz.",
+      "keyRequired": "Anahtar zorunludur.",
+      "valueRequired": "Değer zorunludur.",
+      "loadFailed": "Variable'lar yüklenemedi.",
+      "saved": "Variable kaydedildi.",
+      "deleted": "Variable silindi."
+    },
+    "secrets": {
+      "title": "Secret'lar",
+      "hint": "Değerler maskeli listelenir; yalnız siz istediğinizde gösterilir.",
+      "add": "Secret ekle",
+      "empty": "Henüz secret yok.",
+      "name": "Ad",
+      "description": "Açıklama",
+      "createdAt": "Oluşturulma",
+      "value": "Değer",
+      "actions": "İşlemler",
+      "masked": "Değer gizli",
+      "reveal": "Göster: {{name}}",
+      "hide": "Gizle: {{name}}",
+      "copy": "Kopyala: {{name}}",
+      "edit": "Değiştir: {{name}}",
+      "delete": "Sil: {{name}}",
+      "revealText": "Göster",
+      "hideText": "Gizle",
+      "copyText": "Kopyala",
+      "editText": "Değiştir",
+      "revealNote": "Gösterilen değer 30 saniye sonra yeniden gizlenir.",
+      "addTitle": "Secret ekle",
+      "editTitle": "Secret değiştir",
+      "nameRequired": "Ad zorunludur.",
+      "valueRequired": "Değer zorunludur.",
+      "valueLabel": "Değer",
+      "valueLabelEdit": "Yeni değer",
+      "valueHintEdit": "Boş bırakırsanız mevcut değer değişmez.",
+      "deleteTitle": "Secret silinsin mi?",
+      "deleteMessage": "“{{name}}” ve değeri kasadan kalıcı olarak silinecek. Bu işlem geri alınamaz.",
+      "loadFailed": "Secret'lar yüklenemedi.",
+      "saved": "Secret kaydedildi.",
+      "deleted": "Secret silindi.",
+      "copied": "Değer panoya kopyalandı."
+    },
+    "vault": {
+      "unavailableTitle": "Gizli bilgi kasası kullanılamıyor",
+      "unavailableBody": "Bu makinede secret'lar saklanamıyor. Variable'ları kullanmaya devam edebilirsiniz.",
+      "lockedTitle": "Kasa kilitli",
+      "lockedBody": "Secret'lara erişmek için ana parolayı girin.",
+      "setupTitle": "Ana parola gerekli",
+      "setupBody": "Bu makinede secret'lar ana parola ile şifrelenmiş bir dosyada saklanır. Başlamak için bir ana parola belirleyin.",
+      "unlock": "Kilidi aç",
+      "setup": "Ana parola belirle",
+      "statusFailed": "Kasa durumu okunamadı."
+    },
+    "unlock": {
+      "title": "Kasanın kilidini aç",
+      "description": "Secret'lara erişmek için ana parolayı girin.",
+      "password": "Ana parola",
+      "submit": "Kilidi aç",
+      "passwordRequired": "Ana parola zorunludur."
+    },
+    "setup": {
+      "title": "Ana parola belirle",
+      "description": "Secret'lar bu parola ile şifrelenir. Parolayı unutursanız secret'lar geri getirilemez.",
+      "password": "Yeni ana parola",
+      "confirm": "Ana parolayı doğrulayın",
+      "submit": "Parolayı belirle",
+      "passwordRequired": "Ana parola zorunludur.",
+      "mismatch": "Parolalar eşleşmiyor."
+    }
+  },
+  "errors": {
+    "validation": "Girilen bilgiler geçersiz.",
+    "not_found": "Kayıt bulunamadı.",
+    "conflict": "Bu ad ya da anahtar zaten kullanılıyor.",
+    "secret_store_locked": "Kasa kilitli. Ana parolayı girin.",
+    "secret_store_not_configured": "Kasa için önce bir ana parola belirleyin.",
+    "invalid_password": "Ana parola yanlış.",
+    "secret_store_unavailable": "Bu makinede gizli bilgi kasası kullanılamıyor.",
+    "secret_value_missing": "Bu secret'ın değeri kasada bulunamadı.",
+    "internal": "Beklenmeyen bir hata oluştu.",
+    "unknown": "İşlem tamamlanamadı.",
+    "clipboard": "Panoya kopyalanamadı.",
+    "settingsLoad": "Ayarlar yüklenemedi."
+  },
+  "toast": { "dismiss": "Bildirimi kapat" }
+}
