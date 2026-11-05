@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/domain",
+    "crates/application",
+    "crates/infra-storage",
+    "crates/infra-secrets",
+    "crates/infra-ai",
+    "crates/infra-capture",
+    "crates/infra-transcription",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+tan-domain = { path = "crates/domain" }
+tan-application = { path = "crates/application" }
+tan-infra-storage = { path = "crates/infra-storage" }
+tan-infra-secrets = { path = "crates/infra-secrets" }
+tan-infra-ai = { path = "crates/infra-ai" }
+tan-infra-capture = { path = "crates/infra-capture" }
+tan-infra-transcription = { path = "crates/infra-transcription" }
+
+[workspace.lints.rust]
+# Platform capture adapters (later phases) need narrowly-scoped unsafe; allow it
+# explicitly per module with a justification instead of forbidding it globally.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
