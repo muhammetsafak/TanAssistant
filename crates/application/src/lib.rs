@@ -1,7 +1,9 @@
 //! Application layer: use cases and ports (traits). Depends only on `tan-domain`.
 
+pub mod credentials;
 pub mod error;
 pub mod ports;
+pub mod settings;
 
 pub use error::{RepositoryError, RepositoryResult};
 

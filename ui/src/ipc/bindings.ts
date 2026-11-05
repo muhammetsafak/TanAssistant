@@ -6,5 +6,295 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 export const commands = {
 	/**  Returns the application version (from the crate manifest). */
 	appVersion: () => __TAURI_INVOKE<string>("app_version"),
+	/**  Lists all variables. */
+	listVariables: () => typedError<VariableDto[], IpcError>(__TAURI_INVOKE("list_variables")),
+	/**  Creates or updates a variable. */
+	upsertVariable: (input: UpsertVariableDto_Deserialize) => typedError<VariableDto, IpcError>(__TAURI_INVOKE("upsert_variable", { input })),
+	/**  Deletes a variable. */
+	deleteVariable: (id: string) => typedError<null, IpcError>(__TAURI_INVOKE("delete_variable", { id })),
+	/**  Lists secret metadata (never values). */
+	listSecrets: () => typedError<SecretDto[], IpcError>(__TAURI_INVOKE("list_secrets")),
+	/**  Creates a secret. */
+	createSecret: (input: CreateSecretDto) => typedError<SecretDto, IpcError>(__TAURI_INVOKE("create_secret", { input })),
+	/**  Updates a secret's name, description and/or value. */
+	updateSecret: (input: UpdateSecretDto_Deserialize) => typedError<SecretDto, IpcError>(__TAURI_INVOKE("update_secret", { input })),
+	/**  Deletes a secret. */
+	deleteSecret: (id: string) => typedError<null, IpcError>(__TAURI_INVOKE("delete_secret", { id })),
+	/**
+	 *  Returns a secret's value. The one and only way a value leaves the backend: call it only
+	 *  when the user explicitly asks to show or copy the secret.
+	 */
+	revealSecret: (id: string) => typedError<string, IpcError>(__TAURI_INVOKE("reveal_secret", { id })),
+	/**  Reports the secret store's backend and lock state. */
+	secretStoreStatus: () => __TAURI_INVOKE<SecretStoreStatusDto>("secret_store_status"),
+	/**  Unlocks the encrypted-file secret store with the master password. */
+	unlockSecretStore: (password: string) => typedError<SecretStoreStatusDto, IpcError>(__TAURI_INVOKE("unlock_secret_store", { password })),
+	/**
+	 *  Sets the master password of the encrypted-file store (first time), or changes it when
+	 *  `currentPassword` is given.
+	 */
+	setMasterPassword: (newPassword: string, currentPassword: string | null) => typedError<SecretStoreStatusDto, IpcError>(__TAURI_INVOKE("set_master_password", { newPassword, currentPassword })),
+	/**  Returns the current settings. */
+	getSettings: () => typedError<AppSettingsDto_Serialize, IpcError>(__TAURI_INVOKE("get_settings")),
+	/**  Applies a partial settings update and returns the resulting settings. */
+	updateSettings: (patch: SettingsPatchDto_Deserialize) => typedError<AppSettingsDto_Serialize, IpcError>(__TAURI_INVOKE("update_settings", { patch })),
 };
+
+/* Types */
+/**  The application settings. */
+export type AppSettingsDto = AppSettingsDto_Serialize | AppSettingsDto_Deserialize;
+
+/**  The application settings. */
+export type AppSettingsDto_Deserialize = {
+	/**  UI language. */
+	uiLanguage: UiLanguageDto,
+	/**  Language notes are generated in (a language code such as `tr`). */
+	defaultNoteLanguage: string,
+	/**  Spoken language of new sessions: `auto` or a language code. */
+	defaultSpeechLanguage: string,
+	/**  How often the screen is sampled, in milliseconds. */
+	frameIntervalMs: number,
+	/**  Minimum perceptual-hash distance for a frame to count as changed. */
+	frameChangeThreshold: number,
+	/**  Start processing automatically when a recording ends. */
+	autoProcessAfterRecording: boolean,
+	/**  Delete audio files this many days after processing; null keeps them forever. */
+	audioRetentionDays?: number | null,
+	/**  Whether the recording-consent notice was acknowledged. */
+	consentNoticeAcknowledged: boolean,
+};
+
+/**  The application settings. */
+export type AppSettingsDto_Serialize = {
+	/**  UI language. */
+	uiLanguage: UiLanguageDto,
+	/**  Language notes are generated in (a language code such as `tr`). */
+	defaultNoteLanguage: string,
+	/**  Spoken language of new sessions: `auto` or a language code. */
+	defaultSpeechLanguage: string,
+	/**  How often the screen is sampled, in milliseconds. */
+	frameIntervalMs: number,
+	/**  Minimum perceptual-hash distance for a frame to count as changed. */
+	frameChangeThreshold: number,
+	/**  Start processing automatically when a recording ends. */
+	autoProcessAfterRecording: boolean,
+	/**  Delete audio files this many days after processing; null keeps them forever. */
+	audioRetentionDays: number | null,
+	/**  Whether the recording-consent notice was acknowledged. */
+	consentNoticeAcknowledged: boolean,
+};
+
+/**  Input to create a secret. */
+export type CreateSecretDto = {
+	/**  Unique display name. */
+	name: string,
+	/**  What the secret is for. */
+	description: string,
+	/**  The value to keep in the vault. */
+	value: string,
+};
+
+/**  Machine-readable failure class, so the UI can react without parsing messages. */
+export type ErrorCode = 
+/**  The input was rejected. */
+"validation" | 
+/**  The addressed entity does not exist. */
+"not_found" | 
+/**  A uniqueness rule rejected the write. */
+"conflict" | 
+/**  The secret store is locked; unlock it with the master password. */
+"secret_store_locked" | 
+/**  The secret store needs a master password to be set first. */
+"secret_store_not_configured" | 
+/**  The master password is wrong. */
+"invalid_password" | 
+/**  The secret store cannot work in this environment. */
+"secret_store_unavailable" | 
+/**  The vault holds no value for a secret that exists in the database. */
+"secret_value_missing" | 
+/**  Anything else; details are in the log. */
+"internal";
+
+/**  Error returned to the UI. */
+export type IpcError = {
+	/**  Failure class. */
+	code: ErrorCode,
+	/**  Human-readable, value-free description (English; the UI localises by `code`). */
+	message: string,
+};
+
+/**  New audio retention. `days: null` switches retention off (keep audio forever). */
+export type RetentionPatchDto = RetentionPatchDto_Serialize | RetentionPatchDto_Deserialize;
+
+/**  New audio retention. `days: null` switches retention off (keep audio forever). */
+export type RetentionPatchDto_Deserialize = {
+	/**  Days to keep audio after processing, or null to keep it forever. */
+	days?: number | null,
+};
+
+/**  New audio retention. `days: null` switches retention off (keep audio forever). */
+export type RetentionPatchDto_Serialize = {
+	/**  Days to keep audio after processing, or null to keep it forever. */
+	days: number | null,
+};
+
+/**  Which backend holds secret values. */
+export type SecretBackendDto = 
+/**  The OS vault. */
+"keyring" | 
+/**  The master-password-encrypted file. */
+"encrypted_file";
+
+/**
+ *  Secret metadata. There is intentionally no value field: values only leave the backend
+ *  through `reveal_secret`.
+ */
+export type SecretDto = {
+	/**  Identity. */
+	id: string,
+	/**  Display name. */
+	name: string,
+	/**  What the secret is for. */
+	description: string,
+	/**  Creation time in milliseconds since the Unix epoch. */
+	createdAt: number | null,
+};
+
+/**  State of the secret store. */
+export type SecretStoreStatusDto = {
+	/**  Active backend. */
+	backend: SecretBackendDto,
+	/**  Whether the backend can work on this machine. */
+	available: boolean,
+	/**  Whether values are unreachable until the master password is entered. */
+	locked: boolean,
+	/**  Whether a master password has been set (always false for the OS vault). */
+	masterPasswordSet: boolean,
+};
+
+/**  A partial settings update: only the fields that are present change. */
+export type SettingsPatchDto = SettingsPatchDto_Serialize | SettingsPatchDto_Deserialize;
+
+/**  A partial settings update: only the fields that are present change. */
+export type SettingsPatchDto_Deserialize = {
+	/**  New UI language. */
+	uiLanguage?: UiLanguageDto | null,
+	/**  New note language code. */
+	defaultNoteLanguage?: string | null,
+	/**  New spoken-language setting: `auto` or a language code. */
+	defaultSpeechLanguage?: string | null,
+	/**  New frame interval in milliseconds. */
+	frameIntervalMs?: number | null,
+	/**  New frame change threshold. */
+	frameChangeThreshold?: number | null,
+	/**  New auto-process flag. */
+	autoProcessAfterRecording?: boolean | null,
+	/**  New audio retention. */
+	audioRetention?: RetentionPatchDto_Deserialize | null,
+	/**  New consent-acknowledged flag. */
+	consentNoticeAcknowledged?: boolean | null,
+};
+
+/**  A partial settings update: only the fields that are present change. */
+export type SettingsPatchDto_Serialize = {
+	/**  New UI language. */
+	uiLanguage: UiLanguageDto | null,
+	/**  New note language code. */
+	defaultNoteLanguage: string | null,
+	/**  New spoken-language setting: `auto` or a language code. */
+	defaultSpeechLanguage: string | null,
+	/**  New frame interval in milliseconds. */
+	frameIntervalMs: number | null,
+	/**  New frame change threshold. */
+	frameChangeThreshold: number | null,
+	/**  New auto-process flag. */
+	autoProcessAfterRecording: boolean | null,
+	/**  New audio retention. */
+	audioRetention: RetentionPatchDto_Serialize | null,
+	/**  New consent-acknowledged flag. */
+	consentNoticeAcknowledged: boolean | null,
+};
+
+/**  Language of the application UI. */
+export type UiLanguageDto = 
+/**  Turkish. */
+"tr" | 
+/**  English. */
+"en";
+
+/**  Input to update a secret; omitted (null) fields stay unchanged. */
+export type UpdateSecretDto = UpdateSecretDto_Serialize | UpdateSecretDto_Deserialize;
+
+/**  Input to update a secret; omitted (null) fields stay unchanged. */
+export type UpdateSecretDto_Deserialize = {
+	/**  The secret to change. */
+	id: string,
+	/**  New display name. */
+	name?: string | null,
+	/**  New description. */
+	description?: string | null,
+	/**  New value. */
+	value?: string | null,
+};
+
+/**  Input to update a secret; omitted (null) fields stay unchanged. */
+export type UpdateSecretDto_Serialize = {
+	/**  The secret to change. */
+	id: string,
+	/**  New display name. */
+	name: string | null,
+	/**  New description. */
+	description: string | null,
+	/**  New value. */
+	value: string | null,
+};
+
+/**  Input to create or update a variable. */
+export type UpsertVariableDto = UpsertVariableDto_Serialize | UpsertVariableDto_Deserialize;
+
+/**  Input to create or update a variable. */
+export type UpsertVariableDto_Deserialize = {
+	/**  Omit to create; set to update that variable. */
+	id?: string | null,
+	/**  Unique key. */
+	key: string,
+	/**  The value. */
+	value: string,
+	/**  What it is for. */
+	description: string,
+};
+
+/**  Input to create or update a variable. */
+export type UpsertVariableDto_Serialize = {
+	/**  Omit to create; set to update that variable. */
+	id: string | null,
+	/**  Unique key. */
+	key: string,
+	/**  The value. */
+	value: string,
+	/**  What it is for. */
+	description: string,
+};
+
+/**  A non-secret variable. */
+export type VariableDto = {
+	/**  Identity. */
+	id: string,
+	/**  Unique key. */
+	key: string,
+	/**  The value (not secret). */
+	value: string,
+	/**  What it is for. */
+	description: string,
+};
+
+/* Tauri Specta runtime */
+async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
+    try {
+        return { status: "ok", data: await result };
+    } catch (e) {
+        if (e instanceof Error) throw e;
+        return { status: "error", error: e as any };
+    }
+}
 

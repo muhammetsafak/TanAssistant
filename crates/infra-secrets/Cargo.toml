@@ -7,6 +7,15 @@ publish.workspace = true
 [dependencies]
 tan-application.workspace = true
 tan-domain.workspace = true
+keyring.workspace = true
+argon2.workspace = true
+chacha20poly1305.workspace = true
+getrandom.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+futures-executor.workspace = true
 
 [lints]
 workspace = true

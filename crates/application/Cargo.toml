@@ -6,6 +6,12 @@ publish.workspace = true
 
 [dependencies]
 tan-domain.workspace = true
+serde.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+futures-executor.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
