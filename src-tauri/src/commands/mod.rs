@@ -1,5 +1,6 @@
 //! IPC commands. These are thin adapters: no business logic lives here.
 
+pub mod ai;
 pub mod credentials;
 pub mod settings;
 

@@ -7,6 +7,18 @@ publish.workspace = true
 [dependencies]
 tan-application.workspace = true
 tan-domain.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["time", "fs"] }
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock.workspace = true
+tracing-subscriber.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -18,6 +18,14 @@ pub const BINDINGS_PATH: &str = "../ui/src/ipc/bindings.ts";
 pub fn ipc_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::app_version,
+        commands::ai::list_provider_profiles,
+        commands::ai::upsert_provider_profile,
+        commands::ai::delete_provider_profile,
+        commands::ai::test_provider,
+        commands::ai::list_provider_kinds,
+        commands::ai::get_task_assignments,
+        commands::ai::set_task_assignment,
+        commands::ai::clear_task_assignment,
         commands::credentials::list_variables,
         commands::credentials::upsert_variable,
         commands::credentials::delete_variable,

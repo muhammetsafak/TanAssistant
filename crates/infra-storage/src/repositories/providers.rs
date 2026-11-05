@@ -8,7 +8,8 @@ use tan_domain::{ProviderProfile, ProviderProfileId, SecretId, TaskAssignment, T
 use super::{parse_column, require_changed};
 use crate::db::Database;
 
-const PROFILE_COLUMNS: &str = "id, kind, display_name, model, base_url, secret_ref";
+const PROFILE_COLUMNS: &str =
+    "id, kind, display_name, model, base_url, secret_ref, supports_vision";
 
 fn profile_from_row(row: &Row<'_>) -> rusqlite::Result<ProviderProfile> {
     Ok(ProviderProfile {
@@ -18,6 +19,7 @@ fn profile_from_row(row: &Row<'_>) -> rusqlite::Result<ProviderProfile> {
         model: row.get(3)?,
         base_url: row.get(4)?,
         secret_ref: row.get::<_, Option<String>>(5)?.map(SecretId::new),
+        supports_vision: row.get::<_, i64>(6)? != 0,
     })
 }
 
@@ -39,14 +41,16 @@ impl ProviderProfileRepository for SqliteProviderProfileRepository {
     async fn upsert(&self, profile: &ProviderProfile) -> Result<(), RepositoryError> {
         self.db.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO provider_profiles (id, kind, display_name, model, base_url, secret_ref)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO provider_profiles
+                     (id, kind, display_name, model, base_url, secret_ref, supports_vision)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT (id) DO UPDATE SET
                      kind = excluded.kind,
                      display_name = excluded.display_name,
                      model = excluded.model,
                      base_url = excluded.base_url,
-                     secret_ref = excluded.secret_ref",
+                     secret_ref = excluded.secret_ref,
+                     supports_vision = excluded.supports_vision",
                 params![
                     profile.id.as_str(),
                     profile.kind.as_str(),
@@ -54,6 +58,7 @@ impl ProviderProfileRepository for SqliteProviderProfileRepository {
                     profile.model,
                     profile.base_url,
                     profile.secret_ref.as_ref().map(SecretId::as_str),
+                    i64::from(profile.supports_vision),
                 ],
             )?;
             Ok(())

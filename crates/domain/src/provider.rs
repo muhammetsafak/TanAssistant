@@ -47,6 +47,10 @@ pub struct ProviderProfile {
     pub base_url: Option<String>,
     /// API-key secret, when the provider needs one.
     pub secret_ref: Option<SecretId>,
+    /// Whether the model understands images. Only Ollama's answer comes from here (it depends
+    /// on the model that is served, default `false`); for every other provider the capability
+    /// matrix decides and the flag is kept in line with it.
+    pub supports_vision: bool,
 }
 
 /// Which profile performs a task.

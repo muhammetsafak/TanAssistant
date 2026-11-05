@@ -1,10 +1,17 @@
 //! Ports: the traits adapters implement.
 
+pub mod ai;
 pub mod repositories;
 pub mod secrets;
 
 use tan_domain::EpochMs;
 
+pub use ai::{
+    requires_api_key, AiError, AiResult, AudioSource, Capabilities, ChatMessage, ChatModel,
+    ChatRequest, ChatResponse, ChatRole, ImageInput, JsonSchema, ModelCatalog, ProviderFactory,
+    TokenUsage, TranscriptSegmentDto, TranscriptionModel, TranscriptionRequest, VisionModel,
+    VisionRequest,
+};
 pub use repositories::{
     FrameRepository, NoteRepository, ProviderProfileRepository, SearchHit, SearchIndex,
     SearchSource, SecretMetadataRepository, SessionRepository, SettingsRepository,

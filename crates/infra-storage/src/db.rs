@@ -75,11 +75,18 @@ struct Migration {
     down: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    up: include_str!("../migrations/0001_init.sql"),
-    down: include_str!("../migrations/0001_init.down.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        up: include_str!("../migrations/0001_init.sql"),
+        down: include_str!("../migrations/0001_init.down.sql"),
+    },
+    Migration {
+        version: 2,
+        up: include_str!("../migrations/0002_provider_vision.sql"),
+        down: include_str!("../migrations/0002_provider_vision.down.sql"),
+    },
+];
 
 /// Newest schema version this build knows; derived from the migration list so the two cannot
 /// drift apart.

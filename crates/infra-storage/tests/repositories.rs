@@ -512,6 +512,7 @@ fn profile(id: &str, name: &str, secret_ref: Option<&str>) -> ProviderProfile {
         model: "gpt-4o-mini".to_owned(),
         base_url: Some("https://example.invalid/v1".to_owned()),
         secret_ref: secret_ref.map(SecretId::new),
+        supports_vision: true,
     }
 }
 
@@ -575,6 +576,7 @@ fn provider_profile_crud_round_trip_and_secret_reference_rules() {
     let local = ProviderProfile {
         kind: ProviderKind::Ollama,
         base_url: None,
+        supports_vision: false,
         ..profile("p2", "Local", None)
     };
     block_on(profiles.upsert(&with_key)).unwrap();

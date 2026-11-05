@@ -5,6 +5,10 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use tan_application::ai::{
+    ClearTaskAssignment, DeleteProviderProfile, GetTaskAssignments, ListProviderProfiles,
+    SetTaskAssignment, TestProvider, UpsertProviderProfile,
+};
 use tan_application::credentials::{
     CreateSecret, DeleteSecret, DeleteVariable, GetSecretStoreStatus, ListSecrets, ListVariables,
     ResolveSecret, RevealSecret, SetMasterPassword, UnlockSecretStore, UpdateSecret,
@@ -13,10 +17,12 @@ use tan_application::credentials::{
 use tan_application::ports::{Clock, IdGenerator};
 use tan_application::settings::{GetSettings, UpdateSettings};
 use tan_domain::EpochMs;
+use tan_infra_ai::AiProviderFactory;
 use tan_infra_secrets::{open_secret_store, SelectedSecretStore};
 use tan_infra_storage::{
-    new_id, DataLayout, Database, SqliteSecretMetadataRepository, SqliteSettingsRepository,
-    SqliteVariableRepository, StorageError,
+    new_id, DataLayout, Database, SqliteProviderProfileRepository, SqliteSecretMetadataRepository,
+    SqliteSettingsRepository, SqliteTaskAssignmentRepository, SqliteVariableRepository,
+    StorageError,
 };
 
 /// Environment variable that overrides the data directory (development, tests, portable use).
@@ -56,6 +62,8 @@ pub enum StartupError {
     Database(StorageError),
     /// The secret store could not be selected.
     SecretStore(tan_application::ports::SecretStoreError),
+    /// The HTTP client for the AI providers could not be created.
+    AiClient(tan_application::ports::AiError),
 }
 
 impl fmt::Display for StartupError {
@@ -68,6 +76,7 @@ impl fmt::Display for StartupError {
             Self::DataDirectory(e) => write!(f, "cannot create the data directory: {e}"),
             Self::Database(e) => write!(f, "cannot open the database: {e}"),
             Self::SecretStore(e) => write!(f, "cannot set up the secret store: {e}"),
+            Self::AiClient(e) => write!(f, "cannot set up the AI client: {e}"),
         }
     }
 }
@@ -79,12 +88,16 @@ impl Error for StartupError {
             Self::DataDirectory(e) => Some(e),
             Self::Database(e) => Some(e),
             Self::SecretStore(e) => Some(e),
+            Self::AiClient(e) => Some(e),
         }
     }
 }
 
 type Metadata = SqliteSecretMetadataRepository;
 type Variables = SqliteVariableRepository;
+type Profiles = SqliteProviderProfileRepository;
+type Assignments = SqliteTaskAssignmentRepository;
+type AiFactory = AiProviderFactory<Metadata, SelectedSecretStore>;
 
 /// Everything the IPC commands need, built once at startup and managed by Tauri.
 pub struct AppState {
@@ -118,6 +131,23 @@ pub struct AppState {
     pub get_settings: GetSettings<SqliteSettingsRepository>,
     /// Updates the settings.
     pub update_settings: UpdateSettings<SqliteSettingsRepository>,
+    /// Lists AI provider profiles.
+    pub list_provider_profiles: ListProviderProfiles<Profiles>,
+    /// Creates or updates an AI provider profile.
+    pub upsert_provider_profile: UpsertProviderProfile<Profiles, Assignments, UuidGenerator>,
+    /// Deletes an AI provider profile.
+    pub delete_provider_profile: DeleteProviderProfile<Profiles>,
+    /// Tests an AI provider profile with a short call.
+    pub test_provider: TestProvider<Profiles, AiFactory, SystemClock>,
+    /// Assigns a task to a provider profile.
+    pub set_task_assignment: SetTaskAssignment<Profiles, Assignments>,
+    /// Reads the task assignments.
+    pub get_task_assignments: GetTaskAssignments<Assignments>,
+    /// Clears a task assignment.
+    pub clear_task_assignment: ClearTaskAssignment<Assignments>,
+    /// Builds chat/vision/transcription adapters from profiles. For the processing pipeline;
+    /// deliberately not exposed over IPC.
+    pub ai_factory: Arc<AiFactory>,
 }
 
 /// The data directory: `TAN_DATA_DIR` if set, otherwise the OS application data directory.
@@ -140,7 +170,13 @@ impl AppState {
 
         let variables = Arc::new(SqliteVariableRepository::new(database.clone()));
         let metadata = Arc::new(SqliteSecretMetadataRepository::new(database.clone()));
+        let profiles = Arc::new(SqliteProviderProfileRepository::new(database.clone()));
+        let assignments = Arc::new(SqliteTaskAssignmentRepository::new(database.clone()));
         let settings = Arc::new(SqliteSettingsRepository::new(database));
+        let resolve_secret = Arc::new(ResolveSecret::new(metadata.clone(), secret_store.clone()));
+        let ai_factory = Arc::new(
+            AiProviderFactory::new(resolve_secret.clone()).map_err(StartupError::AiClient)?,
+        );
 
         Ok(Self {
             layout,
@@ -148,16 +184,33 @@ impl AppState {
             upsert_variable: UpsertVariable::new(variables.clone(), ids.clone()),
             delete_variable: DeleteVariable::new(variables),
             list_secrets: ListSecrets::new(metadata.clone()),
-            create_secret: CreateSecret::new(metadata.clone(), secret_store.clone(), ids, clock),
+            create_secret: CreateSecret::new(
+                metadata.clone(),
+                secret_store.clone(),
+                ids.clone(),
+                clock.clone(),
+            ),
             update_secret: UpdateSecret::new(metadata.clone(), secret_store.clone()),
             delete_secret: DeleteSecret::new(metadata.clone(), secret_store.clone()),
             reveal_secret: RevealSecret::new(metadata.clone(), secret_store.clone()),
-            resolve_secret: Arc::new(ResolveSecret::new(metadata, secret_store.clone())),
+            resolve_secret,
             secret_store_status: GetSecretStoreStatus::new(secret_store.clone()),
             unlock_secret_store: Arc::new(UnlockSecretStore::new(secret_store.clone())),
             set_master_password: Arc::new(SetMasterPassword::new(secret_store)),
             get_settings: GetSettings::new(settings.clone()),
             update_settings: UpdateSettings::new(settings),
+            list_provider_profiles: ListProviderProfiles::new(profiles.clone()),
+            upsert_provider_profile: UpsertProviderProfile::new(
+                profiles.clone(),
+                assignments.clone(),
+                ids,
+            ),
+            delete_provider_profile: DeleteProviderProfile::new(profiles.clone()),
+            test_provider: TestProvider::new(profiles.clone(), ai_factory.clone(), clock),
+            set_task_assignment: SetTaskAssignment::new(profiles, assignments.clone()),
+            get_task_assignments: GetTaskAssignments::new(assignments.clone()),
+            clear_task_assignment: ClearTaskAssignment::new(assignments),
+            ai_factory,
         })
     }
 }

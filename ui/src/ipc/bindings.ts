@@ -6,6 +6,22 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 export const commands = {
 	/**  Returns the application version (from the crate manifest). */
 	appVersion: () => __TAURI_INVOKE<string>("app_version"),
+	/**  Lists the provider profiles. */
+	listProviderProfiles: () => typedError<ProviderProfileDto_Serialize[], AiIpcError>(__TAURI_INVOKE("list_provider_profiles")),
+	/**  Creates or updates a provider profile. */
+	upsertProviderProfile: (input: UpsertProviderProfileDto_Deserialize) => typedError<ProviderProfileDto_Serialize, AiIpcError>(__TAURI_INVOKE("upsert_provider_profile", { input })),
+	/**  Deletes a provider profile (and the task assignments pointing at it). */
+	deleteProviderProfile: (id: string) => typedError<null, AiIpcError>(__TAURI_INVOKE("delete_provider_profile", { id })),
+	/**  Tests a stored profile: a short chat call, or for Ollama a model listing. */
+	testProvider: (id: string) => typedError<ProviderTestReportDto_Serialize, AiIpcError>(__TAURI_INVOKE("test_provider", { id })),
+	/**  Static facts about every provider kind: default endpoint, capabilities, model suggestions. */
+	listProviderKinds: () => __TAURI_INVOKE<ProviderKindInfoDto_Serialize[]>("list_provider_kinds"),
+	/**  Lists the task assignments. */
+	getTaskAssignments: () => typedError<TaskAssignmentDto[], AiIpcError>(__TAURI_INVOKE("get_task_assignments")),
+	/**  Assigns a task to a profile; refused when the provider lacks the capability. */
+	setTaskAssignment: (task: TaskKindDto, profileId: string) => typedError<TaskAssignmentDto, AiIpcError>(__TAURI_INVOKE("set_task_assignment", { task, profileId })),
+	/**  Removes a task's assignment (transcription then falls back to local whisper). */
+	clearTaskAssignment: (task: TaskKindDto) => typedError<null, AiIpcError>(__TAURI_INVOKE("clear_task_assignment", { task })),
 	/**  Lists all variables. */
 	listVariables: () => typedError<VariableDto[], IpcError>(__TAURI_INVOKE("list_variables")),
 	/**  Creates or updates a variable. */
@@ -41,6 +57,43 @@ export const commands = {
 };
 
 /* Types */
+/**  Machine-readable failure class of the AI commands. */
+export type AiErrorCode = 
+/**  The input was rejected. */
+"validation" | 
+/**  The addressed entity does not exist. */
+"not_found" | 
+/**  A reference rule rejected the write. */
+"conflict" | 
+/**  The provider cannot perform the task. */
+"capability_missing" | 
+/**  The provider rejected the API key. */
+"provider_auth" | 
+/**  The provider is rate limiting. */
+"provider_rate_limited" | 
+/**  The provider did not answer in time. */
+"provider_timeout" | 
+/**  The provider refused the request. */
+"provider_invalid_request" | 
+/**  The provider does not offer what was asked. */
+"provider_unsupported" | 
+/**  The provider could not be reached. */
+"provider_network" | 
+/**  The provider answered with another error. */
+"provider_error" | 
+/**  The API key could not be read from the secret store (locked, missing...). */
+"secret_unavailable" | 
+/**  Anything else; details are in the log. */
+"internal";
+
+/**  Error returned by the AI commands. */
+export type AiIpcError = {
+	/**  Failure class. */
+	code: AiErrorCode,
+	/**  Human-readable, key-free description (English; the UI localises by `code`). */
+	message: string,
+};
+
 /**  The application settings. */
 export type AppSettingsDto = AppSettingsDto_Serialize | AppSettingsDto_Deserialize;
 
@@ -84,6 +137,16 @@ export type AppSettingsDto_Serialize = {
 	consentNoticeAcknowledged: boolean,
 };
 
+/**  What a provider can do. */
+export type CapabilitiesDto = {
+	/**  Text generation. */
+	chat: boolean,
+	/**  Image understanding (for Ollama it depends on the model). */
+	vision: boolean,
+	/**  Speech-to-text. */
+	transcription: boolean,
+};
+
 /**  Input to create a secret. */
 export type CreateSecretDto = {
 	/**  Unique display name. */
@@ -121,6 +184,132 @@ export type IpcError = {
 	code: ErrorCode,
 	/**  Human-readable, value-free description (English; the UI localises by `code`). */
 	message: string,
+};
+
+/**  Which AI provider. */
+export type ProviderKindDto = 
+/**  `OpenAI`. */
+"openai" | 
+/**  Anthropic. */
+"anthropic" | 
+/**  Google Gemini. */
+"gemini" | 
+/**  `DeepSeek`. */
+"deepseek" | 
+/**  A local or remote Ollama server. */
+"ollama";
+
+/**  Static facts about a provider kind, to pre-fill the profile form. */
+export type ProviderKindInfoDto = ProviderKindInfoDto_Serialize | ProviderKindInfoDto_Deserialize;
+
+/**  Static facts about a provider kind, to pre-fill the profile form. */
+export type ProviderKindInfoDto_Deserialize = {
+	/**  The provider. */
+	kind: ProviderKindDto,
+	/**  API root used when a profile sets no custom base URL. */
+	defaultBaseUrl: string,
+	/**  Whether a profile needs an API key secret. */
+	requiresApiKey: boolean,
+	/**
+	 *  What the provider can do. For Ollama `vision` is `false` here: it is the profile's
+	 *  `supportsVision` flag that turns it on.
+	 */
+	capabilities: CapabilitiesDto,
+	/**  Model suggestions. */
+	suggestedModels: SuggestedModelsDto_Deserialize,
+};
+
+/**  Static facts about a provider kind, to pre-fill the profile form. */
+export type ProviderKindInfoDto_Serialize = {
+	/**  The provider. */
+	kind: ProviderKindDto,
+	/**  API root used when a profile sets no custom base URL. */
+	defaultBaseUrl: string,
+	/**  Whether a profile needs an API key secret. */
+	requiresApiKey: boolean,
+	/**
+	 *  What the provider can do. For Ollama `vision` is `false` here: it is the profile's
+	 *  `supportsVision` flag that turns it on.
+	 */
+	capabilities: CapabilitiesDto,
+	/**  Model suggestions. */
+	suggestedModels: SuggestedModelsDto_Serialize,
+};
+
+/**  A configured provider profile. */
+export type ProviderProfileDto = ProviderProfileDto_Serialize | ProviderProfileDto_Deserialize;
+
+/**  A configured provider profile. */
+export type ProviderProfileDto_Deserialize = {
+	/**  Identity. */
+	id: string,
+	/**  Which provider. */
+	kind: ProviderKindDto,
+	/**  Name shown in the UI. */
+	displayName: string,
+	/**  Model identifier. */
+	model: string,
+	/**  Custom endpoint; `null` uses the provider default. */
+	baseUrl?: string | null,
+	/**  Id of the secret holding the API key. */
+	secretRef?: string | null,
+	/**
+	 *  Whether the model understands images (the user's setting for Ollama; derived from the
+	 *  provider for the others).
+	 */
+	supportsVision: boolean,
+	/**  What this profile can do. */
+	capabilities: CapabilitiesDto,
+};
+
+/**  A configured provider profile. */
+export type ProviderProfileDto_Serialize = {
+	/**  Identity. */
+	id: string,
+	/**  Which provider. */
+	kind: ProviderKindDto,
+	/**  Name shown in the UI. */
+	displayName: string,
+	/**  Model identifier. */
+	model: string,
+	/**  Custom endpoint; `null` uses the provider default. */
+	baseUrl: string | null,
+	/**  Id of the secret holding the API key. */
+	secretRef: string | null,
+	/**
+	 *  Whether the model understands images (the user's setting for Ollama; derived from the
+	 *  provider for the others).
+	 */
+	supportsVision: boolean,
+	/**  What this profile can do. */
+	capabilities: CapabilitiesDto,
+};
+
+/**  Outcome of a successful connection test. */
+export type ProviderTestReportDto = ProviderTestReportDto_Serialize | ProviderTestReportDto_Deserialize;
+
+/**  Outcome of a successful connection test. */
+export type ProviderTestReportDto_Deserialize = {
+	/**  Round-trip time in milliseconds. */
+	latencyMs: number,
+	/**  For Ollama: the models the server has. */
+	availableModels: string[],
+	/**  For Ollama: whether the profile's model is installed; `null` for other providers. */
+	modelFound?: boolean | null,
+	/**  For other providers: the start of the model's reply. */
+	replyPreview?: string | null,
+};
+
+/**  Outcome of a successful connection test. */
+export type ProviderTestReportDto_Serialize = {
+	/**  Round-trip time in milliseconds. */
+	latencyMs: number,
+	/**  For Ollama: the models the server has. */
+	availableModels: string[],
+	/**  For Ollama: whether the profile's model is installed; `null` for other providers. */
+	modelFound: boolean | null,
+	/**  For other providers: the start of the model's reply. */
+	replyPreview: string | null,
 };
 
 /**  New audio retention. `days: null` switches retention off (keep audio forever). */
@@ -215,6 +404,46 @@ export type SettingsPatchDto_Serialize = {
 	consentNoticeAcknowledged: boolean | null,
 };
 
+/**  Suggested model identifiers of a provider (`null`: the provider cannot do that task). */
+export type SuggestedModelsDto = SuggestedModelsDto_Serialize | SuggestedModelsDto_Deserialize;
+
+/**  Suggested model identifiers of a provider (`null`: the provider cannot do that task). */
+export type SuggestedModelsDto_Deserialize = {
+	/**  For summaries. */
+	chat?: string | null,
+	/**  For screen frames. */
+	vision?: string | null,
+	/**  For speech-to-text. */
+	transcription?: string | null,
+};
+
+/**  Suggested model identifiers of a provider (`null`: the provider cannot do that task). */
+export type SuggestedModelsDto_Serialize = {
+	/**  For summaries. */
+	chat: string | null,
+	/**  For screen frames. */
+	vision: string | null,
+	/**  For speech-to-text. */
+	transcription: string | null,
+};
+
+/**  Which profile performs a task. */
+export type TaskAssignmentDto = {
+	/**  The task. */
+	task: TaskKindDto,
+	/**  The profile that performs it. */
+	profileId: string,
+};
+
+/**  A job a provider profile can be assigned to. */
+export type TaskKindDto = 
+/**  Speech-to-text (unassigned: local whisper). */
+"transcription" | 
+/**  Screen-frame understanding. */
+"vision" | 
+/**  Note/summary generation. */
+"summary";
+
 /**  Language of the application UI. */
 export type UiLanguageDto = 
 /**  Turkish. */
@@ -247,6 +476,45 @@ export type UpdateSecretDto_Serialize = {
 	description: string | null,
 	/**  New value. */
 	value: string | null,
+};
+
+/**  Input to create or update a provider profile. */
+export type UpsertProviderProfileDto = UpsertProviderProfileDto_Serialize | UpsertProviderProfileDto_Deserialize;
+
+/**  Input to create or update a provider profile. */
+export type UpsertProviderProfileDto_Deserialize = {
+	/**  Omit to create; set to update that profile. */
+	id?: string | null,
+	/**  Which provider. */
+	kind: ProviderKindDto,
+	/**  Name shown in the UI. */
+	displayName: string,
+	/**  Model identifier. */
+	model: string,
+	/**  Custom endpoint root; omit for the provider default. */
+	baseUrl?: string | null,
+	/**  Id of the secret holding the API key (required except for Ollama). */
+	secretRef?: string | null,
+	/**  Whether the model understands images. Only Ollama profiles use it (default `false`). */
+	supportsVision?: boolean,
+};
+
+/**  Input to create or update a provider profile. */
+export type UpsertProviderProfileDto_Serialize = {
+	/**  Omit to create; set to update that profile. */
+	id: string | null,
+	/**  Which provider. */
+	kind: ProviderKindDto,
+	/**  Name shown in the UI. */
+	displayName: string,
+	/**  Model identifier. */
+	model: string,
+	/**  Custom endpoint root; omit for the provider default. */
+	baseUrl: string | null,
+	/**  Id of the secret holding the API key (required except for Ollama). */
+	secretRef: string | null,
+	/**  Whether the model understands images. Only Ollama profiles use it (default `false`). */
+	supportsVision: boolean,
 };
 
 /**  Input to create or update a variable. */
