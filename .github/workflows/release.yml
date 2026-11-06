@@ -35,7 +35,7 @@ jobs:
 
       - name: Versions agree with each other and with the tag
         run: |
-          cargo_version="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)"
+          cargo_version="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p;}' Cargo.toml)"
           ui_version="$(node -p "require('./ui/package.json').version")"
           echo "workspace version: $cargo_version, ui version: $ui_version"
           test -n "$cargo_version"
