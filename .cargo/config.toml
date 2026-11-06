@@ -24,3 +24,13 @@ CMAKE_C_FLAGS_RELEASE = "-O2 -DNDEBUG"
 CMAKE_CXX_FLAGS_RELEASE = "-O2 -DNDEBUG"
 CMAKE_C_FLAGS_RELWITHDEBINFO = "-O2 -DNDEBUG"
 CMAKE_CXX_FLAGS_RELWITHDEBINFO = "-O2 -DNDEBUG"
+
+# Windows (MSVC): link the Visual C++ runtimes into the binary instead of importing them
+# (`MSVCP140.dll`, `VCRUNTIME140.dll`). whisper.cpp/ggml is C++ and would otherwise import the
+# Visual C++ Redistributable, which a clean Windows install does not have, so the installed app
+# would not start. The Universal CRT stays an import (`api-ms-win-crt-*`): it is part of Windows
+# 10 and 11. `cc`/`cmake` follow the `crt-static` target feature
+# and build ggml with `/MT` too, so Rust and C++ agree on one runtime. A `RUSTFLAGS` set in the
+# environment replaces this setting (cargo uses one or the other).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

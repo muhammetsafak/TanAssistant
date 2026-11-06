@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Hardened runtime (required for notarization): the microphone is a protected resource and
+       needs this entitlement for the permission prompt to appear. Screen and system-audio
+       capture (ScreenCaptureKit) has no entitlement; it is granted by the user in
+       System Settings > Privacy & Security > Screen Recording. The app is not sandboxed, so no
+       network or file entitlements are needed. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

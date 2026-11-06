@@ -1,0 +1,321 @@
+name: Release
+
+# A `v*` tag builds the installers of all three systems and collects them in a draft GitHub
+# release. A manual run builds the same bundles and keeps them as workflow artifacts only (no
+# release), which is how the pipeline is tried without publishing a tag.
+#
+# Signing is optional. Without the Apple secrets the macOS bundle is built unsigned (ad-hoc
+# signed by Tauri) and the log says so; see "Releasing" in the README for the secret names.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+
+jobs:
+  # The tag must name the version the code carries: `v0.1.0` or `v0.1.0-rc.1` for version 0.1.0.
+  version:
+    name: Check version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Versions agree with each other and with the tag
+        run: |
+          cargo_version="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)"
+          ui_version="$(node -p "require('./ui/package.json').version")"
+          echo "workspace version: $cargo_version, ui version: $ui_version"
+          test -n "$cargo_version"
+          if [ "$cargo_version" != "$ui_version" ]; then
+            echo "::error::Cargo.toml ($cargo_version) and ui/package.json ($ui_version) disagree"
+            exit 1
+          fi
+          if node -e "process.exit('version' in require('./src-tauri/tauri.conf.json') ? 0 : 1)"; then
+            echo '::error::tauri.conf.json must not set "version": it follows the Cargo workspace version'
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [ "${tag_version%%-*}" != "$cargo_version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match version $cargo_version"
+              exit 1
+            fi
+          fi
+
+  bundle:
+    name: ${{ matrix.name }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows (NSIS)
+            os: windows-latest
+            artifact: tan-windows
+            # whisper.cpp GPU backend of the distribution build (ADR-011).
+            features: vulkan
+            bundles: nsis
+          - name: macOS (app, dmg)
+            os: macos-latest
+            artifact: tan-macos
+            features: metal
+            bundles: app,dmg
+          - name: Linux (deb, AppImage)
+            os: ubuntu-latest
+            artifact: tan-linux
+            features: vulkan
+            bundles: deb,appimage
+    defaults:
+      run:
+        shell: bash
+    env:
+      # ggml's Vulkan shader generator nests CMake projects deeper than MAX_PATH (260) on Windows.
+      CARGO_TARGET_DIR: ${{ matrix.os == 'windows-latest' && 'C:\t' || '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      # Same package set as ci.yml (Tauri / webkit2gtk, audio, PipeWire, Vulkan shaders).
+      - name: Install Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            patchelf \
+            pkg-config \
+            libasound2-dev \
+            libclang-dev \
+            cmake \
+            libxcb1-dev \
+            libxrandr-dev \
+            libdbus-1-dev \
+            libpipewire-0.3-dev \
+            libspa-0.2-dev \
+            libwayland-dev \
+            libegl-dev \
+            libgbm-dev \
+            libdrm-dev \
+            libvulkan-dev \
+            glslc \
+            spirv-headers
+
+      - name: Install CMake (macOS)
+        if: runner.os == 'macOS'
+        run: command -v cmake >/dev/null || brew install cmake
+
+      - name: Install LLVM (libclang) and CMake (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if [ ! -f "/c/Program Files/LLVM/bin/libclang.dll" ]; then
+            choco install llvm --no-progress -y
+          fi
+          if ! command -v cmake >/dev/null; then
+            choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' --no-progress -y
+            echo 'C:\Program Files\CMake\bin' >> "$GITHUB_PATH"
+          fi
+          echo 'LIBCLANG_PATH=C:\Program Files\LLVM\bin' >> "$GITHUB_ENV"
+
+      - name: Install the Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if [ -z "${VULKAN_SDK:-}" ] || [ ! -d "$(cygpath -u "$VULKAN_SDK")" ]; then
+            choco install vulkan-sdk --no-progress -y
+            sdk="$(ls -d /c/VulkanSDK/*/ | sort -V | tail -1)"
+            echo "VULKAN_SDK=$(cygpath -w "${sdk%/}")" >> "$GITHUB_ENV"
+            echo "$(cygpath -w "${sdk%/}")\\Bin" >> "$GITHUB_PATH"
+          fi
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          prefix-key: release
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: UI install
+        run: npm --prefix ui ci
+
+      # The shader generator keeps every compile's std::async future (and so the finished
+      # thread's stack) until the end, then forks glslc from that ever larger process; under the
+      # kernel's heuristic overcommit the late forks fail with "Failed to fork process". Let the
+      # forks through: the child execs glslc at once and touches none of that memory.
+      - name: Allow memory overcommit for the Vulkan shader generator (Linux)
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w vm.overcommit_memory=1
+
+      # macOS signing and notarization. The Apple secrets are handed to the macOS job only: the
+      # build scripts of every dependency and the front-end build run with this environment, so
+      # the Windows and Linux jobs must not see a certificate they have no use for. Tauri imports
+      # the certificate into a temporary keychain and notarizes with `notarytool` when these
+      # variables are set. Secrets that are not configured arrive as empty strings; an empty
+      # variable must not reach Tauri (it would try to import an empty certificate), so unset them
+      # and say plainly that the build is unsigned.
+      - name: Build the bundles
+        env:
+          APPLE_CERTIFICATE: ${{ matrix.os == 'macos-latest' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.os == 'macos-latest' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_TEAM_ID || '' }}
+          # linuxdeploy's `strip` fails on the newer binutils of the runner image.
+          NO_STRIP: 'true'
+        run: |
+          # An empty CARGO_TARGET_DIR (non-Windows) would be read as a path.
+          [ -n "${CARGO_TARGET_DIR:-}" ] || unset CARGO_TARGET_DIR
+          if [ "$RUNNER_OS" = macOS ]; then
+            for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                     APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              [ -n "${!v}" ] || unset "$v"
+            done
+            if [ -n "${APPLE_CERTIFICATE:-}" ] && [ -n "${APPLE_CERTIFICATE_PASSWORD:-}" ] \
+               && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+              echo "macOS: signing with the Developer ID Application certificate."
+              if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+                echo "macOS: the app will be notarized."
+              else
+                echo "::warning::APPLE_ID, APPLE_PASSWORD or APPLE_TEAM_ID is missing: the macOS bundle is signed but NOT notarized (Gatekeeper will warn)."
+              fi
+            else
+              echo "::warning::Apple signing secrets are not configured: the macOS bundle is UNSIGNED and not notarized (Gatekeeper will block it until it is opened via right-click > Open)."
+              unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                    APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+            fi
+          fi
+          extra=()
+          if [ "$RUNNER_OS" = Linux ]; then
+            # The package is linked against the glibc of this runner image; `dpkg-shlibdeps` is not
+            # run by Tauri, so declare that floor, or an older Ubuntu installs the .deb without
+            # complaint and the app dies at start with "GLIBC_2.xx not found". A config file
+            # replaces arrays whole, so the dependency list from tauri.conf.json is carried over.
+            glibc="$(ldd --version | sed -n '1s/.* //p')"
+            echo "Linux: the .deb will depend on libc6 (>= $glibc)"
+            node -e '
+              const deb = require("./src-tauri/tauri.conf.json").bundle.linux.deb;
+              const depends = [...deb.depends, `libc6 (>= ${process.argv[1]})`];
+              console.log(JSON.stringify({ bundle: { linux: { deb: { depends } } } }));
+            ' "$glibc" > "$RUNNER_TEMP/deb-libc.json"
+            extra=(--config "$RUNNER_TEMP/deb-libc.json")
+          fi
+          # The Tauri CLI must run from the repository root; call the binary `npm ci` installed.
+          ./ui/node_modules/.bin/tauri build --features "${{ matrix.features }}" --bundles "${{ matrix.bundles }}" "${extra[@]}"
+
+      - name: Locate the bundles
+        id: bundles
+        run: |
+          target="${CARGO_TARGET_DIR:-target}"
+          # `C:/t` (mixed form) works for bash tools and for the artifact upload's globs alike.
+          if [ "$RUNNER_OS" = Windows ]; then target="$(cygpath -m "$target")"; fi
+          echo "dir=$target/release/bundle" >> "$GITHUB_OUTPUT"
+          find "$target/release/bundle" -maxdepth 2 \( -type f -o -name '*.app' \) | sort
+
+      # A clean Windows install has no Visual C++ Redistributable: the binary must carry its C and
+      # C++ runtimes (`crt-static`, see .cargo/config.toml) instead of importing them. The
+      # `api-ms-win-crt-*` imports that remain are the Universal CRT, part of Windows 10 and 11.
+      - name: Verify the Windows binary imports no C++ runtime DLL
+        if: runner.os == 'Windows'
+        run: |
+          exe="${{ steps.bundles.outputs.dir }}/../tan-app.exe"
+          "/c/Program Files/LLVM/bin/llvm-objdump" -p "$exe" | grep 'DLL Name' | sort
+          if "/c/Program Files/LLVM/bin/llvm-objdump" -p "$exe" | grep -i 'DLL Name' |
+               grep -iE 'msvcp|vcruntime|msvcr|concrt|vcomp'; then
+            echo '::error::tan-app.exe imports a Visual C++ runtime DLL (see above); a clean Windows install does not have it'
+            exit 1
+          fi
+
+      # The Info.plist must carry the usage descriptions and the minimum system version.
+      - name: Verify the macOS bundle
+        if: runner.os == 'macOS'
+        run: |
+          app="${{ steps.bundles.outputs.dir }}/macos/Tan.app"
+          plutil -p "$app/Contents/Info.plist"
+          for key in NSMicrophoneUsageDescription NSScreenCaptureUsageDescription LSMinimumSystemVersion; do
+            plutil -extract "$key" raw -o - "$app/Contents/Info.plist" >/dev/null \
+              || { echo "::error::$key is missing from Info.plist"; exit 1; }
+          done
+          codesign -dv --entitlements - "$app" 2>&1 || true
+          if codesign -dv "$app" 2>&1 | grep -q 'Authority=Developer ID Application'; then
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl -a -vv "$app" || echo "::warning::spctl does not accept the app (not notarized?)"
+            xcrun stapler validate "$app" || echo "::warning::the app carries no notarization ticket"
+          else
+            echo "::warning::the macOS bundle is not signed with a Developer ID certificate."
+          fi
+
+      # Prints the package metadata, so a missing dependency shows up in the log.
+      - name: Inspect the .deb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          for deb in "${{ steps.bundles.outputs.dir }}"/deb/*.deb; do
+            dpkg-deb -I "$deb"
+            dpkg-deb -c "$deb" | head -30
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ steps.bundles.outputs.dir }}/nsis/*.exe
+            ${{ steps.bundles.outputs.dir }}/dmg/*.dmg
+            ${{ steps.bundles.outputs.dir }}/deb/*.deb
+            ${{ steps.bundles.outputs.dir }}/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  # Only a tag run publishes: a draft release holding every installer and a checksum file.
+  release:
+    name: Draft release
+    if: github.ref_type == 'tag'
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          ls -l
+          sha256sum * > SHA256SUMS.txt
+          flags=(--draft --verify-tag --title "Tan ${GITHUB_REF_NAME#v}" --generate-notes)
+          # `v0.1.0-rc.1` and similar are pre-releases.
+          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}" --repo "$GITHUB_REPOSITORY" ./*

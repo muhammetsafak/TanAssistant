@@ -4,6 +4,91 @@ Desktop app that captures meeting audio and screen frames and turns them into st
 notes with AI. Tauri 2 + Rust core, React + TypeScript UI. Windows, macOS and Linux from one
 code base. Decisions live in `.ssot/ADR.md`.
 
+## Install
+
+Download the installer for your system from the
+[releases page](../../releases) (every file is listed in `SHA256SUMS.txt`):
+
+| System | File | Notes |
+|---|---|---|
+| Windows 10/11 (x64) | `Tan_<version>_x64-setup.exe` | Per-user install, no admin rights. WebView2 is downloaded by the installer if missing. The Visual C++ runtime is linked into the app (`crt-static`), nothing else to install. A GPU driver that provides the Vulkan loader (`vulkan-1.dll`) is needed (every common graphics driver does). |
+| macOS 13 or newer (Apple Silicon) | `Tan_<version>_aarch64.dmg` | Drag *Tan* to *Applications*. Signed and notarized when the release was built with the Apple secrets (below); otherwise open it via right-click > *Open*. |
+| Linux (x64) | `tan_<version>_amd64.deb` or `Tan_<version>_amd64.AppImage` | Built on the `ubuntu-latest` runner image, so it needs a glibc at least as new as that image's (the `.deb` declares it as `libc6 (>= x.y)`, so `apt` refuses it on an older system; the AppImage does not check). `sudo apt install ./tan_<version>_amd64.deb`; the AppImage only needs `chmod +x` and a run. |
+
+On Linux the `.deb` depends on `libwebkit2gtk-4.1-0`, GTK 3, ALSA, `libvulkan1`, PipeWire and the
+usual X11 client libraries, and recommends `xdg-desktop-portal` (with the backend of your desktop:
+`-gnome`, `-kde` or `-wlr`), `pipewire-pulse` (system audio is read from the PulseAudio/PipeWire
+monitor source) and a Secret Service provider such as GNOME Keyring or KWallet. On **Wayland**
+screen frames come from the ScreenCast portal: the first recording shows the system's "share your
+screen" dialog once. Without a portal, or if you decline, only audio is recorded. X11 sessions need
+neither. Without a Secret Service the app falls back to a password-encrypted file for secrets.
+
+### First run
+
+1. **Notice.** A one-time reminder that the other participants must be told about the recording
+   (KVKK); accept it to continue.
+2. **Permissions.**
+   - Windows: allow microphone access for desktop apps (*Settings > Privacy & security >
+     Microphone*). System audio and the screen need no permission.
+   - macOS: the first recording asks for the *Microphone* and for *Screen Recording* (this also
+     covers the system audio). Allow both in *System Settings > Privacy & Security*, then restart
+     the app once, because macOS applies a new Screen Recording permission only to a new process.
+   - Linux: PipeWire/PulseAudio needs no prompt; on Wayland see the portal dialog above.
+3. **Whisper model.** *Settings > Local whisper models*: download a model (the recommended default for
+   Turkish is `large-v3-turbo-q5_0`, about 574 MB) and select it. Models are not bundled; they live
+   in the data directory under `models/`. If you transcribe with a cloud provider only, you can
+   skip this.
+4. **AI provider.** *AI Providers*: add a profile for OpenAI, Anthropic, Gemini,
+   DeepSeek or Ollama with its API key (kept in the OS keychain) and assign it under *Task assignments*
+   to the jobs it should do (summary, image analysis and, optionally, transcription).
+5. Start a recording from the *Recordings* page; the notes are produced when the recording ends.
+
+## Releasing
+
+Version: change `version` in `[workspace.package]` of the root `Cargo.toml` and in
+`ui/package.json` (same number), add the entry to `CHANGELOG.md`. `src-tauri/tauri.conf.json`
+has no version of its own; it follows the Cargo one.
+
+Push a tag `v<version>` (or `v<version>-rc.1` for a pre-release):
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` builds the Windows NSIS installer, the macOS `.app` / `.dmg`
+(Apple Silicon) and the Linux `.deb` / AppImage on their own runners, and opens a **draft**
+GitHub release with the files and `SHA256SUMS.txt`; you publish it by hand. *Actions > Release >
+Run workflow* builds the same bundles without a tag and without a release (artifacts only).
+
+**macOS signing secrets** (repository *Settings > Secrets and variables > Actions*). The values
+are yours to enter; they never go into the repository or the logs:
+
+| Secret | Content |
+|---|---|
+| `APPLE_CERTIFICATE` | The *Developer ID Application* certificate with its private key exported as `.p12`, base64-encoded (`base64 -i cert.p12 \| pbcopy`) |
+| `APPLE_CERTIFICATE_PASSWORD` | The password chosen when exporting the `.p12` |
+| `APPLE_SIGNING_IDENTITY` | The certificate name, e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_ID` | The Apple ID e-mail used for notarization |
+| `APPLE_PASSWORD` | An app-specific password of that Apple ID (appleid.apple.com), not the account password |
+| `APPLE_TEAM_ID` | The 10-character team id |
+
+Without the first three the workflow still builds the macOS bundle, **unsigned**, and prints a
+warning in the log; without the last three it signs but does not notarize (also with a warning).
+Windows and Linux bundles are not code-signed.
+
+Release bundles use the GPU backends of ADR-011 (Vulkan on Windows and Linux, Metal on macOS)
+and the portable CPU baseline of `.cargo/config.toml`. Building them yourself:
+
+```sh
+./ui/node_modules/.bin/tauri build --features vulkan --bundles nsis    # Windows (CARGO_TARGET_DIR='C:\t')
+./ui/node_modules/.bin/tauri build --features metal --bundles app,dmg  # macOS
+./ui/node_modules/.bin/tauri build --features vulkan --bundles deb,appimage  # Linux
+```
+
+The Linux Vulkan build also needs `sudo sysctl -w vm.overcommit_memory=1` before it: ggml's shader
+generator forks `glslc` from an ever larger process, and under the kernel's default heuristic
+overcommit the late forks fail with "Failed to fork process" (CI and the release workflow set it).
+
 ## Layout
 
 | Path | Purpose |

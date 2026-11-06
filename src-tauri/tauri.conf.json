@@ -30,7 +30,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "app", "dmg", "deb", "appimage"],
+    "category": "Productivity",
+    "publisher": "Muhammet Safak",
+    "shortDescription": "Meeting recorder that turns audio and screen frames into notes",
+    "longDescription": "Tan records the audio of a meeting (microphone and system sound on separate channels) together with the screen frames that change, transcribes it with local whisper or an AI provider of your choice, and turns it into structured notes. All data stays on your machine.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -38,8 +42,42 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Turkish", "English"],
+        "displayLanguageSelector": true
+      }
+    },
     "macOS": {
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "13.0",
+      "entitlements": "Entitlements.plist",
+      "hardenedRuntime": true
+    },
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1",
+          "libasound2t64 | libasound2",
+          "libvulkan1",
+          "libpipewire-0.3-0t64 | libpipewire-0.3-0",
+          "libxcb1",
+          "libxrandr2",
+          "libdbus-1-3"
+        ],
+        "recommends": [
+          "xdg-desktop-portal",
+          "pipewire-pulse | pulseaudio",
+          "gnome-keyring | kwalletd5 | kwalletd6"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
     }
   }
 }

@@ -160,6 +160,26 @@ jobs:
       - name: UI build
         run: npm --prefix ui run build
 
+      # Packaging inputs (Phase 12), checked on every push so release.yml does not discover them:
+      # one version in the workspace and the UI, none in tauri.conf.json, valid macOS plists.
+      - name: Bundle configuration
+        run: |
+          cargo_version="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)"
+          ui_version="$(node -p "require('./ui/package.json').version")"
+          echo "workspace version: $cargo_version, ui version: $ui_version"
+          test -n "$cargo_version"
+          if [ "$cargo_version" != "$ui_version" ]; then
+            echo "::error::Cargo.toml ($cargo_version) and ui/package.json ($ui_version) disagree"
+            exit 1
+          fi
+          if node -e "process.exit('version' in require('./src-tauri/tauri.conf.json') ? 0 : 1)"; then
+            echo '::error::tauri.conf.json must not set "version" (it follows the Cargo workspace version)'
+            exit 1
+          fi
+          if [ "$RUNNER_OS" = macOS ]; then
+            plutil -lint src-tauri/Info.plist src-tauri/Entitlements.plist
+          fi
+
       # The Tauri CLI must run from the repository root (it looks for tauri.conf.json in
       # subfolders), so call the binary installed by `npm ci` directly instead of `npm exec`.
       - name: Tauri build (debug)
@@ -196,9 +216,14 @@ jobs:
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
+      # The shader generator keeps every compile's std::async future (and so the finished
+      # thread's stack) until the end, then forks glslc from that ever larger process; under the
+      # kernel's heuristic overcommit the late forks fail with "Failed to fork process". Let the
+      # forks through: the child execs glslc at once and touches none of that memory.
       - name: Build the Vulkan backend and check the shader generator
         run: |
           set -o pipefail
+          sudo sysctl -w vm.overcommit_memory=1
           cargo build -vv -p tan-infra-transcription --features vulkan 2>&1 | tee "$RUNNER_TEMP/vulkan-build.log"
           if grep -q 'cannot compile \|Error executing command for ' "$RUNNER_TEMP/vulkan-build.log"; then
             echo '::error::ggml could not compile some Vulkan shaders'
