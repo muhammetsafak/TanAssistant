@@ -4,6 +4,7 @@ import CredentialsPage from './features/credentials/CredentialsPage';
 import { AppLayout } from './layout/AppLayout';
 import ProvidersPage from './pages/ProvidersPage';
 import RecordingsPage from './pages/RecordingsPage';
+import SessionDetailPage from './pages/SessionDetailPage';
 import SettingsPage from './pages/SettingsPage';
 
 export function AppRoutes() {
@@ -12,6 +13,7 @@ export function AppRoutes() {
       <Route element={<AppLayout />}>
         <Route index element={<Navigate to="/recordings" replace />} />
         <Route path="recordings" element={<RecordingsPage />} />
+        <Route path="recordings/:sessionId" element={<SessionDetailPage />} />
         <Route path="providers" element={<ProvidersPage />} />
         <Route path="credentials" element={<CredentialsPage />} />
         <Route path="settings" element={<SettingsPage />} />

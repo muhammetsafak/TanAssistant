@@ -26,7 +26,7 @@ use tan_application::transcription::{
     TranscribePorts, TranscribeProgress, TranscribeResult, TranscribeSession, TranscribeSummary,
 };
 use tan_domain::EpochMs;
-use tan_domain::SessionId;
+use tan_domain::{ProviderProfileId, SessionId};
 use tan_infra_ai::AiProviderFactory;
 use tan_infra_capture::{DHasher, FileMediaStore, PlatformAudioCapture, PlatformScreenCapture};
 use tan_infra_secrets::{open_secret_store, SelectedSecretStore};
@@ -142,9 +142,12 @@ impl SessionTranscriber for SessionTranscription {
     async fn transcribe(
         &self,
         session_id: &SessionId,
+        profile: Option<&ProviderProfileId>,
         on_progress: &(dyn Fn(TranscribeProgress) + Send + Sync),
     ) -> TranscribeResult<TranscribeSummary> {
-        self.0.execute_with_progress(session_id, on_progress).await
+        self.0
+            .execute_with_profile(session_id, profile, on_progress, &|_| {})
+            .await
     }
 }
 
@@ -249,7 +252,7 @@ pub struct AppState {
     /// Marks an action item done or not done.
     pub toggle_action_item: ToggleActionItem<SqliteNoteRepository>,
     /// Writes the Markdown export of a session.
-    pub export_session: ExportSessionMarkdown<DataDirFiles>,
+    pub export_session: Arc<ExportSessionMarkdown<DataDirFiles>>,
     /// Deletes a session with its files.
     pub delete_session: DeleteSession<SqliteSessionRepository, DataDirFiles>,
     /// Measures disk usage (walks the data directory: run it on a blocking thread).
@@ -401,7 +404,7 @@ impl AppState {
                 processing,
             ),
             toggle_action_item: ToggleActionItem::new(notes),
-            export_session: ExportSessionMarkdown::new(files.clone()),
+            export_session: Arc::new(ExportSessionMarkdown::new(files.clone())),
             delete_session: DeleteSession::new(sessions, files.clone()),
             storage_usage: Arc::new(GetStorageUsage::new(files)),
             apply_retention,

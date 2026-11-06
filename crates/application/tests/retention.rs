@@ -183,6 +183,14 @@ impl SessionFileStore for World {
         Err(io::Error::other("not used"))
     }
 
+    fn create_export_dir(&self, _: &std::path::Path) -> io::Result<()> {
+        Err(io::Error::other("not used"))
+    }
+
+    fn write_export_to(&self, _: &std::path::Path, _: &[u8]) -> io::Result<()> {
+        Err(io::Error::other("not used"))
+    }
+
     fn measure_usage(&self) -> io::Result<StorageUsage> {
         Ok(StorageUsage {
             total_bytes: 100,

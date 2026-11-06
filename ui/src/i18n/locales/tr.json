@@ -1,5 +1,7 @@
 {
-  "app": { "name": "Tan" },
+  "app": {
+    "name": "Tan"
+  },
   "common": {
     "edit": "Düzenle",
     "delete": "Sil",
@@ -25,7 +27,10 @@
     "themeLight": "Açık",
     "themeDark": "Koyu"
   },
-  "languages": { "tr": "Türkçe", "en": "English" },
+  "languages": {
+    "tr": "Türkçe",
+    "en": "English"
+  },
   "consent": {
     "title": "Kayıt hakkında bilgilendirme",
     "body": "Tan, toplantı ve görüşmelerin sesini ve ekran görüntülerini kaydeder. Kayda başlamadan önce görüşmedeki diğer kişilere kaydın yapıldığını bildirmeniz gerekir; kişisel verilerin korunmasına ilişkin (KVKK) yükümlülükler size aittir.",
@@ -33,15 +38,13 @@
   },
   "pages": {
     "recordings": {
-      "title": "Kayıtlar",
-      "empty": "Henüz kayıt yok. Kayıt ve not özellikleri sonraki sürümlerde eklenecek."
+      "title": "Kayıtlar"
     },
     "providers": {
       "title": "AI Sağlayıcıları"
     },
     "settings": {
-      "title": "Ayarlar",
-      "empty": "Ayarlar sonraki sürümlerde eklenecek."
+      "title": "Ayarlar"
     }
   },
   "credentials": {
@@ -242,6 +245,13 @@
       "provider_error": "Sağlayıcı beklenmeyen bir hata döndürdü.",
       "secret_unavailable": "API anahtarı kasadan okunamadı. Kasa kilitli ya da secret silinmiş olabilir.",
       "internal": "Beklenmeyen bir hata oluştu."
+    },
+    "deprecation": {
+      "closes_one": "Kullanımdan kalkıyor: {{date}} ({{count}} gün kaldı)",
+      "closes_other": "Kullanımdan kalkıyor: {{date}} ({{count}} gün kaldı)",
+      "closesToday": "Bugün kapanıyor: {{date}}",
+      "closed": "Kapandı: {{date}}",
+      "replacement": "Önerilen: {{model}}"
     }
   },
   "errors": {
@@ -258,5 +268,376 @@
     "clipboard": "Panoya kopyalanamadı.",
     "settingsLoad": "Ayarlar yüklenemedi."
   },
-  "toast": { "dismiss": "Bildirimi kapat" }
+  "toast": {
+    "dismiss": "Bildirimi kapat"
+  },
+  "format": {
+    "hours": "sa",
+    "minutes": "dk",
+    "seconds": "sn"
+  },
+  "languageNames": {
+    "auto": "Otomatik algıla",
+    "tr": "Türkçe",
+    "en": "İngilizce",
+    "de": "Almanca",
+    "fr": "Fransızca",
+    "es": "İspanyolca",
+    "it": "İtalyanca",
+    "pt": "Portekizce",
+    "nl": "Felemenkçe",
+    "ru": "Rusça",
+    "ar": "Arapça",
+    "ja": "Japonca",
+    "zh": "Çince"
+  },
+  "recording": {
+    "title": "Kayıt",
+    "newTitle": "Yeni kayıt",
+    "titleLabel": "Başlık",
+    "titleHint": "Boş bırakırsanız otomatik bir başlık verilir.",
+    "speechLanguage": "Konuşma dili",
+    "noteLanguage": "Not dili",
+    "noteLanguageHint": "Özet, kararlar ve aksiyonlar bu dilde yazılır.",
+    "microphone": "Mikrofon",
+    "microphoneDefault": "Sistem varsayılanı",
+    "systemDefault": "varsayılan",
+    "display": "Ekran",
+    "displayDefault": "Varsayılan ekran",
+    "primaryDisplay": "ana ekran",
+    "devicesFailed": "Mikrofon listesi alınamadı; sistem varsayılanı kullanılacak.",
+    "noDevices": "Mikrofon bulunamadı.",
+    "displaysFailed": "Ekran listesi alınamadı; varsayılan ekran kullanılacak.",
+    "capabilitiesFailed": "Ekran yakalama durumu öğrenilemedi.",
+    "screenUnavailable": {
+      "wayland_unsupported": "Bu Wayland oturumunda ekran görüntüsü yakalanamıyor; yalnız ses kaydedilecek.",
+      "generic": "Bu cihazda ekran görüntüsü yakalanamıyor; yalnız ses kaydedilecek."
+    },
+    "start": "Kaydı başlat",
+    "starting": "Başlatılıyor…",
+    "stop": "Kaydı durdur",
+    "stopping": "Durduruluyor…",
+    "active": "Kayıt sürüyor",
+    "indicator": "Kayıt sürüyor",
+    "elapsed": "Geçen süre",
+    "frames": "Kare sayısı",
+    "track": {
+      "microphone": "Mikrofon",
+      "system": "Sistem sesi"
+    },
+    "meterLabel": "{{name}} seviyesi",
+    "noSignal": "sinyal yok",
+    "warningsTitle": "Kayıt uyarıları",
+    "warningsAfterStop": "Kayıt sırasında uyarılar oluştu:",
+    "nothingCaptured": "Kayıttan hiçbir şey yakalanamadı. Mikrofon ve ekran izinlerini kontrol edin.",
+    "silentTrack": "{{track}} kanalında hiç ses alınmadı; kaynak sessiz ya da yanlış cihaz seçilmiş olabilir.",
+    "statusFailed": "Kayıt durumu okunamadı.",
+    "errors": {
+      "validation": "Girilen bilgiler geçersiz.",
+      "already_recording": "Zaten bir kayıt sürüyor.",
+      "not_recording": "Sürmekte olan bir kayıt yok.",
+      "permission_denied": "İşletim sistemi mikrofon ya da ekran erişimini reddetti. Sistem ayarlarından izin verin.",
+      "device_not_found": "Seçilen cihaz bulunamadı.",
+      "capture_unsupported": "Bu platform bu kaynağı yakalayamıyor.",
+      "capture_failed": "Yakalama başlatılamadı ya da kesildi.",
+      "internal": "Beklenmeyen bir hata oluştu."
+    }
+  },
+  "sessions": {
+    "status": {
+      "recording": "Kayıt sürüyor",
+      "recorded": "İşlenmedi",
+      "processing": "İşleniyor",
+      "processed": "Hazır",
+      "failed": "Başarısız"
+    },
+    "list": {
+      "title": "Kayıtlar",
+      "statusFilter": "Durum",
+      "allStatuses": "Tüm durumlar",
+      "listLabel": "Kayıt listesi",
+      "empty": "Henüz kayıt yok. Yukarıdan bir kayıt başlatın.",
+      "emptyFiltered": "Bu duruma uyan kayıt yok.",
+      "loadFailed": "Kayıtlar yüklenemedi.",
+      "untitled": "Adsız kayıt",
+      "actionsProgress": "{{done}}/{{total}} aksiyon",
+      "pagination": "Sayfalama",
+      "previous": "Önceki",
+      "next": "Sonraki",
+      "range": "{{from}}–{{to}} / {{total}}"
+    },
+    "search": {
+      "label": "Ara",
+      "placeholder": "Transkript ve notlarda ara…",
+      "hint": "Yazdığınız her sözcük eşleşmeli; sözcük başları da sayılır.",
+      "searching": "Aranıyor…",
+      "failed": "Arama yapılamadı.",
+      "noResults": "“{{query}}” için sonuç bulunamadı.",
+      "resultsLabel": "Arama sonuçları",
+      "moreHits_one": "+{{count}} eşleşme daha",
+      "moreHits_other": "+{{count}} eşleşme daha",
+      "source": {
+        "transcript": "Transkript",
+        "note": "Not"
+      }
+    },
+    "detail": {
+      "back": "← Kayıtlara dön",
+      "loadFailed": "Kayıt yüklenemedi.",
+      "notFound": "Kayıt bulunamadı; silinmiş olabilir.",
+      "startedAt": "Başlangıç",
+      "duration": "Süre",
+      "speechLanguage": "Konuşma dili",
+      "noteLanguage": "Not dili",
+      "delete": "Kaydı sil",
+      "deleteBusy": "Kayıt ya da işleme sürerken silinemez.",
+      "deleteTitle": "Kayıt silinsin mi?",
+      "deleteMessage": "“{{name}}” kaydı; sesi, kareleri, transkripti, notu ve aksiyonlarıyla kalıcı olarak silinecek. Bu işlem geri alınamaz.",
+      "deleted": "Kayıt silindi.",
+      "tabs": {
+        "label": "Kayıt bölümleri",
+        "note": "Not",
+        "actions": "Aksiyonlar",
+        "transcript": "Transkript",
+        "frames": "Kareler"
+      }
+    },
+    "note": {
+      "none": "Bu kayıt için henüz not yok.",
+      "language": "Not dili: {{language}}",
+      "createdAt": "Oluşturulma: {{date}}",
+      "summary": "Özet",
+      "noSummary": "Özet yok.",
+      "decisions": "Kararlar",
+      "noDecisions": "Karar kaydedilmedi.",
+      "openQuestions": "Açık sorular",
+      "noOpenQuestions": "Açık soru yok.",
+      "keyFrames": "Önemli kareler",
+      "noKeyFrames": "Nota eklenmiş kare yok."
+    },
+    "actions": {
+      "empty": "Bu notta aksiyon maddesi yok.",
+      "progress": "{{done}}/{{total}} tamamlandı",
+      "listLabel": "Aksiyon maddeleri",
+      "owner": "Sorumlu: {{owner}}",
+      "due": "Tarih: {{date}}"
+    },
+    "transcript": {
+      "empty": "Bu kayıt için transkript yok.",
+      "listLabel": "Transkript satırları",
+      "previewLabel": "Seçili ana en yakın kare",
+      "previewHint": "Bir satırın zamanına tıklayın; o ana en yakın ekran karesi burada görünür.",
+      "nearestFrame": "{{time}} anına en yakın kare: {{frameTime}}",
+      "showFrame": "{{time}} anına en yakın kareyi göster",
+      "speaker": {
+        "me": "Ben",
+        "others": "Diğerleri"
+      }
+    },
+    "frames": {
+      "empty": "Bu kayıtta ekran karesi yok.",
+      "galleryLabel": "Ekran kareleri",
+      "altAt": "{{time}} anındaki ekran karesi",
+      "unavailable": "Kare gösterilemiyor",
+      "unavailableAt": "{{time}} anındaki kare gösterilemiyor",
+      "enlarge": "{{time}} anındaki kareyi büyüt",
+      "enlargeShort": "Büyüt",
+      "viewerTitle": "Kare — {{time}}",
+      "previous": "Önceki",
+      "next": "Sonraki",
+      "position": "{{current}} / {{total}}",
+      "noDescription": "Bu kare için görsel açıklama yok."
+    },
+    "export": {
+      "button": "Markdown olarak dışa aktar",
+      "exporting": "Dışa aktarılıyor…",
+      "done": "Markdown dosyası oluşturuldu.",
+      "dialogTitle": "Markdown dosyasını kaydet",
+      "savedTo": "Dosya şuraya yazıldı:",
+      "framesNote": "Önemli kareler, dosyanın yanındaki “…_frames” klasörüne kopyalandı; ikisini birlikte taşıyın.",
+      "copyPath": "Yolu kopyala",
+      "pathCopied": "Dosya yolu panoya kopyalandı.",
+      "problems": {
+        "not_absolute": "Seçilen yol tam bir dosya yolu değil. Kaydetme penceresinden bir konum seçin.",
+        "parent_reference": "Yol “..” içeriyor. Kaydetme penceresinden bir klasör seçin.",
+        "network_path": "Ağ ve aygıt yollarına yazılamaz. Bu bilgisayardaki bir sürücüde bir yer seçin.",
+        "missing_name": "Bir dosya adı girin.",
+        "invalid_extension": "Dosya uzantısı .md olmalı. Uzantıyı değiştirmeyin ya da hiç yazmayın.",
+        "not_dialog_selected": "Konum kaydetme penceresinden seçilmedi. Dışa aktarmayı yeniden başlatıp yeri pencerede seçin.",
+        "inside_data_dir": "Tan'ın kendi veri klasörüne dışa aktarılamaz. Başka bir klasör seçin.",
+        "folder_missing": "Seçilen klasör yok. Var olan bir klasör seçin.",
+        "already_exists": "Adın sonuna .md eklenince bu adda bir dosya zaten var; üzerine yazılmaz. Başka bir ad seçin."
+      },
+      "errors": {
+        "validation": "Seçilen konuma yazılamaz. Kaydetme penceresinden bu bilgisayardaki bir sürücüde bir yer seçin.",
+        "filesFailed": "Dosya yazılamadı. Konumun var olduğunu ve yazma izniniz olduğunu kontrol edin."
+      }
+    },
+    "errors": {
+      "validation": "Girilen bilgiler geçersiz.",
+      "not_found": "Kayıt bulunamadı.",
+      "busy": "Kayıt ya da işleme sürüyor; şimdi değiştirilemez.",
+      "files_failed": "Dosya işlemi başarısız oldu.",
+      "internal": "Beklenmeyen bir hata oluştu."
+    }
+  },
+  "processing": {
+    "title": "İşleme",
+    "recordingInProgress": "Kayıt sürüyor; bittikten sonra işlenebilir.",
+    "running": "İşleniyor",
+    "progressLabel": "İşleme ilerlemesi",
+    "percent": "%{{percent}}",
+    "starting": "Başlatılıyor…",
+    "stepsLabel": "İşleme adımları",
+    "cancel": "İptal et",
+    "steps": {
+      "transcribe": "Transkripsiyon",
+      "describe_frames": "Ekran kareleri",
+      "synthesize": "Not üretimi"
+    },
+    "stepState": {
+      "pending": "Bekliyor",
+      "running": "Çalışıyor",
+      "done": "Tamam",
+      "skipped": "Atlandı",
+      "failed": "Hata"
+    },
+    "failedTitle": "İşleme tamamlanamadı",
+    "cancelledTitle": "İşleme iptal edildi",
+    "failedAt": "“{{step}}” adımı başarısız oldu.",
+    "interrupted": "İşleme yarıda kesildi (uygulama kapanmış olabilir).",
+    "nothingCaptured": "Bu kayıtta yakalanan ses ya da ekran karesi yok; işlenecek bir şey yok.",
+    "retry": "Tekrar dene",
+    "openProviders": "AI Sağlayıcıları sayfasına git",
+    "openSettings": "Ayarlar sayfasına git",
+    "reprocess": "Yeniden işle",
+    "reprocessTitle": "Kayıt yeniden işlensin mi?",
+    "reprocessMessage": "Her şey baştan işlenir; mevcut not silinir ve aksiyon maddelerindeki işaretler kaybolur. Bulut sağlayıcı kullanılıyorsa yeniden maliyet doğar.",
+    "framesSkipped": "Ekran kareleri yorumlanmadı: görsel analiz için bir sağlayıcı atanmamış.",
+    "readyTitle": "İşlemeye hazır",
+    "readyIntro": "Kayıt; transkripsiyon, ekran karesi analizi ve not üretimi adımlarından geçirilir.",
+    "estimating": "Yerel transkripsiyon süresi tahmin ediliyor…",
+    "estimateLocal": "Yerel transkripsiyon tahmini: yaklaşık {{duration}} ({{backend}}).",
+    "estimateCloud": "Transkripsiyon bulut sağlayıcıyla yapılacak; süre servise bağlı.",
+    "estimateUnknown": "Transkripsiyon süresi tahmin edilemedi.",
+    "longOnCpu": "Bu bilgisayarda yerel transkripsiyon yalnız işlemciyle çalışıyor ve yaklaşık {{duration}} sürecek. Bulut transkripsiyon profili çok daha hızlıdır.",
+    "cloudProfile": "Bulut profili",
+    "cloudProfileSingle": "Profil: {{name}}",
+    "cloudAssignmentNote": "Seçilen profil yalnız bu kayıt için kullanılır; genel Transkripsiyon ataması değişmez.",
+    "processInCloud": "Bulutla işle",
+    "addCloudProfile": "Bulut transkripsiyonu için AI Sağlayıcıları sayfasından bir profil ekleyin",
+    "process": "İşle",
+    "processLocal": "Yerelde işle",
+    "errors": {
+      "validation": "Girilen bilgiler geçersiz.",
+      "session_not_found": "Kayıt bulunamadı.",
+      "not_ready": "Kayıt henüz bitmedi.",
+      "already_running": "Bu kayıt zaten işleniyor.",
+      "cancelled": "İşleme iptal edildi. “Tekrar dene” kalan adımlardan devam eder.",
+      "transcription_failed": "Transkripsiyon başarısız oldu.",
+      "no_chat_model": "Özet için atanmış bir AI sağlayıcı yok. AI Sağlayıcıları sayfasında “Özet” görevine bir profil atayıp tekrar deneyin.",
+      "invalid_model_output": "Model geçerli bir not üretemedi. Tekrar deneyin ya da başka bir model atayın.",
+      "nothing_to_summarize": "Not üretilecek transkript ya da ekran içeriği yok.",
+      "provider_auth": "API anahtarı reddedildi. Seçili secret’ın doğru anahtarı içerdiğini kontrol edin.",
+      "provider_rate_limited": "Sağlayıcı istek sınırına ulaştı. Biraz bekleyip yeniden deneyin.",
+      "provider_timeout": "Sağlayıcı zamanında yanıt vermedi. Daha sonra yeniden deneyin.",
+      "provider_invalid_request": "Sağlayıcı isteği reddetti. Model adını ve base URL’yi kontrol edin.",
+      "provider_unsupported": "Sağlayıcı bu modelde ya da bu uç noktada istenen özelliği sunmuyor.",
+      "provider_network": "Sağlayıcıya ulaşılamadı. İnternet bağlantınızı ve base URL’yi kontrol edin.",
+      "provider_error": "Sağlayıcı beklenmeyen bir hata döndürdü.",
+      "secret_unavailable": "API anahtarı kasadan okunamadı. Kasa kilitli ya da secret silinmiş olabilir.",
+      "internal": "Beklenmeyen bir hata oluştu."
+    }
+  },
+  "transcription": {
+    "errors": {
+      "validation": "Girilen bilgiler geçersiz.",
+      "unknown_model": "Bilinmeyen model.",
+      "model_busy": "Model şu an indiriliyor ya da siliniyor.",
+      "model_not_installed": "Model kurulu değil.",
+      "download_failed": "İndirme başarısız oldu. Yeniden denerseniz kaldığı yerden devam eder.",
+      "checksum_mismatch": "İndirilen dosya doğrulanamadı ve silindi. Yeniden indirin.",
+      "session_not_found": "Kayıt bulunamadı.",
+      "no_audio": "Kayıtta ses yok.",
+      "local_model_missing": "Yerel whisper modeli kurulu değil. Ayarlar sayfasından bir model indirin.",
+      "audio_unreadable": "Ses dosyası bulunamadı ya da okunamadı (saklama süresi dolmuş olabilir).",
+      "engine_failed": "Yerel transkripsiyon motoru hata verdi.",
+      "provider_auth": "API anahtarı reddedildi. Seçili secret’ın doğru anahtarı içerdiğini kontrol edin.",
+      "provider_rate_limited": "Sağlayıcı istek sınırına ulaştı. Biraz bekleyip yeniden deneyin.",
+      "provider_timeout": "Sağlayıcı zamanında yanıt vermedi. Daha sonra yeniden deneyin.",
+      "provider_invalid_request": "Sağlayıcı isteği reddetti. Model adını ve base URL’yi kontrol edin.",
+      "provider_unsupported": "Seçili sağlayıcı transkripsiyon sunmuyor.",
+      "provider_network": "Sağlayıcıya ulaşılamadı. İnternet bağlantınızı ve base URL’yi kontrol edin.",
+      "provider_error": "Sağlayıcı beklenmeyen bir hata döndürdü.",
+      "secret_unavailable": "API anahtarı kasadan okunamadı. Kasa kilitli ya da secret silinmiş olabilir.",
+      "internal": "Beklenmeyen bir hata oluştu."
+    }
+  },
+  "settings": {
+    "intro": "Dil, kayıt, model ve depolama tercihleri.",
+    "saved": "Ayar kaydedildi.",
+    "language": {
+      "title": "Dil",
+      "hint": "Arayüz dili ile yeni kayıtların varsayılan dilleri.",
+      "ui": "Arayüz dili",
+      "speech": "Varsayılan konuşma dili",
+      "speechHint": "“Otomatik algıla” seçilirse dil kayıttan belirlenir.",
+      "note": "Varsayılan not dili",
+      "noteHint": "Her kayıtta ayrıca değiştirilebilir."
+    },
+    "capture": {
+      "title": "Yakalama ve işleme",
+      "hint": "Ekran karelerinin ne sıklıkla alınacağı ve kayıt sonrası işleme.",
+      "interval": "Kare aralığı (saniye)",
+      "intervalHint": "Ekran bu aralıkla örneklenir; yalnız belirgin biçimde değişen kareler saklanır.",
+      "intervalInvalid": "{{min}} ile {{max}} arasında bir saniye değeri girin.",
+      "threshold": "Değişim eşiği",
+      "thresholdHint": "0–{{max}} arası. Düşük değer küçük değişimleri de kaydeder, yüksek değer yalnız büyük değişimleri.",
+      "thresholdInvalid": "0 ile {{max}} arasında bir tam sayı girin.",
+      "autoProcess": "Kayıt bitince otomatik işle",
+      "autoProcessHint": "Kapalıysa kaydı durdurduktan sonra “İşle” düğmesine basarsınız."
+    },
+    "whisper": {
+      "title": "Yerel whisper modelleri",
+      "hint": "Yerel transkripsiyon seçili modelle çalışır. Büyük modeller daha doğrudur ama daha yavaştır.",
+      "loadFailed": "Model listesi yüklenemedi.",
+      "empty": "Listelenecek model yok.",
+      "recommended": "Önerilen",
+      "installed": "Kurulu",
+      "inUse": "Kullanımda",
+      "partial": "Yarım kalmış indirme: {{size}}",
+      "download": "İndir",
+      "resume": "Devam et",
+      "downloadModel": "İndir: {{name}}",
+      "downloadLabel": "{{name}} indirme ilerlemesi",
+      "downloadProgress": "{{downloaded}} / {{total}} (%{{percent}})",
+      "downloadStarting": "İndirme başlıyor…",
+      "downloaded": "{{name}} indirildi.",
+      "use": "Kullan",
+      "useModel": "Kullan: {{name}}",
+      "selected": "{{name}} kullanılacak.",
+      "deleteModel": "Sil: {{name}}",
+      "deletePartial": "Yarım indirmeyi sil: {{name}}",
+      "deleted": "{{name}} silindi.",
+      "deleteTitle": "Model silinsin mi?",
+      "deleteMessage": "“{{name}}” modeli diskten silinecek. Dilerseniz yeniden indirebilirsiniz."
+    },
+    "storage": {
+      "title": "Depolama",
+      "hint": "Ses dosyalarının saklama süresi ve disk kullanımı.",
+      "retention": "Ses dosyaları",
+      "keepForever": "Süresiz sakla",
+      "deleteAfter": "İşlendikten belirli bir süre sonra ses dosyalarını sil",
+      "days": "Gün sayısı",
+      "daysHint": "Not, transkript ve kareler silinmez; yalnız ses dosyaları.",
+      "daysInvalid": "1 ya da daha büyük bir tam sayı girin.",
+      "usage": "Disk kullanımı",
+      "refresh": "Yenile",
+      "usageFailed": "Disk kullanımı okunamadı.",
+      "total": "Toplam",
+      "audio": "Ses",
+      "frames": "Kareler",
+      "models": "Modeller"
+    }
+  }
 }

@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tan_domain::{
-    AudioTrack, LanguageCode, LanguageSetting, ProviderProfile, Session, SessionId, TaskKind,
-    TrackKind, TranscriptSegment,
+    AudioTrack, LanguageCode, LanguageSetting, ProviderProfile, ProviderProfileId, Session,
+    SessionId, TaskKind, TrackKind, TranscriptSegment,
 };
 
 use super::chunking::{self, ChunkError};
@@ -115,9 +115,31 @@ where
         on_progress: &(dyn Fn(TranscribeProgress) + Send + Sync),
         on_chunk: &(dyn Fn(ChunkProgress) + Send + Sync),
     ) -> TranscribeResult<TranscribeSummary> {
+        self.execute_with_profile(session_id, None, on_progress, on_chunk)
+            .await
+    }
+
+    /// Like [`Self::execute_with_chunk_progress`], with the cloud provider of `profile` doing
+    /// the work in this call only. Nothing is assigned: the general transcription assignment
+    /// (or local whisper) is untouched and applies again on the next call. `None` behaves like
+    /// [`Self::execute_with_chunk_progress`].
+    ///
+    /// A profile that does not exist is an [`AiError::InvalidRequest`] and one that cannot
+    /// transcribe audio an [`AiError::Unsupported`], both as [`TranscribeError::Provider`].
+    pub async fn execute_with_profile(
+        &self,
+        session_id: &SessionId,
+        profile: Option<&ProviderProfileId>,
+        on_progress: &(dyn Fn(TranscribeProgress) + Send + Sync),
+        on_chunk: &(dyn Fn(ChunkProgress) + Send + Sync),
+    ) -> TranscribeResult<TranscribeSummary> {
         let (session, tracks) = self.load(session_id).await?;
 
-        let (segment_count, engine) = if let Some(profile) = self.assigned_profile().await? {
+        let chosen = match profile {
+            Some(profile_id) => Some(self.requested_profile(profile_id).await?),
+            None => self.assigned_profile().await?,
+        };
+        let (segment_count, engine) = if let Some(profile) = chosen {
             let model = self
                 .ports
                 .factory
@@ -249,13 +271,28 @@ where
         let Some(profile) = self.ports.profiles.get(&assignment.profile_id).await? else {
             return Ok(None);
         };
-        if !Capabilities::for_profile(&profile).transcription {
-            return Err(TranscribeError::Provider(AiError::Unsupported(format!(
+        Self::checked_for_transcription(profile).map(Some)
+    }
+
+    /// The profile a caller asked for explicitly (for one run), which must exist.
+    async fn requested_profile(&self, id: &ProviderProfileId) -> TranscribeResult<ProviderProfile> {
+        let profile = self.ports.profiles.get(id).await?.ok_or_else(|| {
+            TranscribeError::Provider(AiError::InvalidRequest(
+                "the transcription profile does not exist".to_owned(),
+            ))
+        })?;
+        Self::checked_for_transcription(profile)
+    }
+
+    fn checked_for_transcription(profile: ProviderProfile) -> TranscribeResult<ProviderProfile> {
+        if Capabilities::for_profile(&profile).transcription {
+            Ok(profile)
+        } else {
+            Err(TranscribeError::Provider(AiError::Unsupported(format!(
                 "{} cannot transcribe audio",
                 profile.kind
-            ))));
+            ))))
         }
-        Ok(Some(profile))
     }
 
     /// Transcribes the tracks one after the other and stores the merged result. Returns the

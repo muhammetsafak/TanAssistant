@@ -1,5 +1,7 @@
 {
-  "app": { "name": "Tan" },
+  "app": {
+    "name": "Tan"
+  },
   "common": {
     "edit": "Edit",
     "delete": "Delete",
@@ -25,7 +27,10 @@
     "themeLight": "Light",
     "themeDark": "Dark"
   },
-  "languages": { "tr": "Türkçe", "en": "English" },
+  "languages": {
+    "tr": "Türkçe",
+    "en": "English"
+  },
   "consent": {
     "title": "Recording notice",
     "body": "Tan records the audio and screen captures of meetings and conversations. Before you start recording, you must let the other people in the conversation know that it is being recorded; the obligations under personal data protection law (KVKK) are yours.",
@@ -33,15 +38,13 @@
   },
   "pages": {
     "recordings": {
-      "title": "Recordings",
-      "empty": "No recordings yet. Recording and notes will arrive in later releases."
+      "title": "Recordings"
     },
     "providers": {
       "title": "AI Providers"
     },
     "settings": {
-      "title": "Settings",
-      "empty": "Settings will arrive in later releases."
+      "title": "Settings"
     }
   },
   "credentials": {
@@ -242,6 +245,13 @@
       "provider_error": "The provider returned an unexpected error.",
       "secret_unavailable": "The API key could not be read from the vault. It may be locked or the secret deleted.",
       "internal": "An unexpected error occurred."
+    },
+    "deprecation": {
+      "closes_one": "Being retired: {{date}} ({{count}} day left)",
+      "closes_other": "Being retired: {{date}} ({{count}} days left)",
+      "closesToday": "Closes today: {{date}}",
+      "closed": "Closed: {{date}}",
+      "replacement": "Recommended: {{model}}"
     }
   },
   "errors": {
@@ -258,5 +268,376 @@
     "clipboard": "Could not copy to the clipboard.",
     "settingsLoad": "Could not load settings."
   },
-  "toast": { "dismiss": "Dismiss notification" }
+  "toast": {
+    "dismiss": "Dismiss notification"
+  },
+  "format": {
+    "hours": "h",
+    "minutes": "min",
+    "seconds": "s"
+  },
+  "languageNames": {
+    "auto": "Detect automatically",
+    "tr": "Turkish",
+    "en": "English",
+    "de": "German",
+    "fr": "French",
+    "es": "Spanish",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "nl": "Dutch",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "ja": "Japanese",
+    "zh": "Chinese"
+  },
+  "recording": {
+    "title": "Recording",
+    "newTitle": "New recording",
+    "titleLabel": "Title",
+    "titleHint": "Leave empty to get an automatic title.",
+    "speechLanguage": "Spoken language",
+    "noteLanguage": "Note language",
+    "noteLanguageHint": "The summary, decisions and action items are written in this language.",
+    "microphone": "Microphone",
+    "microphoneDefault": "System default",
+    "systemDefault": "default",
+    "display": "Screen",
+    "displayDefault": "Default screen",
+    "primaryDisplay": "primary",
+    "devicesFailed": "The microphone list could not be read; the system default will be used.",
+    "noDevices": "No microphone found.",
+    "displaysFailed": "The screen list could not be read; the default screen will be used.",
+    "capabilitiesFailed": "Could not find out whether screen capture is available.",
+    "screenUnavailable": {
+      "wayland_unsupported": "Screen frames cannot be captured in this Wayland session; only audio will be recorded.",
+      "generic": "Screen frames cannot be captured on this device; only audio will be recorded."
+    },
+    "start": "Start recording",
+    "starting": "Starting…",
+    "stop": "Stop recording",
+    "stopping": "Stopping…",
+    "active": "Recording",
+    "indicator": "Recording",
+    "elapsed": "Elapsed",
+    "frames": "Frames",
+    "track": {
+      "microphone": "Microphone",
+      "system": "System audio"
+    },
+    "meterLabel": "{{name}} level",
+    "noSignal": "no signal",
+    "warningsTitle": "Recording warnings",
+    "warningsAfterStop": "Warnings came up while recording:",
+    "nothingCaptured": "Nothing could be captured. Check the microphone and screen permissions.",
+    "silentTrack": "No sound at all was received on the {{track}} track; the source may be silent or the wrong device may be selected.",
+    "statusFailed": "The recording status could not be read.",
+    "errors": {
+      "validation": "The values entered are not valid.",
+      "already_recording": "A recording is already running.",
+      "not_recording": "No recording is running.",
+      "permission_denied": "The operating system denied microphone or screen access. Allow it in the system settings.",
+      "device_not_found": "The selected device was not found.",
+      "capture_unsupported": "This platform cannot capture that source.",
+      "capture_failed": "Capture could not start or was interrupted.",
+      "internal": "An unexpected error occurred."
+    }
+  },
+  "sessions": {
+    "status": {
+      "recording": "Recording",
+      "recorded": "Not processed",
+      "processing": "Processing",
+      "processed": "Ready",
+      "failed": "Failed"
+    },
+    "list": {
+      "title": "Recordings",
+      "statusFilter": "Status",
+      "allStatuses": "All statuses",
+      "listLabel": "Recordings",
+      "empty": "No recordings yet. Start one above.",
+      "emptyFiltered": "No recording has this status.",
+      "loadFailed": "The recordings could not be loaded.",
+      "untitled": "Untitled recording",
+      "actionsProgress": "{{done}}/{{total}} actions",
+      "pagination": "Pagination",
+      "previous": "Previous",
+      "next": "Next",
+      "range": "{{from}}–{{to}} of {{total}}"
+    },
+    "search": {
+      "label": "Search",
+      "placeholder": "Search transcripts and notes…",
+      "hint": "Every word you type must match; word beginnings count.",
+      "searching": "Searching…",
+      "failed": "The search failed.",
+      "noResults": "No results for “{{query}}”.",
+      "resultsLabel": "Search results",
+      "moreHits_one": "+{{count}} more match",
+      "moreHits_other": "+{{count}} more matches",
+      "source": {
+        "transcript": "Transcript",
+        "note": "Note"
+      }
+    },
+    "detail": {
+      "back": "← Back to recordings",
+      "loadFailed": "The recording could not be loaded.",
+      "notFound": "Recording not found; it may have been deleted.",
+      "startedAt": "Started",
+      "duration": "Length",
+      "speechLanguage": "Spoken language",
+      "noteLanguage": "Note language",
+      "delete": "Delete recording",
+      "deleteBusy": "A recording that is being recorded or processed cannot be deleted.",
+      "deleteTitle": "Delete this recording?",
+      "deleteMessage": "“{{name}}” will be deleted for good, with its audio, frames, transcript, note and action items. This cannot be undone.",
+      "deleted": "Recording deleted.",
+      "tabs": {
+        "label": "Recording sections",
+        "note": "Note",
+        "actions": "Action items",
+        "transcript": "Transcript",
+        "frames": "Frames"
+      }
+    },
+    "note": {
+      "none": "There is no note for this recording yet.",
+      "language": "Note language: {{language}}",
+      "createdAt": "Created: {{date}}",
+      "summary": "Summary",
+      "noSummary": "No summary.",
+      "decisions": "Decisions",
+      "noDecisions": "No decisions were recorded.",
+      "openQuestions": "Open questions",
+      "noOpenQuestions": "No open questions.",
+      "keyFrames": "Key frames",
+      "noKeyFrames": "No frames were added to the note."
+    },
+    "actions": {
+      "empty": "This note has no action items.",
+      "progress": "{{done}}/{{total}} done",
+      "listLabel": "Action items",
+      "owner": "Owner: {{owner}}",
+      "due": "Due: {{date}}"
+    },
+    "transcript": {
+      "empty": "There is no transcript for this recording.",
+      "listLabel": "Transcript lines",
+      "previewLabel": "Frame closest to the selected moment",
+      "previewHint": "Click the time of a line; the screen frame closest to that moment shows up here.",
+      "nearestFrame": "Frame closest to {{time}}: {{frameTime}}",
+      "showFrame": "Show the frame closest to {{time}}",
+      "speaker": {
+        "me": "Me",
+        "others": "Others"
+      }
+    },
+    "frames": {
+      "empty": "This recording has no screen frames.",
+      "galleryLabel": "Screen frames",
+      "altAt": "Screen frame at {{time}}",
+      "unavailable": "The frame cannot be shown",
+      "unavailableAt": "The frame at {{time}} cannot be shown",
+      "enlarge": "Enlarge the frame at {{time}}",
+      "enlargeShort": "Enlarge",
+      "viewerTitle": "Frame — {{time}}",
+      "previous": "Previous",
+      "next": "Next",
+      "position": "{{current}} / {{total}}",
+      "noDescription": "This frame has no visual description."
+    },
+    "export": {
+      "button": "Export as Markdown",
+      "exporting": "Exporting…",
+      "done": "Markdown file created.",
+      "dialogTitle": "Save the Markdown file",
+      "savedTo": "The file was written to:",
+      "framesNote": "The key frames were copied into the “…_frames” folder beside the file; move the two together.",
+      "copyPath": "Copy path",
+      "pathCopied": "File path copied to the clipboard.",
+      "problems": {
+        "not_absolute": "The chosen path is not a full file path. Pick a location in the save dialog.",
+        "parent_reference": "The path contains “..”. Pick a folder in the save dialog.",
+        "network_path": "Network and device paths cannot be written to. Pick a place on a drive of this computer.",
+        "missing_name": "Enter a file name.",
+        "invalid_extension": "The file extension must be .md. Leave the extension off or keep .md.",
+        "not_dialog_selected": "The location was not chosen in the save dialog. Start the export again and pick the place in the dialog.",
+        "inside_data_dir": "Tan's own data folder cannot be exported into. Pick another folder.",
+        "folder_missing": "The chosen folder does not exist. Pick an existing folder.",
+        "already_exists": "With .md added to the name, a file with that name already exists and will not be overwritten. Pick another name."
+      },
+      "errors": {
+        "validation": "That place cannot be written to. Pick a location on a drive of this computer in the save dialog.",
+        "filesFailed": "The file could not be written. Check that the location exists and that you may write there."
+      }
+    },
+    "errors": {
+      "validation": "The values entered are not valid.",
+      "not_found": "Recording not found.",
+      "busy": "The recording is being recorded or processed and cannot be changed now.",
+      "files_failed": "A file operation failed.",
+      "internal": "An unexpected error occurred."
+    }
+  },
+  "processing": {
+    "title": "Processing",
+    "recordingInProgress": "Recording in progress; it can be processed once it ends.",
+    "running": "Processing",
+    "progressLabel": "Processing progress",
+    "percent": "{{percent}}%",
+    "starting": "Starting…",
+    "stepsLabel": "Processing steps",
+    "cancel": "Cancel",
+    "steps": {
+      "transcribe": "Transcription",
+      "describe_frames": "Screen frames",
+      "synthesize": "Note generation"
+    },
+    "stepState": {
+      "pending": "Waiting",
+      "running": "Running",
+      "done": "Done",
+      "skipped": "Skipped",
+      "failed": "Failed"
+    },
+    "failedTitle": "Processing did not finish",
+    "cancelledTitle": "Processing was cancelled",
+    "failedAt": "The “{{step}}” step failed.",
+    "interrupted": "Processing was cut short (the app may have closed).",
+    "nothingCaptured": "This recording has no captured audio or screen frames; there is nothing to process.",
+    "retry": "Try again",
+    "openProviders": "Go to AI Providers",
+    "openSettings": "Go to Settings",
+    "reprocess": "Process again",
+    "reprocessTitle": "Process this recording again?",
+    "reprocessMessage": "Everything is processed from scratch; the current note is replaced and the ticks on action items are lost. A cloud provider will cost money again.",
+    "framesSkipped": "Screen frames were not described: no provider is assigned to visual analysis.",
+    "readyTitle": "Ready to process",
+    "readyIntro": "The recording goes through transcription, screen-frame analysis and note generation.",
+    "estimating": "Estimating the local transcription time…",
+    "estimateLocal": "Local transcription estimate: about {{duration}} ({{backend}}).",
+    "estimateCloud": "Transcription will use a cloud provider; the time depends on the service.",
+    "estimateUnknown": "The transcription time could not be estimated.",
+    "longOnCpu": "Local transcription runs on the processor only on this computer and will take about {{duration}}. A cloud transcription profile is much faster.",
+    "cloudProfile": "Cloud profile",
+    "cloudProfileSingle": "Profile: {{name}}",
+    "cloudAssignmentNote": "The chosen profile is used for this recording only; the general Transcription assignment does not change.",
+    "processInCloud": "Process in the cloud",
+    "addCloudProfile": "Add a profile on the AI Providers page for cloud transcription",
+    "process": "Process",
+    "processLocal": "Process locally",
+    "errors": {
+      "validation": "The values entered are not valid.",
+      "session_not_found": "Recording not found.",
+      "not_ready": "The recording has not finished yet.",
+      "already_running": "This recording is already being processed.",
+      "cancelled": "Processing was cancelled. “Try again” continues from the remaining steps.",
+      "transcription_failed": "Transcription failed.",
+      "no_chat_model": "No AI provider is assigned to the summary. Assign a profile to the “Summary” task on the AI Providers page and try again.",
+      "invalid_model_output": "The model did not produce a valid note. Try again or assign another model.",
+      "nothing_to_summarize": "There is no transcript or screen content to write a note from.",
+      "provider_auth": "The API key was rejected. Check that the selected secret holds the right key.",
+      "provider_rate_limited": "The provider is rate limiting. Wait a bit and try again.",
+      "provider_timeout": "The provider did not answer in time. Try again later.",
+      "provider_invalid_request": "The provider refused the request. Check the model name and the base URL.",
+      "provider_unsupported": "The provider does not offer the requested feature for this model or endpoint.",
+      "provider_network": "The provider could not be reached. Check your connection and the base URL.",
+      "provider_error": "The provider returned an unexpected error.",
+      "secret_unavailable": "The API key could not be read from the vault. It may be locked or the secret may have been deleted.",
+      "internal": "An unexpected error occurred."
+    }
+  },
+  "transcription": {
+    "errors": {
+      "validation": "The values entered are not valid.",
+      "unknown_model": "Unknown model.",
+      "model_busy": "The model is being downloaded or deleted right now.",
+      "model_not_installed": "The model is not installed.",
+      "download_failed": "The download failed. Trying again resumes it.",
+      "checksum_mismatch": "The downloaded file failed its check and was deleted. Download it again.",
+      "session_not_found": "Recording not found.",
+      "no_audio": "The recording has no audio.",
+      "local_model_missing": "No local whisper model is installed. Download one on the Settings page.",
+      "audio_unreadable": "An audio file is missing or unreadable (the retention period may have passed).",
+      "engine_failed": "The local transcription engine failed.",
+      "provider_auth": "The API key was rejected. Check that the selected secret holds the right key.",
+      "provider_rate_limited": "The provider is rate limiting. Wait a bit and try again.",
+      "provider_timeout": "The provider did not answer in time. Try again later.",
+      "provider_invalid_request": "The provider refused the request. Check the model name and the base URL.",
+      "provider_unsupported": "The selected provider does not offer transcription.",
+      "provider_network": "The provider could not be reached. Check your connection and the base URL.",
+      "provider_error": "The provider returned an unexpected error.",
+      "secret_unavailable": "The API key could not be read from the vault. It may be locked or the secret may have been deleted.",
+      "internal": "An unexpected error occurred."
+    }
+  },
+  "settings": {
+    "intro": "Language, recording, model and storage preferences.",
+    "saved": "Setting saved.",
+    "language": {
+      "title": "Language",
+      "hint": "The interface language and the default languages of new recordings.",
+      "ui": "Interface language",
+      "speech": "Default spoken language",
+      "speechHint": "With “Detect automatically” the language is worked out from the recording.",
+      "note": "Default note language",
+      "noteHint": "It can also be changed for each recording."
+    },
+    "capture": {
+      "title": "Capture and processing",
+      "hint": "How often screen frames are taken, and what happens after a recording.",
+      "interval": "Frame interval (seconds)",
+      "intervalHint": "The screen is sampled at this interval; only frames that changed noticeably are kept.",
+      "intervalInvalid": "Enter a number of seconds between {{min}} and {{max}}.",
+      "threshold": "Change threshold",
+      "thresholdHint": "0–{{max}}. A low value also keeps small changes, a high value only big ones.",
+      "thresholdInvalid": "Enter a whole number between 0 and {{max}}.",
+      "autoProcess": "Process automatically when a recording ends",
+      "autoProcessHint": "When off, you press “Process” after stopping a recording."
+    },
+    "whisper": {
+      "title": "Local whisper models",
+      "hint": "Local transcription uses the selected model. Large models are more accurate but slower.",
+      "loadFailed": "The model list could not be loaded.",
+      "empty": "There are no models to list.",
+      "recommended": "Recommended",
+      "installed": "Installed",
+      "inUse": "In use",
+      "partial": "Interrupted download: {{size}}",
+      "download": "Download",
+      "resume": "Resume",
+      "downloadModel": "Download {{name}}",
+      "downloadLabel": "{{name}} download progress",
+      "downloadProgress": "{{downloaded}} / {{total}} ({{percent}}%)",
+      "downloadStarting": "Starting the download…",
+      "downloaded": "{{name}} downloaded.",
+      "use": "Use",
+      "useModel": "Use {{name}}",
+      "selected": "{{name}} will be used.",
+      "deleteModel": "Delete {{name}}",
+      "deletePartial": "Delete the partial download of {{name}}",
+      "deleted": "{{name}} deleted.",
+      "deleteTitle": "Delete this model?",
+      "deleteMessage": "The “{{name}}” model will be deleted from the disk. You can download it again later."
+    },
+    "storage": {
+      "title": "Storage",
+      "hint": "How long audio files are kept, and how much disk Tan uses.",
+      "retention": "Audio files",
+      "keepForever": "Keep forever",
+      "deleteAfter": "Delete audio files some time after processing",
+      "days": "Number of days",
+      "daysHint": "The note, transcript and frames stay; only the audio files go.",
+      "daysInvalid": "Enter a whole number of 1 or more.",
+      "usage": "Disk usage",
+      "refresh": "Refresh",
+      "usageFailed": "The disk usage could not be read.",
+      "total": "Total",
+      "audio": "Audio",
+      "frames": "Frames",
+      "models": "Models"
+    }
+  }
 }

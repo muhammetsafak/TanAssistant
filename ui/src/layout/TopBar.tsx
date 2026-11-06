@@ -2,6 +2,7 @@ import { useId, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useToast } from '../components/ui/toast-context';
+import { RecordingIndicator } from '../features/recording/RecordingIndicator';
 import { useSettings, useUpdateSettings } from '../features/settings/useSettings';
 import { SUPPORTED_LANGUAGES, type SupportedLanguage } from '../i18n';
 import { useTheme } from '../theme/theme-context';
@@ -49,6 +50,7 @@ export function TopBar() {
 
   return (
     <header className="topbar">
+      <RecordingIndicator />
       <div className="topbar__control">
         <label htmlFor={languageId}>{t('topBar.language')}</label>
         <select id={languageId} className="select" value={current} onChange={changeLanguage}>

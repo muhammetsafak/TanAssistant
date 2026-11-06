@@ -623,6 +623,101 @@ fn a_vanished_profile_falls_back_to_local_whisper() {
     assert_eq!(summary.engine, TranscriptionEngine::LocalWhisper);
 }
 
+fn cloud_profile(id: &str, kind: ProviderKind) -> ProviderProfile {
+    ProviderProfile {
+        id: ProviderProfileId::new(id),
+        kind,
+        display_name: id.to_owned(),
+        model: "whisper-1".to_owned(),
+        base_url: None,
+        secret_ref: None,
+        supports_vision: false,
+    }
+}
+
+#[test]
+fn a_profile_chosen_for_one_call_uses_the_cloud_without_assigning_anything() {
+    // No assignment at all: the general engine is local whisper. (The assignments fake refuses
+    // writes, so a call that tried to assign the profile would fail.)
+    let mut builder = RigBuilder::new();
+    builder
+        .profiles
+        .push(cloud_profile("one-off", ProviderKind::OpenAi));
+    builder.cloud_answers = vec![Ok(vec![dto(0, 500, "hello")]), Ok(vec![dto(0, 500, "hi")])];
+    builder.local_answers = vec![
+        Ok(vec![dto(0, 500, "local")]),
+        Ok(vec![dto(0, 500, "local")]),
+    ];
+    let rig = builder.build();
+    let id = SessionId::new("s1");
+
+    let summary = block_on(rig.subject.execute_with_profile(
+        &id,
+        Some(&ProviderProfileId::new("one-off")),
+        &|_| {},
+        &|_| {},
+    ))
+    .unwrap();
+    assert_eq!(
+        summary.engine,
+        TranscriptionEngine::Provider {
+            profile_id: ProviderProfileId::new("one-off"),
+            kind: ProviderKind::OpenAi
+        }
+    );
+    assert!(rig.local.requests().is_empty(), "local whisper not touched");
+    assert_eq!(rig.cloud.requests().len(), 2);
+
+    // The next plain call is back on the general engine.
+    let summary = block_on(rig.subject.execute(&id)).unwrap();
+    assert_eq!(summary.engine, TranscriptionEngine::LocalWhisper);
+    assert_eq!(rig.cloud.requests().len(), 2, "no more cloud calls");
+}
+
+#[test]
+fn a_chosen_profile_wins_over_the_assigned_one_and_must_exist_and_transcribe() {
+    let mut builder = RigBuilder::new().assign(ProviderKind::OpenAi);
+    builder
+        .profiles
+        .push(cloud_profile("claude", ProviderKind::Anthropic));
+    builder
+        .profiles
+        .push(cloud_profile("other", ProviderKind::Gemini));
+    builder.cloud_answers = vec![Ok(vec![dto(0, 500, "a")]), Ok(vec![dto(0, 500, "b")])];
+    let rig = builder.build();
+    let id = SessionId::new("s1");
+    let run = |profile: &str| {
+        block_on(rig.subject.execute_with_profile(
+            &id,
+            Some(&ProviderProfileId::new(profile)),
+            &|_| {},
+            &|_| {},
+        ))
+    };
+
+    let error = run("missing").unwrap_err();
+    assert!(
+        matches!(error, TranscribeError::Provider(AiError::InvalidRequest(_))),
+        "{error}"
+    );
+    let error = run("claude").unwrap_err();
+    assert!(
+        matches!(error, TranscribeError::Provider(AiError::Unsupported(_))),
+        "{error}"
+    );
+    assert!(rig.transcripts.get_now("s1").is_none());
+
+    let summary = run("other").unwrap();
+    assert_eq!(
+        summary.engine,
+        TranscriptionEngine::Provider {
+            profile_id: ProviderProfileId::new("other"),
+            kind: ProviderKind::Gemini
+        },
+        "not the assigned p1"
+    );
+}
+
 #[test]
 fn a_provider_without_transcription_is_refused() {
     let rig = RigBuilder::new().assign(ProviderKind::Anthropic).build();

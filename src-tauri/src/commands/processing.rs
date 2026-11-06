@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tan_application::ports::AiError;
 use tan_application::processing::{ProcessError, ProcessProgress, ProcessSummary};
-use tan_domain::{ProcessingJob, ProcessingStep, SessionId, StepState};
+use tan_domain::{ProcessingJob, ProcessingStep, ProviderProfileId, SessionId, StepState};
 use tauri::{AppHandle, State};
 use tauri_specta::Event;
 
@@ -123,6 +123,7 @@ impl From<ProcessError> for ProcessingIpcError {
                     message: mapped.message,
                 };
             }
+            ProcessError::UnknownTranscriptionProfile => ProcessingErrorCode::Validation,
             ProcessError::NoChatModel => ProcessingErrorCode::NoChatModel,
             ProcessError::Provider(ref inner) => ai_error_code(inner),
             ProcessError::InvalidModelOutput(_) => ProcessingErrorCode::InvalidModelOutput,
@@ -328,10 +329,27 @@ fn announcer(app: AppHandle, session_id: &SessionId) -> impl Fn(ProcessProgress)
     }
 }
 
+fn parse_profile_id(
+    profile_id: Option<String>,
+) -> Result<Option<ProviderProfileId>, ProcessingIpcError> {
+    match profile_id {
+        None => Ok(None),
+        Some(id) if id.trim().is_empty() => Err(ProcessingIpcError::validation(
+            "invalid input: the transcription profile id is empty",
+        )),
+        Some(id) => Ok(Some(ProviderProfileId::new(id))),
+    }
+}
+
 /// Processes a recorded session from scratch: transcript, frame descriptions and the
 /// structured note (summary, decisions, action items, open questions, key frames). Replaces an
 /// earlier note. Progress arrives as [`ProcessingProgressEvent`]s; the call returns when the
 /// run ends.
+///
+/// `transcription_profile_id` makes the cloud provider of that profile transcribe this session
+/// in this run only; the general transcription assignment is not changed and applies again to
+/// the next run. A profile that does not exist is a `validation` error, one that cannot
+/// transcribe audio a `transcription_failed` error (`transcriptionCode` `provider_unsupported`).
 #[tauri::command]
 #[specta::specta]
 #[tracing::instrument(skip_all)]
@@ -339,14 +357,22 @@ pub async fn process_session(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
+    transcription_profile_id: Option<String>,
 ) -> Result<ProcessSummaryDto, ProcessingIpcError> {
     let id = parse_session_id(session_id)?;
+    let profile = parse_profile_id(transcription_profile_id)?;
     let announce = announcer(app, &id);
-    let summary = state.process_session.execute(&id, &announce).await?;
+    let summary = state
+        .process_session
+        .execute_with_profile(&id, profile.as_ref(), &announce)
+        .await?;
     Ok(summary.into())
 }
 
 /// Continues a failed or cancelled run: finished steps are kept, the rest runs again.
+///
+/// The run keeps the transcription profile it was started with; `transcription_profile_id`
+/// replaces it (same rules as in `process_session`).
 #[tauri::command]
 #[specta::specta]
 #[tracing::instrument(skip_all)]
@@ -354,10 +380,15 @@ pub async fn retry_processing(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
+    transcription_profile_id: Option<String>,
 ) -> Result<ProcessSummaryDto, ProcessingIpcError> {
     let id = parse_session_id(session_id)?;
+    let profile = parse_profile_id(transcription_profile_id)?;
     let announce = announcer(app, &id);
-    let summary = state.process_session.retry(&id, &announce).await?;
+    let summary = state
+        .process_session
+        .retry_with_profile(&id, profile.as_ref(), &announce)
+        .await?;
     Ok(summary.into())
 }
 

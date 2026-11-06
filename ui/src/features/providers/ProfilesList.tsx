@@ -12,6 +12,7 @@ import {
   useProfiles,
   type ProviderProfile,
 } from './api';
+import { DeprecationBadge } from './ModelDeprecation';
 import { ProfileForm, type ProfileTarget } from './ProfileForm';
 import { TestConnectionButton } from './TestConnectionButton';
 
@@ -93,7 +94,10 @@ export function ProfilesList() {
                     {profile.displayName}
                   </th>
                   <td>{KIND_LABELS[profile.kind]}</td>
-                  <td className="cell-model">{profile.model}</td>
+                  <td className="cell-model">
+                    {profile.model}
+                    <DeprecationBadge kind={profile.kind} model={profile.model} />
+                  </td>
                   <td>
                     <ul className="badge-list">
                       {CAPABILITIES.filter((capability) => profile.capabilities[capability]).map(

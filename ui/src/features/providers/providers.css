@@ -146,3 +146,34 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
   gap: var(--space-4);
 }
+
+/* Model shutdown warning */
+.assign-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.deprecation-badge {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-surface);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.deprecation-badge__text {
+  font-weight: 600;
+}
+
+.deprecation-badge__replacement {
+  color: var(--color-text-muted);
+}

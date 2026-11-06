@@ -14,7 +14,8 @@ use tan_application::processing::ProcessingJobRepository;
 use tan_application::sessions::{AudioRetentionRepository, SessionFileStore, StorageUsage};
 use tan_application::RepositoryError;
 use tan_domain::{
-    EpochMs, ProcessingJob, ProcessingJobRecord, ProcessingStep, SessionId, StepState, TrackKind,
+    EpochMs, ProcessingJob, ProcessingJobRecord, ProcessingStep, ProviderProfileId, SessionId,
+    StepState, TrackKind,
 };
 
 use super::{parse_column, require_changed};
@@ -40,19 +41,21 @@ impl ProcessingJobRepository for SqliteProcessingRepository {
         self.db.with_conn(|conn| {
             let header = conn
                 .query_row(
-                    "SELECT created_at, updated_at, finished_at FROM processing_jobs
-                     WHERE session_id = ?1",
+                    "SELECT created_at, updated_at, finished_at, transcription_profile_id
+                     FROM processing_jobs WHERE session_id = ?1",
                     params![session_id.as_str()],
                     |row| {
                         Ok((
                             EpochMs::new(row.get(0)?),
                             EpochMs::new(row.get(1)?),
                             row.get::<_, Option<i64>>(2)?.map(EpochMs::new),
+                            row.get::<_, Option<String>>(3)?.map(ProviderProfileId::new),
                         ))
                     },
                 )
                 .optional()?;
-            let Some((created_at, updated_at, finished_at)) = header else {
+            let Some((created_at, updated_at, finished_at, transcription_profile_id)) = header
+            else {
                 return Ok(None);
             };
 
@@ -80,6 +83,7 @@ impl ProcessingJobRepository for SqliteProcessingRepository {
                 created_at,
                 updated_at,
                 finished_at,
+                transcription_profile_id,
             })
             .map(Some)
             .map_err(|e| corrupt(e.to_string()))
@@ -91,17 +95,20 @@ impl ProcessingJobRepository for SqliteProcessingRepository {
             let tx = conn.transaction()?;
             let id = job.session_id().as_str();
             tx.execute(
-                "INSERT INTO processing_jobs (session_id, created_at, updated_at, finished_at)
-                 VALUES (?1, ?2, ?3, ?4)
+                "INSERT INTO processing_jobs
+                     (session_id, created_at, updated_at, finished_at, transcription_profile_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT (session_id) DO UPDATE SET
                      created_at = excluded.created_at,
                      updated_at = excluded.updated_at,
-                     finished_at = excluded.finished_at",
+                     finished_at = excluded.finished_at,
+                     transcription_profile_id = excluded.transcription_profile_id",
                 params![
                     id,
                     job.created_at().get(),
                     job.updated_at().get(),
                     job.finished_at().map(EpochMs::get),
+                    job.transcription_profile().map(ProviderProfileId::as_str),
                 ],
             )?;
             tx.execute(
@@ -294,6 +301,34 @@ impl SessionFileStore for DataDirFiles {
         Ok(target)
     }
 
+    fn create_export_dir(&self, dir: &Path) -> io::Result<()> {
+        if !dir.is_absolute() {
+            return Err(invalid("the export folder must be an absolute path"));
+        }
+        fs::create_dir_all(dir)
+    }
+
+    fn write_export_to(&self, destination: &Path, content: &[u8]) -> io::Result<()> {
+        if !destination.is_absolute() {
+            return Err(invalid("the export file must be an absolute path"));
+        }
+        let (Some(dir), Some(name)) = (destination.parent(), destination.file_name()) else {
+            return Err(invalid("the export path has no file name"));
+        };
+        if destination.is_dir() {
+            return Err(invalid("the export path is a folder"));
+        }
+        // Written next to the target and renamed, so a crash never leaves a half-written file.
+        let mut temporary_name = std::ffi::OsString::from(".");
+        temporary_name.push(name);
+        temporary_name.push(".tmp");
+        let temporary = dir.join(temporary_name);
+        fs::write(&temporary, content)?;
+        fs::rename(&temporary, destination).inspect_err(|_| {
+            let _ = fs::remove_file(&temporary);
+        })
+    }
+
     fn measure_usage(&self) -> io::Result<StorageUsage> {
         let mut usage = StorageUsage {
             total_bytes: directory_size(self.layout.root()),
@@ -371,6 +406,29 @@ mod tests {
             *loaded.state(ProcessingStep::DescribeFrames),
             StepState::Skipped
         );
+    }
+
+    #[test]
+    fn the_transcription_profile_of_a_job_is_stored_and_replaced_with_the_job() {
+        let db = database_with_session("s1");
+        let repo = SqliteProcessingRepository::new(db);
+        let mut job = ProcessingJob::new(SessionId::new("s1"), at(10));
+        block_on(repo.save(&job)).unwrap();
+        let loaded = block_on(repo.get(&SessionId::new("s1"))).unwrap().unwrap();
+        assert_eq!(loaded.transcription_profile(), None);
+
+        job.set_transcription_profile(Some(ProviderProfileId::new("cloud")));
+        block_on(repo.save(&job)).unwrap();
+        let loaded = block_on(repo.get(&SessionId::new("s1"))).unwrap().unwrap();
+        assert_eq!(
+            loaded.transcription_profile(),
+            Some(&ProviderProfileId::new("cloud"))
+        );
+
+        // A new job for the session starts without a choice.
+        block_on(repo.save(&ProcessingJob::new(SessionId::new("s1"), at(30)))).unwrap();
+        let loaded = block_on(repo.get(&SessionId::new("s1"))).unwrap().unwrap();
+        assert_eq!(loaded.transcription_profile(), None);
     }
 
     #[test]
@@ -497,7 +555,7 @@ mod tests {
         )
         .unwrap();
         migrate_up(&mut conn).unwrap();
-        assert_eq!(schema_version(&conn).unwrap(), 3);
+        assert!(schema_version(&conn).unwrap() >= 3);
         let (title, deleted_at): (String, Option<i64>) = conn
             .query_row(
                 "SELECT s.title, a.deleted_at FROM sessions s JOIN audio_tracks a ON a.session_id = s.id",
@@ -525,6 +583,43 @@ mod tests {
             .query_row("SELECT title FROM sessions", [], |r| r.get(0))
             .unwrap();
         assert_eq!(title, "Old");
+    }
+
+    #[test]
+    fn migration_four_adds_the_profile_column_and_keeps_existing_jobs() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrate_up(&mut conn).unwrap();
+        migrate_down_to(&mut conn, 3).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), 3);
+
+        // An installed app at version 3 with a finished job.
+        conn.execute_batch(
+            "INSERT INTO sessions VALUES ('s1','meeting','Old','1000',NULL,'auto','tr','processed');
+             INSERT INTO processing_jobs VALUES ('s1', 10, 20, 20);
+             INSERT INTO processing_steps VALUES ('s1','transcribe','done',NULL);",
+        )
+        .unwrap();
+        migrate_up(&mut conn).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), 4);
+        let (finished_at, profile): (i64, Option<String>) = conn
+            .query_row(
+                "SELECT finished_at, transcription_profile_id FROM processing_jobs",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((finished_at, profile), (20, None));
+
+        migrate_down_to(&mut conn, 3).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), 3);
+        let steps: i64 = conn
+            .query_row("SELECT count(*) FROM processing_steps", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(steps, 1, "the job and its steps survive the revert");
+        assert!(conn
+            .prepare("SELECT transcription_profile_id FROM processing_jobs")
+            .is_err());
     }
 
     // ----- files -------------------------------------------------------------------------
@@ -787,6 +882,7 @@ mod pipeline_tests {
         async fn transcribe(
             &self,
             session_id: &SessionId,
+            _profile: Option<&ProviderProfileId>,
             _on_progress: &(dyn Fn(TranscribeProgress) + Send + Sync),
         ) -> TranscribeResult<TranscribeSummary> {
             self.script.transcribe_calls.fetch_add(1, Ordering::SeqCst);
@@ -1155,6 +1251,38 @@ mod pipeline_tests {
         // The image link resolves from the export's own folder.
         assert!(markdown.contains("](frames/f2.png)"));
         assert!(path.parent().unwrap().join("frames/f2.png").is_file());
+
+        // To a place the user chose: the key frame is copied beside the file and linked
+        // relatively, so the export works without the data directory.
+        let chosen = rig.layout.root().join("chosen place");
+        fs::create_dir_all(&chosen).unwrap();
+        let target = chosen.join("meeting.md");
+        let written = export.execute_to(&rig.detail(), &target).unwrap();
+        assert_eq!(written, target);
+        let markdown = fs::read_to_string(&target).unwrap();
+        assert!(markdown.contains("](meeting_frames/f2.png)"), "{markdown}");
+        assert_eq!(
+            fs::read(chosen.join("meeting_frames/f2.png")).unwrap(),
+            fs::read(path.parent().unwrap().join("frames/f2.png")).unwrap()
+        );
+        assert!(
+            fs::read_dir(&chosen).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")),
+            "no temporary file is left behind"
+        );
+        // A folder, a relative path and a missing parent are refused.
+        assert!(rig.files.write_export_to(&chosen, b"x").is_err());
+        assert!(rig
+            .files
+            .write_export_to(Path::new("rel.md"), b"x")
+            .is_err());
+        assert!(rig
+            .files
+            .write_export_to(&chosen.join("missing").join("a.md"), b"x")
+            .is_err());
 
         let delete = DeleteSession::new(
             Arc::new(SqliteSessionRepository::new(rig.db.clone())),

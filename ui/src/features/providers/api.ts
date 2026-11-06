@@ -1,6 +1,6 @@
 import { useCallback, useRef } from 'react';
 import type { TFunction } from 'i18next';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 
 import { useToast } from '../../components/ui/toast-context';
@@ -85,11 +85,15 @@ export function describeAiError(error: unknown, t: TFunction): DescribedAiError 
   return { message: t('errors.unknown') };
 }
 
-export function useProfiles() {
-  return useQuery({
+export function profilesQueryOptions() {
+  return queryOptions({
     queryKey: providerKeys.profiles,
     queryFn: () => unwrap(commands.listProviderProfiles()),
   });
+}
+
+export function useProfiles() {
+  return useQuery(profilesQueryOptions());
 }
 
 /** Static facts about the provider kinds; they never change while the app runs. */

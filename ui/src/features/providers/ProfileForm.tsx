@@ -20,6 +20,7 @@ import {
   type ProviderKindInfo,
   type ProviderProfile,
 } from './api';
+import { DeprecationNote } from './ModelDeprecation';
 import { SelectField } from './SelectField';
 
 import '../../components/ui/ui.css';
@@ -276,6 +277,7 @@ function FormBody({
               autoComplete="off"
               spellCheck={false}
             />
+            <DeprecationNote kinds={kinds} kind={kind} model={model} />
             {suggestions.length > 0 ? (
               <div className="chip-row" role="group" aria-label={t('providers.form.suggestions')}>
                 {suggestions.map(({ model: suggestion, tasks }) => (

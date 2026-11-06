@@ -13,6 +13,7 @@ import {
   type ProviderProfile,
   type TaskKind,
 } from './api';
+import { DeprecationBadge } from './ModelDeprecation';
 import { SelectField } from './SelectField';
 
 import '../../components/ui/ui.css';
@@ -108,31 +109,36 @@ function AssignmentRow({
   }
 
   return (
-    <SelectField
-      label={t(`providers.tasks.${task}`)}
-      value={selected}
-      onChange={(event) => change(event.target.value)}
-      aria-busy={setAssignment.isPending}
-      hint={t(`providers.assign.taskHint.${task}`)}
-      error={staleReason ? t('providers.assign.stale', { reason: staleReason }) : null}
-    >
-      <option value="">
-        {isTranscription ? t('providers.assign.localWhisper') : t('providers.assign.none')}
-      </option>
-      {sorted.map((profile) => {
-        const reason = unsupportedReason(profile, task, t);
-        const label = `${profile.displayName} (${KIND_LABELS[profile.kind]}, ${profile.model})`;
-        return (
-          <option
-            key={profile.id}
-            value={profile.id}
-            disabled={reason !== null}
-            title={reason ?? undefined}
-          >
-            {reason ? `${label} — ${reason}` : label}
-          </option>
-        );
-      })}
-    </SelectField>
+    <div className="assign-cell">
+      <SelectField
+        label={t(`providers.tasks.${task}`)}
+        value={selected}
+        onChange={(event) => change(event.target.value)}
+        aria-busy={setAssignment.isPending}
+        hint={t(`providers.assign.taskHint.${task}`)}
+        error={staleReason ? t('providers.assign.stale', { reason: staleReason }) : null}
+      >
+        <option value="">
+          {isTranscription ? t('providers.assign.localWhisper') : t('providers.assign.none')}
+        </option>
+        {sorted.map((profile) => {
+          const reason = unsupportedReason(profile, task, t);
+          const label = `${profile.displayName} (${KIND_LABELS[profile.kind]}, ${profile.model})`;
+          return (
+            <option
+              key={profile.id}
+              value={profile.id}
+              disabled={reason !== null}
+              title={reason ?? undefined}
+            >
+              {reason ? `${label} — ${reason}` : label}
+            </option>
+          );
+        })}
+      </SelectField>
+      {selectedProfile ? (
+        <DeprecationBadge kind={selectedProfile.kind} model={selectedProfile.model} />
+      ) : null}
+    </div>
   );
 }

@@ -45,6 +45,24 @@ impl DataLayout {
         &self.root
     }
 
+    /// Whether `path` is inside the data directory (or is it). Symlinks and letter case are
+    /// resolved through the file system, so `..`, links and `C:\USERS` spellings cannot
+    /// disguise a path. The path itself need not exist, but its folder must.
+    pub fn contains(&self, path: &Path) -> io::Result<bool> {
+        let resolved = match std::fs::canonicalize(path) {
+            Ok(resolved) => resolved,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                match (path.parent(), path.file_name()) {
+                    (Some(parent), Some(name)) => std::fs::canonicalize(parent)?.join(name),
+                    _ => return Err(error),
+                }
+            }
+            Err(error) => return Err(error),
+        };
+        let root = std::fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
+        Ok(resolved.starts_with(root))
+    }
+
     /// Path of the SQLite database file.
     #[must_use]
     pub fn database_path(&self) -> PathBuf {
@@ -110,6 +128,37 @@ impl DataLayout {
 mod tests {
     use super::DataLayout;
     use tan_domain::SessionId;
+
+    #[test]
+    fn contains_tells_paths_inside_the_data_folder_from_outside_ones() {
+        let base = std::env::temp_dir().join(format!("tan-layout-{}", std::process::id()));
+        let data = base.join("data");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(data.join("sessions/s1/frames")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let layout = DataLayout::new(&data);
+
+        // A file that does not exist yet counts by its folder.
+        assert!(layout
+            .contains(&data.join("sessions/s1/frames/x.md"))
+            .unwrap());
+        assert!(layout.contains(&data).unwrap());
+        assert!(!layout.contains(&outside.join("notes.md")).unwrap());
+        // A sibling that merely starts with the same name is outside.
+        let sibling = base.join("data-other");
+        std::fs::create_dir_all(&sibling).unwrap();
+        assert!(!layout.contains(&sibling.join("notes.md")).unwrap());
+        // `..` cannot walk back in or out unnoticed.
+        assert!(layout
+            .contains(&outside.join("..").join("data").join("notes.md"))
+            .unwrap());
+        assert!(!layout
+            .contains(&data.join("..").join("outside").join("notes.md"))
+            .unwrap());
+        // A missing folder is an error, not a guess.
+        assert!(layout.contains(&base.join("missing").join("a.md")).is_err());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 
     #[test]
     fn paths_follow_the_documented_layout() {

@@ -23,8 +23,13 @@ tan-infra-secrets.workspace = true
 tan-infra-ai.workspace = true
 tan-infra-capture.workspace = true
 tan-infra-transcription.workspace = true
-# `tray-icon`: the recording status icon and menu (Phase 08).
-tauri = { version = "2", features = ["tray-icon"] }
+# `tray-icon`: the recording status icon and menu (Phase 08). `protocol-asset`: the webview
+# shows frame images through the `asset:` protocol; its static scope is empty. At run time the
+# scope gains the `frames/` folder of each session whose detail is opened (kept until exit) and
+# the export file picked in the save dialog (see `commands::sessions`).
+tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
+# The native "save as" dialog of the Markdown export (capability `dialog:allow-save` only).
+tauri-plugin-dialog = "2"
 # A second launch must not open a second process: it would share the database and the
 # capture devices, and its startup recovery would mark the live recording as finished.
 tauri-plugin-single-instance = "2"

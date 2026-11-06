@@ -9,7 +9,7 @@ use std::task::{Poll, Waker};
 
 use tan_domain::{
     ActionItem, ActionItemId, Note, NoteId, ProcessingJob, ProcessingStep, ProviderProfile,
-    Session, SessionId, SessionStatus, TaskKind,
+    ProviderProfileId, Session, SessionId, SessionStatus, TaskKind,
 };
 
 use super::chunking::TokenBudget;
@@ -20,10 +20,11 @@ use super::{
     SessionTranscriber,
 };
 use crate::ports::{
-    Capabilities, Clock, FrameRepository, IdGenerator, NoteRepository, ProviderFactory,
+    AiError, Capabilities, Clock, FrameRepository, IdGenerator, NoteRepository, ProviderFactory,
     ProviderProfileRepository, SessionRepository, TaskAssignmentRepository, TranscriptRepository,
 };
 use crate::sessions::SessionFileStore;
+use crate::transcription::TranscribeError;
 
 /// Everything [`ProcessSession`] depends on.
 pub struct ProcessPorts<S, Fr, T, N, A, P, F, J, W, Q> {
@@ -214,7 +215,25 @@ where
         session_id: &SessionId,
         on_progress: &(dyn Fn(ProcessProgress) + Send + Sync),
     ) -> ProcessResult<ProcessSummary> {
-        self.run(session_id, Mode::Fresh, on_progress).await
+        self.execute_with_profile(session_id, None, on_progress)
+            .await
+    }
+
+    /// Like [`Self::execute`], transcribing with the cloud provider of `transcription_profile`
+    /// in this run only (`None`: the general assignment, local whisper by default). The choice
+    /// is kept in the run's job, never in the assignments, so the next run is unaffected.
+    ///
+    /// Fails with [`ProcessError::UnknownTranscriptionProfile`] when the profile does not exist
+    /// and with a [`ProcessError::Transcribe`] provider error when it cannot transcribe audio;
+    /// in both cases nothing has been changed.
+    pub async fn execute_with_profile(
+        &self,
+        session_id: &SessionId,
+        transcription_profile: Option<&ProviderProfileId>,
+        on_progress: &(dyn Fn(ProcessProgress) + Send + Sync),
+    ) -> ProcessResult<ProcessSummary> {
+        self.run(session_id, Mode::Fresh, transcription_profile, on_progress)
+            .await
     }
 
     /// Continues a failed or cancelled run: finished steps are kept, the rest runs again. With
@@ -224,7 +243,21 @@ where
         session_id: &SessionId,
         on_progress: &(dyn Fn(ProcessProgress) + Send + Sync),
     ) -> ProcessResult<ProcessSummary> {
-        self.run(session_id, Mode::Resume, on_progress).await
+        self.retry_with_profile(session_id, None, on_progress).await
+    }
+
+    /// Like [`Self::retry`]. A `transcription_profile` replaces the one the job was started
+    /// with; without one the job keeps its own, so a resumed run transcribes with the profile
+    /// the user chose for it (and not silently with another engine). If that profile has been
+    /// deleted since, the general assignment is used.
+    pub async fn retry_with_profile(
+        &self,
+        session_id: &SessionId,
+        transcription_profile: Option<&ProviderProfileId>,
+        on_progress: &(dyn Fn(ProcessProgress) + Send + Sync),
+    ) -> ProcessResult<ProcessSummary> {
+        self.run(session_id, Mode::Resume, transcription_profile, on_progress)
+            .await
     }
 
     /// Cancels the session's running run. Returns whether there was one.
@@ -293,9 +326,13 @@ where
         &self,
         id: &SessionId,
         mode: Mode,
+        transcription_profile: Option<&ProviderProfileId>,
         on_progress: &(dyn Fn(ProcessProgress) + Send + Sync),
     ) -> ProcessResult<ProcessSummary> {
         let run = self.register(id)?;
+        if let Some(profile_id) = transcription_profile {
+            self.check_transcription_profile(profile_id).await?;
+        }
         let mut session = self
             .ports
             .sessions
@@ -313,7 +350,11 @@ where
         }
 
         // From here on the session must end up `Processed` or `Failed`, whatever happens.
-        let outcome = abortable(&run.state, self.run_job(&session, mode, on_progress)).await;
+        let outcome = abortable(
+            &run.state,
+            self.run_job(&session, mode, transcription_profile, on_progress),
+        )
+        .await;
         let now = self.ports.clock.now();
         match outcome {
             Some(Ok(summary)) => {
@@ -344,6 +385,7 @@ where
         &self,
         session: &Session,
         mode: Mode,
+        transcription_profile: Option<&ProviderProfileId>,
         on_progress: &(dyn Fn(ProcessProgress) + Send + Sync),
     ) -> ProcessResult<ProcessSummary> {
         let id = &session.id;
@@ -366,6 +408,9 @@ where
             }
             ProcessingJob::new(id.clone(), now)
         };
+        if let Some(profile_id) = transcription_profile {
+            job.set_transcription_profile(Some(profile_id.clone()));
+        }
         self.ports.jobs.save(&job).await?;
 
         while let Some(step) = job.next_step() {
@@ -375,7 +420,10 @@ where
             emit(on_progress, step, 0);
 
             let result = match step {
-                ProcessingStep::Transcribe => self.step_transcribe(session, on_progress).await,
+                ProcessingStep::Transcribe => {
+                    let profile = job.transcription_profile().cloned();
+                    self.step_transcribe(session, profile, on_progress).await
+                }
                 ProcessingStep::DescribeFrames => self.step_describe(session, on_progress).await,
                 _ => self.step_synthesize(session, on_progress).await,
             };
@@ -435,9 +483,30 @@ where
         Ok(self.ports.profiles.get(&assignment.profile_id).await?)
     }
 
+    /// Refuses a transcription profile that does not exist or cannot transcribe audio.
+    async fn check_transcription_profile(
+        &self,
+        profile_id: &ProviderProfileId,
+    ) -> ProcessResult<()> {
+        let profile = self
+            .ports
+            .profiles
+            .get(profile_id)
+            .await?
+            .ok_or(ProcessError::UnknownTranscriptionProfile)?;
+        if Capabilities::for_profile(&profile).transcription {
+            Ok(())
+        } else {
+            Err(ProcessError::Transcribe(TranscribeError::Provider(
+                AiError::Unsupported(format!("{} cannot transcribe audio", profile.kind)),
+            )))
+        }
+    }
+
     async fn step_transcribe(
         &self,
         session: &Session,
+        profile: Option<ProviderProfileId>,
         on_progress: &(dyn Fn(ProcessProgress) + Send + Sync),
     ) -> ProcessResult<StepEnd> {
         let id = &session.id;
@@ -467,7 +536,21 @@ where
                 u8::try_from(percent).unwrap_or(100),
             );
         };
-        self.ports.transcriber.transcribe(id, &announce).await?;
+        // The profile the job was started with. When it was deleted since (a resumed run), the
+        // general assignment applies instead of a run that can never succeed.
+        let profile = match profile {
+            Some(profile_id) => self
+                .ports
+                .profiles
+                .get(&profile_id)
+                .await?
+                .map(|existing| existing.id),
+            None => None,
+        };
+        self.ports
+            .transcriber
+            .transcribe(id, profile.as_ref(), &announce)
+            .await?;
         Ok(StepEnd::Done)
     }
 

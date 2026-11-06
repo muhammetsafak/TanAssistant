@@ -8,7 +8,7 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::ids::SessionId;
+use crate::ids::{ProviderProfileId, SessionId};
 use crate::EpochMs;
 
 string_enum! {
@@ -129,6 +129,8 @@ pub struct ProcessingJobRecord {
     pub updated_at: EpochMs,
     /// When the last step finished; `None` while unfinished.
     pub finished_at: Option<EpochMs>,
+    /// The transcription profile chosen for this job only; `None`: the general assignment.
+    pub transcription_profile_id: Option<ProviderProfileId>,
 }
 
 /// Progress of the processing pipeline for one session.
@@ -139,6 +141,7 @@ pub struct ProcessingJob {
     created_at: EpochMs,
     updated_at: EpochMs,
     finished_at: Option<EpochMs>,
+    transcription_profile: Option<ProviderProfileId>,
 }
 
 impl ProcessingJob {
@@ -154,6 +157,7 @@ impl ProcessingJob {
             created_at: now,
             updated_at: now,
             finished_at: None,
+            transcription_profile: None,
         }
     }
 
@@ -176,7 +180,21 @@ impl ProcessingJob {
             created_at: record.created_at,
             updated_at: record.updated_at,
             finished_at: record.finished_at,
+            transcription_profile: record.transcription_profile_id,
         })
+    }
+
+    /// The transcription profile chosen for this job only (the general assignment is not
+    /// touched). It is kept in the job so that resuming the job after a failure transcribes
+    /// with the same profile; a new job starts without one.
+    #[must_use]
+    pub fn transcription_profile(&self) -> Option<&ProviderProfileId> {
+        self.transcription_profile.as_ref()
+    }
+
+    /// Chooses (or clears) the transcription profile of this job.
+    pub fn set_transcription_profile(&mut self, profile: Option<ProviderProfileId>) {
+        self.transcription_profile = profile;
     }
 
     /// The session being processed.
@@ -361,7 +379,7 @@ impl ProcessingJob {
 #[cfg(test)]
 mod tests {
     use super::{ProcessingError, ProcessingJob, ProcessingJobRecord, ProcessingStep, StepState};
-    use crate::ids::SessionId;
+    use crate::ids::{ProviderProfileId, SessionId};
     use crate::EpochMs;
 
     fn job() -> ProcessingJob {
@@ -522,6 +540,29 @@ mod tests {
     }
 
     #[test]
+    fn the_transcription_profile_is_per_job_and_survives_a_restore() {
+        let mut job = job();
+        assert_eq!(job.transcription_profile(), None);
+        job.set_transcription_profile(Some(ProviderProfileId::new("cloud")));
+        assert_eq!(
+            job.transcription_profile(),
+            Some(&ProviderProfileId::new("cloud"))
+        );
+        let restored = ProcessingJob::restore(ProcessingJobRecord {
+            session_id: SessionId::new("s1"),
+            steps: job.steps().to_vec(),
+            created_at: job.created_at(),
+            updated_at: job.updated_at(),
+            finished_at: job.finished_at(),
+            transcription_profile_id: job.transcription_profile().cloned(),
+        })
+        .unwrap();
+        assert_eq!(restored, job);
+        job.set_transcription_profile(None);
+        assert_eq!(job.transcription_profile(), None);
+    }
+
+    #[test]
     fn restore_requires_every_step_exactly_once() {
         let record = |steps: Vec<(ProcessingStep, StepState)>| ProcessingJobRecord {
             session_id: SessionId::new("s1"),
@@ -529,6 +570,7 @@ mod tests {
             created_at: at(1),
             updated_at: at(2),
             finished_at: None,
+            transcription_profile_id: None,
         };
         assert_eq!(
             ProcessingJob::restore(record(vec![(ProcessingStep::Transcribe, StepState::Done)])),

@@ -38,3 +38,42 @@ fn bindings_are_up_to_date() {
         "ui/src/ipc/bindings.ts is stale; regenerate with TAN_UPDATE_BINDINGS=1"
     );
 }
+
+/// Each export refusal reaches the UI as `validation` with its own typed `exportProblem`;
+/// other failures carry none.
+#[test]
+fn export_refusals_carry_a_typed_problem_code() {
+    use tan_app_lib::commands::sessions::{ExportProblemCode, SessionsErrorCode, SessionsIpcError};
+    use tan_application::sessions::{ExportDestinationProblem as Problem, SessionsError};
+
+    let cases = [
+        (Problem::NotAbsolute, ExportProblemCode::NotAbsolute),
+        (Problem::ParentReference, ExportProblemCode::ParentReference),
+        (Problem::NetworkPath, ExportProblemCode::NetworkPath),
+        (Problem::MissingName, ExportProblemCode::MissingName),
+        (
+            Problem::InvalidExtension,
+            ExportProblemCode::InvalidExtension,
+        ),
+        (
+            Problem::NotDialogSelected,
+            ExportProblemCode::NotDialogSelected,
+        ),
+        (Problem::InsideDataDir, ExportProblemCode::InsideDataDir),
+        (Problem::FolderMissing, ExportProblemCode::FolderMissing),
+        (Problem::AlreadyExists, ExportProblemCode::AlreadyExists),
+    ];
+    for (problem, expected) in cases {
+        let error = SessionsIpcError::from(problem);
+        assert_eq!(error.code, SessionsErrorCode::Validation);
+        assert_eq!(error.export_problem, Some(expected));
+        assert!(
+            error.message.contains("export destination"),
+            "{}",
+            error.message
+        );
+    }
+    let other = SessionsIpcError::from(SessionsError::NotFound("session"));
+    assert_eq!(other.code, SessionsErrorCode::NotFound);
+    assert_eq!(other.export_problem, None);
+}

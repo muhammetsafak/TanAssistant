@@ -9,13 +9,14 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tan_application::ports::{SearchHit, SearchSource};
 use tan_application::sessions::{
-    AudioTrackState, NoteWithItems, Page, SessionDetail, SessionFilter, SessionListItem,
-    SessionPage, SessionSearchResult, SessionsError, StorageUsage,
+    resolve_export_destination, AudioTrackState, ExportDestinationProblem, NoteWithItems, Page,
+    SessionDetail, SessionFilter, SessionListItem, SessionPage, SessionSearchResult, SessionsError,
+    StorageUsage,
 };
 use tan_domain::{
     ActionItem, ActionItemId, EpochMs, Frame, Session, SessionId, SessionStatus, TranscriptSegment,
 };
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::commands::processing::{epoch_ms_to_f64, ProcessingJobDto};
 use crate::state::AppState;
@@ -36,6 +37,46 @@ pub enum SessionsErrorCode {
     Internal,
 }
 
+/// Why `export_session_markdown` refused its `destination` (set with `code: validation`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportProblemCode {
+    /// The path is not absolute.
+    NotAbsolute,
+    /// The path contains `..`.
+    ParentReference,
+    /// The path is a UNC, network or device path.
+    NetworkPath,
+    /// The path has no file name.
+    MissingName,
+    /// The file has an extension other than `.md`.
+    InvalidExtension,
+    /// The path is not the one the user picked in the save dialog.
+    NotDialogSelected,
+    /// The path is inside Tan's own data folder.
+    InsideDataDir,
+    /// The folder the file should go into does not exist.
+    FolderMissing,
+    /// `.md` was appended to the picked name and that file already exists.
+    AlreadyExists,
+}
+
+impl From<ExportDestinationProblem> for ExportProblemCode {
+    fn from(problem: ExportDestinationProblem) -> Self {
+        match problem {
+            ExportDestinationProblem::NotAbsolute => Self::NotAbsolute,
+            ExportDestinationProblem::ParentReference => Self::ParentReference,
+            ExportDestinationProblem::NetworkPath => Self::NetworkPath,
+            ExportDestinationProblem::MissingName => Self::MissingName,
+            ExportDestinationProblem::InvalidExtension => Self::InvalidExtension,
+            ExportDestinationProblem::NotDialogSelected => Self::NotDialogSelected,
+            ExportDestinationProblem::InsideDataDir => Self::InsideDataDir,
+            ExportDestinationProblem::FolderMissing => Self::FolderMissing,
+            ExportDestinationProblem::AlreadyExists => Self::AlreadyExists,
+        }
+    }
+}
+
 /// Error returned by the session commands.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +85,9 @@ pub struct SessionsIpcError {
     pub code: SessionsErrorCode,
     /// Human-readable description (English; the UI localises by `code`).
     pub message: String,
+    /// Set by `export_session_markdown` when the destination was refused: the exact reason,
+    /// so the UI never parses `message`. `None` for every other failure.
+    pub export_problem: Option<ExportProblemCode>,
 }
 
 impl SessionsIpcError {
@@ -51,6 +95,7 @@ impl SessionsIpcError {
         Self {
             code: SessionsErrorCode::Validation,
             message: message.to_owned(),
+            export_problem: None,
         }
     }
 }
@@ -68,9 +113,15 @@ fn log_source(context: &str, error: &(dyn Error + 'static)) {
 
 impl From<SessionsError> for SessionsIpcError {
     fn from(error: SessionsError) -> Self {
+        let export_problem = match &error {
+            SessionsError::ExportDestination(problem) => Some((*problem).into()),
+            _ => None,
+        };
         let code = match &error {
             SessionsError::NotFound(_) => SessionsErrorCode::NotFound,
-            SessionsError::Invalid(_) => SessionsErrorCode::Validation,
+            SessionsError::Invalid(_) | SessionsError::ExportDestination(_) => {
+                SessionsErrorCode::Validation
+            }
             SessionsError::Busy(_) => SessionsErrorCode::Busy,
             SessionsError::Files(_) => {
                 log_source("session file operation failed", &error);
@@ -84,7 +135,14 @@ impl From<SessionsError> for SessionsIpcError {
         Self {
             code,
             message: error.to_string(),
+            export_problem,
         }
+    }
+}
+
+impl From<ExportDestinationProblem> for SessionsIpcError {
+    fn from(problem: ExportDestinationProblem) -> Self {
+        Self::from(SessionsError::from(problem))
     }
 }
 
@@ -604,11 +662,29 @@ pub async fn search_sessions(
 #[specta::specta]
 #[tracing::instrument(skip_all)]
 pub async fn get_session_detail(
+    app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<SessionDetailDto, SessionsIpcError> {
     let id = parse_session_id(session_id)?;
     let detail = state.get_session_detail.execute(&id).await?;
+    // The frame images are shown through the asset protocol, which can read nothing until
+    // its scope allows it. The scope grows by the `frames/` folder of each session whose
+    // detail is requested and keeps it until the app exits (never the audio, the database or
+    // `notes.md`). The save dialog also adds the export file the user picks. So the real bound
+    // is: the frames folders of the sessions opened in this run (any session's, since the
+    // webview can request any id) plus the dialog-picked export file.
+    match state.layout.frames_dir(&id) {
+        Ok(frames_dir) => {
+            if let Err(error) = app
+                .asset_protocol_scope()
+                .allow_directory(&frames_dir, true)
+            {
+                tracing::warn!(%error, "cannot allow the frames folder in the asset scope");
+            }
+        }
+        Err(error) => tracing::warn!(%error, "no frames folder for the session"),
+    }
     let session_dir = state
         .layout
         .session_dir(&id)
@@ -637,18 +713,65 @@ pub async fn toggle_action_item(
         .await?)
 }
 
-/// Exports the session's note, key frames and transcript as a Markdown file in the session
-/// folder (frame links are relative to it) and returns the file's absolute path.
+/// Exports the session's note, key frames and transcript as a Markdown file and returns the
+/// file's absolute path.
+///
+/// With `destination` (the absolute `.md` path the user picked in the save dialog) the file is
+/// written there and the key frames are copied into a `<name>_frames` folder beside it, with
+/// relative links. `destination` is the path the save dialog returned, sent back unchanged:
+/// it must be absolute, on a local drive (UNC and device paths are refused), outside Tan's
+/// data folder and exactly what the user picked in the dialog. A path without an extension
+/// gets `.md` (a file already having that name is not replaced); any other extension is
+/// refused. Every refusal is a `validation` error whose `exportProblem` field holds the exact
+/// reason (`not_absolute`, `parent_reference`, `network_path`, `missing_name`,
+/// `invalid_extension`, `not_dialog_selected`, `inside_data_dir`, `folder_missing`,
+/// `already_exists`). Without it the file goes into the session folder (frame links relative to it).
 #[tauri::command]
 #[specta::specta]
 #[tracing::instrument(skip_all)]
 pub async fn export_session_markdown(
+    app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
+    destination: Option<String>,
 ) -> Result<String, SessionsIpcError> {
     let id = parse_session_id(session_id)?;
     let detail = state.get_session_detail.execute(&id).await?;
-    let path = state.export_session.execute(&detail)?;
+    let path = match destination {
+        Some(destination) => {
+            let chosen = std::path::Path::new(&destination);
+            // 1. Shape of the path first, without touching the file system: the scope check
+            //    below stats the path, which for a UNC path would open a network connection.
+            let target = resolve_export_destination(chosen)?;
+            // 2. The path must be exactly the one the user picked in the save dialog (the
+            //    dialog plugin adds it to the asset scope; the UI sends it back unchanged).
+            if !app.asset_protocol_scope().is_allowed(chosen) {
+                return Err(ExportDestinationProblem::NotDialogSelected.into());
+            }
+            // 3. The asset scope also holds the frames folders of opened sessions: only a
+            //    place outside Tan's own data folder counts as a dialog pick.
+            match state.layout.contains(&target.path) {
+                Ok(false) => {}
+                Ok(true) => return Err(ExportDestinationProblem::InsideDataDir.into()),
+                Err(_) => return Err(ExportDestinationProblem::FolderMissing.into()),
+            }
+            // 4. The dialog confirmed replacing the path as picked. When `.md` was added, the
+            //    file now named may be a different, existing one nobody confirmed: refuse.
+            if target.extension_added && target.path.exists() {
+                return Err(ExportDestinationProblem::AlreadyExists.into());
+            }
+            // Copies images and writes files: keep it off the async worker.
+            let export = state.export_session.clone();
+            tauri::async_runtime::spawn_blocking(move || export.execute_to(&detail, &target.path))
+                .await
+                .map_err(|e| SessionsIpcError {
+                    code: SessionsErrorCode::Internal,
+                    message: format!("the export did not finish: {e}"),
+                    export_problem: None,
+                })??
+        }
+        None => state.export_session.execute(&detail)?,
+    };
     Ok(path.display().to_string())
 }
 
@@ -667,6 +790,7 @@ pub async fn get_storage_usage(
             .map_err(|e| SessionsIpcError {
                 code: SessionsErrorCode::Internal,
                 message: format!("the measurement did not finish: {e}"),
+                export_problem: None,
             })??
     };
     Ok(usage.into())

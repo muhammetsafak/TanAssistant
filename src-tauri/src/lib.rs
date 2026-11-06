@@ -137,6 +137,8 @@ pub fn run() {
             tracing::info!("a second Tan instance was started and exited; showing this window");
             tray::show_main_window(app);
         }))
+        // The "save as" dialog of the Markdown export (the capability allows `save` only).
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(builder.invoke_handler())
         .on_window_event(|window, event| {
             // A recording must outlive its window: while one runs, closing the window only

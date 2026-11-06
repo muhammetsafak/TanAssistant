@@ -99,10 +99,20 @@ export const commands = {
 	 *  structured note (summary, decisions, action items, open questions, key frames). Replaces an
 	 *  earlier note. Progress arrives as [`ProcessingProgressEvent`]s; the call returns when the
 	 *  run ends.
+	 * 
+	 *  `transcription_profile_id` makes the cloud provider of that profile transcribe this session
+	 *  in this run only; the general transcription assignment is not changed and applies again to
+	 *  the next run. A profile that does not exist is a `validation` error, one that cannot
+	 *  transcribe audio a `transcription_failed` error (`transcriptionCode` `provider_unsupported`).
 	 */
-	processSession: (sessionId: string) => typedError<ProcessSummaryDto, ProcessingIpcError_Serialize>(__TAURI_INVOKE("process_session", { sessionId })),
-	/**  Continues a failed or cancelled run: finished steps are kept, the rest runs again. */
-	retryProcessing: (sessionId: string) => typedError<ProcessSummaryDto, ProcessingIpcError_Serialize>(__TAURI_INVOKE("retry_processing", { sessionId })),
+	processSession: (sessionId: string, transcriptionProfileId: string | null) => typedError<ProcessSummaryDto, ProcessingIpcError_Serialize>(__TAURI_INVOKE("process_session", { sessionId, transcriptionProfileId })),
+	/**
+	 *  Continues a failed or cancelled run: finished steps are kept, the rest runs again.
+	 * 
+	 *  The run keeps the transcription profile it was started with; `transcription_profile_id`
+	 *  replaces it (same rules as in `process_session`).
+	 */
+	retryProcessing: (sessionId: string, transcriptionProfileId: string | null) => typedError<ProcessSummaryDto, ProcessingIpcError_Serialize>(__TAURI_INVOKE("retry_processing", { sessionId, transcriptionProfileId })),
 	/**
 	 *  Cancels the session's running run (its `process_session` call returns `cancelled`). Returns
 	 *  whether there was a run to cancel.
@@ -111,29 +121,40 @@ export const commands = {
 	/**  Whether a session is being processed and how far its job got. */
 	processingStatus: (sessionId: string) => typedError<ProcessingStatusDto_Serialize, ProcessingIpcError_Serialize>(__TAURI_INVOKE("processing_status", { sessionId })),
 	/**  Lists sessions, newest first, with an optional filter and page. */
-	listSessions: (filter: SessionFilterDto_Deserialize | null, page: PageDto_Deserialize | null) => typedError<SessionPageDto_Serialize, SessionsIpcError>(__TAURI_INVOKE("list_sessions", { filter, page })),
+	listSessions: (filter: SessionFilterDto_Deserialize | null, page: PageDto_Deserialize | null) => typedError<SessionPageDto_Serialize, SessionsIpcError_Serialize>(__TAURI_INVOKE("list_sessions", { filter, page })),
 	/**
 	 *  Full-text search over transcripts and notes (every word must match; prefixes count),
 	 *  grouped by session.
 	 */
-	searchSessions: (query: string) => typedError<SessionSearchResultDto_Serialize[], SessionsIpcError>(__TAURI_INVOKE("search_sessions", { query })),
+	searchSessions: (query: string) => typedError<SessionSearchResultDto_Serialize[], SessionsIpcError_Serialize>(__TAURI_INVOKE("search_sessions", { query })),
 	/**  A session with its audio tracks, frames, transcript, note and processing job. */
-	getSessionDetail: (sessionId: string) => typedError<SessionDetailDto_Serialize, SessionsIpcError>(__TAURI_INVOKE("get_session_detail", { sessionId })),
+	getSessionDetail: (sessionId: string) => typedError<SessionDetailDto_Serialize, SessionsIpcError_Serialize>(__TAURI_INVOKE("get_session_detail", { sessionId })),
 	/**  Marks an action item done or not done. */
-	toggleActionItem: (actionItemId: string, done: boolean) => typedError<null, SessionsIpcError>(__TAURI_INVOKE("toggle_action_item", { actionItemId, done })),
+	toggleActionItem: (actionItemId: string, done: boolean) => typedError<null, SessionsIpcError_Serialize>(__TAURI_INVOKE("toggle_action_item", { actionItemId, done })),
 	/**
-	 *  Exports the session's note, key frames and transcript as a Markdown file in the session
-	 *  folder (frame links are relative to it) and returns the file's absolute path.
+	 *  Exports the session's note, key frames and transcript as a Markdown file and returns the
+	 *  file's absolute path.
+	 * 
+	 *  With `destination` (the absolute `.md` path the user picked in the save dialog) the file is
+	 *  written there and the key frames are copied into a `<name>_frames` folder beside it, with
+	 *  relative links. `destination` is the path the save dialog returned, sent back unchanged:
+	 *  it must be absolute, on a local drive (UNC and device paths are refused), outside Tan's
+	 *  data folder and exactly what the user picked in the dialog. A path without an extension
+	 *  gets `.md` (a file already having that name is not replaced); any other extension is
+	 *  refused. Every refusal is a `validation` error whose `exportProblem` field holds the exact
+	 *  reason (`not_absolute`, `parent_reference`, `network_path`, `missing_name`,
+	 *  `invalid_extension`, `not_dialog_selected`, `inside_data_dir`, `folder_missing`,
+	 *  `already_exists`). Without it the file goes into the session folder (frame links relative to it).
 	 */
-	exportSessionMarkdown: (sessionId: string) => typedError<string, SessionsIpcError>(__TAURI_INVOKE("export_session_markdown", { sessionId })),
+	exportSessionMarkdown: (sessionId: string, destination: string | null) => typedError<string, SessionsIpcError_Serialize>(__TAURI_INVOKE("export_session_markdown", { sessionId, destination })),
 	/**  How much disk Tan's data uses: total, audio, frames and whisper models. */
-	getStorageUsage: () => typedError<StorageUsageDto, SessionsIpcError>(__TAURI_INVOKE("get_storage_usage")),
+	getStorageUsage: () => typedError<StorageUsageDto, SessionsIpcError_Serialize>(__TAURI_INVOKE("get_storage_usage")),
 	/**
 	 *  Deletes a session with its files, transcript, frames, note and action items. Irreversible,
 	 *  so the caller must pass `confirm: true` (after asking the user); a session that is being
 	 *  recorded or processed is refused.
 	 */
-	deleteSession: (sessionId: string, confirm: boolean) => typedError<null, SessionsIpcError>(__TAURI_INVOKE("delete_session", { sessionId, confirm })),
+	deleteSession: (sessionId: string, confirm: boolean) => typedError<null, SessionsIpcError_Serialize>(__TAURI_INVOKE("delete_session", { sessionId, confirm })),
 };
 
 /** Events */
@@ -371,6 +392,27 @@ export type ErrorCode =
 "secret_value_missing" | 
 /**  Anything else; details are in the log. */
 "internal";
+
+/**  Why `export_session_markdown` refused its `destination` (set with `code: validation`). */
+export type ExportProblemCode = 
+/**  The path is not absolute. */
+"not_absolute" | 
+/**  The path contains `..`. */
+"parent_reference" | 
+/**  The path is a UNC, network or device path. */
+"network_path" | 
+/**  The path has no file name. */
+"missing_name" | 
+/**  The file has an extension other than `.md`. */
+"invalid_extension" | 
+/**  The path is not the one the user picked in the save dialog. */
+"not_dialog_selected" | 
+/**  The path is inside Tan's own data folder. */
+"inside_data_dir" | 
+/**  The folder the file should go into does not exist. */
+"folder_missing" | 
+/**  `.md` was appended to the picked name and that file already exists. */
+"already_exists";
 
 /**  A stored screen frame. */
 export type FrameDto = FrameDto_Serialize | FrameDto_Deserialize;
@@ -1223,11 +1265,32 @@ export type SessionsErrorCode =
 "internal";
 
 /**  Error returned by the session commands. */
-export type SessionsIpcError = {
+export type SessionsIpcError = SessionsIpcError_Serialize | SessionsIpcError_Deserialize;
+
+/**  Error returned by the session commands. */
+export type SessionsIpcError_Deserialize = {
 	/**  Failure class. */
 	code: SessionsErrorCode,
 	/**  Human-readable description (English; the UI localises by `code`). */
 	message: string,
+	/**
+	 *  Set by `export_session_markdown` when the destination was refused: the exact reason,
+	 *  so the UI never parses `message`. `None` for every other failure.
+	 */
+	exportProblem?: ExportProblemCode | null,
+};
+
+/**  Error returned by the session commands. */
+export type SessionsIpcError_Serialize = {
+	/**  Failure class. */
+	code: SessionsErrorCode,
+	/**  Human-readable description (English; the UI localises by `code`). */
+	message: string,
+	/**
+	 *  Set by `export_session_markdown` when the destination was refused: the exact reason,
+	 *  so the UI never parses `message`. `None` for every other failure.
+	 */
+	exportProblem: ExportProblemCode | null,
 };
 
 /**  A partial settings update: only the fields that are present change. */

@@ -8,9 +8,18 @@ import { ok, renderWithProviders } from '../test-utils';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 
-vi.mock('../ipc/bindings', () => ({
-  commands: { appVersion: vi.fn(), getSettings: vi.fn(), updateSettings: vi.fn() },
-}));
+vi.mock('../ipc/bindings', async () => {
+  const { stubEvents } = await import('../test-events');
+  return {
+    commands: {
+      appVersion: vi.fn(),
+      getSettings: vi.fn(),
+      updateSettings: vi.fn(),
+      recordingStatus: vi.fn(),
+    },
+    events: stubEvents(),
+  };
+});
 
 function settings(uiLanguage: 'tr' | 'en') {
   return {
@@ -29,6 +38,7 @@ describe('language switching', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('tr');
     vi.mocked(commands.appVersion).mockResolvedValue('0.1.0');
+    vi.mocked(commands.recordingStatus).mockResolvedValue(ok({ state: 'idle', active: null }));
     vi.mocked(commands.getSettings).mockResolvedValue(ok(settings('tr')));
     vi.mocked(commands.updateSettings).mockResolvedValue(ok(settings('en')));
   });

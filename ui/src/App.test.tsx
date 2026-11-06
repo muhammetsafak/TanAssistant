@@ -7,16 +7,25 @@ import i18n from './i18n';
 import { commands } from './ipc/bindings';
 import { ok } from './test-utils';
 
-vi.mock('./ipc/bindings', () => ({
-  commands: {
-    appVersion: vi.fn(),
-    getSettings: vi.fn(),
-    updateSettings: vi.fn(),
-    listVariables: vi.fn(),
-    secretStoreStatus: vi.fn(),
-    listSecrets: vi.fn(),
-  },
-}));
+vi.mock('./ipc/bindings', async () => {
+  const { stubEvents } = await import('./test-events');
+  return {
+    commands: {
+      appVersion: vi.fn(),
+      getSettings: vi.fn(),
+      updateSettings: vi.fn(),
+      listVariables: vi.fn(),
+      secretStoreStatus: vi.fn(),
+      listSecrets: vi.fn(),
+      recordingStatus: vi.fn(),
+      recordingCapabilities: vi.fn(),
+      listAudioDevices: vi.fn(),
+      listDisplays: vi.fn(),
+      listSessions: vi.fn(),
+    },
+    events: stubEvents(),
+  };
+});
 
 const settings = {
   uiLanguage: 'tr' as const,
@@ -34,6 +43,15 @@ describe('App shell', () => {
     await i18n.changeLanguage('tr');
     window.location.hash = '#/';
     vi.mocked(commands.appVersion).mockResolvedValue('1.2.3');
+    vi.mocked(commands.recordingStatus).mockResolvedValue(ok({ state: 'idle', active: null }));
+    vi.mocked(commands.recordingCapabilities).mockResolvedValue(
+      ok({ screenCaptureAvailable: true, screenUnavailableReason: null }),
+    );
+    vi.mocked(commands.listAudioDevices).mockResolvedValue(ok([]));
+    vi.mocked(commands.listDisplays).mockResolvedValue(ok([]));
+    vi.mocked(commands.listSessions).mockResolvedValue(
+      ok({ items: [], total: 0, offset: 0, limit: 20 }),
+    );
     vi.mocked(commands.getSettings).mockResolvedValue(ok(settings));
     vi.mocked(commands.listVariables).mockResolvedValue(ok([]));
     vi.mocked(commands.listSecrets).mockResolvedValue(ok([]));

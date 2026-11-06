@@ -1,18 +1,22 @@
 //! Markdown export of a session: the note, the key frames and the transcript.
 
-use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::fmt::{self, Write as _};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::Arc;
 
-use tan_domain::{LanguageCode, ProcessingStep, StepState};
+use tan_domain::{Frame, LanguageCode, ProcessingStep, StepState};
 
-use super::{NoteWithItems, SessionDetail, SessionFileStore, SessionsResult};
+use super::{NoteWithItems, SessionDetail, SessionFileStore, SessionsError, SessionsResult};
 use crate::processing::{format_offset, utc_date_string, utc_datetime_string};
 use crate::transcription::{SPEAKER_ME, SPEAKER_OTHERS};
 
 /// Name of the exported file inside the session folder. Frame paths are relative to that
 /// folder (`frames/...`), so the image links in the file work where it is.
 pub const EXPORT_FILE_NAME: &str = "notes.md";
+
+/// Appended to the Markdown file's name (without extension) to name the folder that holds the
+/// key frame images when the user exports to a place of their choice.
+pub const FRAMES_DIR_SUFFIX: &str = "_frames";
 
 /// Longest image caption, in characters.
 const MAX_CAPTION_CHARS: usize = 120;
@@ -182,7 +186,13 @@ fn write_action_items(note: &NoteWithItems, labels: &Labels, out: &mut String) {
 }
 
 /// Summary, decisions, action items, open questions and key frames.
-fn write_note(detail: &SessionDetail, note: &NoteWithItems, labels: &Labels, out: &mut String) {
+fn write_note(
+    detail: &SessionDetail,
+    note: &NoteWithItems,
+    labels: &Labels,
+    link: &dyn Fn(&Frame) -> Option<String>,
+    out: &mut String,
+) {
     let _ = write!(
         out,
         "## {}
@@ -237,11 +247,9 @@ fn write_note(detail: &SessionDetail, note: &NoteWithItems, labels: &Labels, out
     );
     bullet_list(&note.note.open_questions, labels, out);
 
-    let key_frames: Vec<_> = note
-        .note
-        .frame_refs
-        .iter()
-        .filter_map(|id| detail.frames.iter().find(|frame| &frame.id == id))
+    let key_frames: Vec<_> = key_frames(detail, note)
+        .into_iter()
+        .filter_map(|frame| link(frame).map(|target| (frame, target)))
         .collect();
     if !key_frames.is_empty() {
         let _ = write!(
@@ -252,14 +260,13 @@ fn write_note(detail: &SessionDetail, note: &NoteWithItems, labels: &Labels, out
 ",
             labels.key_frames
         );
-        for frame in key_frames {
+        for (frame, target) in key_frames {
             let _ = write!(
                 out,
-                "![{}]({})
+                "![{}]({target})
 
 ",
                 caption(frame.description.as_deref(), frame.timestamp_ms),
-                frame.path.replace(' ', "%20")
             );
         }
     }
@@ -271,6 +278,39 @@ fn write_note(detail: &SessionDetail, note: &NoteWithItems, labels: &Labels, out
 /// (Turkish or English); the transcript stays in the spoken language.
 #[must_use]
 pub fn render_markdown(detail: &SessionDetail) -> String {
+    render(detail, &|frame| Some(link_safe(&frame.path)))
+}
+
+/// The frames the note refers to, in the note's order.
+fn key_frames<'a>(detail: &'a SessionDetail, note: &NoteWithItems) -> Vec<&'a Frame> {
+    note.note
+        .frame_refs
+        .iter()
+        .filter_map(|id| detail.frames.iter().find(|frame| &frame.id == id))
+        .collect()
+}
+
+/// Escapes what would end or break a Markdown link target (the path stays readable).
+fn link_safe(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        match c {
+            '%' => out.push_str("%25"),
+            ' ' => out.push_str("%20"),
+            '(' => out.push_str("%28"),
+            ')' => out.push_str("%29"),
+            '#' => out.push_str("%23"),
+            '?' => out.push_str("%3F"),
+            '<' => out.push_str("%3C"),
+            '>' => out.push_str("%3E"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Renders the session; `link` gives the image target of a key frame (`None`: leave it out).
+fn render(detail: &SessionDetail, link: &dyn Fn(&Frame) -> Option<String>) -> String {
     let language = detail
         .note
         .as_ref()
@@ -289,7 +329,7 @@ pub fn render_markdown(detail: &SessionDetail) -> String {
                 labels.no_note
             );
         }
-        Some(note) => write_note(detail, note, labels, &mut out),
+        Some(note) => write_note(detail, note, labels, link, &mut out),
     }
 
     let _ = write!(
@@ -336,4 +376,180 @@ impl<W: SessionFileStore> ExportSessionMarkdown<W> {
             .files
             .write_export(&detail.session.id, EXPORT_FILE_NAME, &markdown)?)
     }
+
+    /// Renders `detail` into the Markdown file `destination` the user chose.
+    ///
+    /// The key frames the note refers to are copied into a folder next to the file, named after
+    /// it (`notes.md` -> `notes_frames/`), and the image links point there relatively, so the
+    /// file keeps working when it is moved or shared together with that folder and nothing in
+    /// it points into Tan's data folder. A frame whose image is gone is left out of the file.
+    ///
+    /// `destination` must be absolute, free of `..`, on a local drive (no UNC or device paths)
+    /// and end in `.md`. Returns the path written.
+    pub fn execute_to(
+        &self,
+        detail: &SessionDetail,
+        destination: &Path,
+    ) -> SessionsResult<PathBuf> {
+        let frames_dir_name = frames_dir_name(destination)?;
+        let frames_dir = destination.with_file_name(&frames_dir_name);
+
+        let mut available: Vec<(String, String)> = Vec::new(); // (frame id, link target)
+        if let Some(note) = &detail.note {
+            let mut dir_created = false;
+            for frame in key_frames(detail, note) {
+                let Some(file_name) = Path::new(&frame.path).file_name().and_then(|n| n.to_str())
+                else {
+                    continue;
+                };
+                let bytes = match self.files.read_frame(&detail.session.id, &frame.path) {
+                    Ok(bytes) => bytes,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                if !dir_created {
+                    self.files.create_export_dir(&frames_dir)?;
+                    dir_created = true;
+                }
+                self.files
+                    .write_export_to(&frames_dir.join(file_name), &bytes)?;
+                available.push((
+                    frame.id.to_string(),
+                    link_safe(&format!("{frames_dir_name}/{file_name}")),
+                ));
+            }
+        }
+
+        let markdown = render(detail, &|frame| {
+            available
+                .iter()
+                .find(|(id, _)| id == frame.id.as_str())
+                .map(|(_, target)| target.clone())
+        });
+        self.files
+            .write_export_to(destination, markdown.as_bytes())?;
+        Ok(destination.to_path_buf())
+    }
+}
+
+/// Why a Markdown export destination was refused. Callers react to the variant; the text is
+/// for logs and details.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportDestinationProblem {
+    /// The path is not absolute.
+    NotAbsolute,
+    /// The path contains `..`.
+    ParentReference,
+    /// The path is a UNC, network or device path (only local drives are allowed).
+    NetworkPath,
+    /// The path has no file name.
+    MissingName,
+    /// The file has an extension other than `.md`.
+    InvalidExtension,
+    /// The path is not the one the user picked in the save dialog.
+    NotDialogSelected,
+    /// The path is inside Tan's own data folder.
+    InsideDataDir,
+    /// The folder the file should go into does not exist.
+    FolderMissing,
+    /// `.md` was appended to the picked name and a file with that name already exists (the
+    /// dialog only confirmed replacing the name as picked).
+    AlreadyExists,
+}
+
+impl fmt::Display for ExportDestinationProblem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NotAbsolute => "the path must be absolute",
+            Self::ParentReference => "the path must not contain `..`",
+            Self::NetworkPath => "network and device paths are not allowed",
+            Self::MissingName => "the file must have a name",
+            Self::InvalidExtension => "the file must have the .md extension",
+            Self::NotDialogSelected => "the destination was not chosen in the save dialog",
+            Self::InsideDataDir => "the destination must be outside Tan's data folder",
+            Self::FolderMissing => "the destination's folder does not exist",
+            Self::AlreadyExists => {
+                "a file with that name and the .md extension already exists; pick another name"
+            }
+        })
+    }
+}
+
+impl From<ExportDestinationProblem> for SessionsError {
+    fn from(problem: ExportDestinationProblem) -> Self {
+        Self::ExportDestination(problem)
+    }
+}
+
+/// Where an export goes, derived from the path the user picked in the save dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportDestination {
+    /// The Markdown file to write.
+    pub path: PathBuf,
+    /// Whether `.md` was appended because the picked path had no extension (some desktops'
+    /// save dialogs do not add one). The dialog only asked the user to confirm replacing the
+    /// path as picked, so the caller should not silently replace an existing `path` then.
+    pub extension_added: bool,
+}
+
+/// Checks the path picked in the save dialog without touching the file system, and completes
+/// a missing extension to `.md`.
+///
+/// The path must be absolute, free of `..`, on a local drive (no UNC or device paths) and
+/// either end in `.md` or have no extension at all; any other extension is refused (the user
+/// asked for a file that is not Markdown).
+pub fn resolve_export_destination(chosen: &Path) -> SessionsResult<ExportDestination> {
+    check_destination_path(chosen)?;
+    if chosen.extension().is_some() {
+        frames_dir_name(chosen)?;
+        return Ok(ExportDestination {
+            path: chosen.to_path_buf(),
+            extension_added: false,
+        });
+    }
+    // `with_extension` would also be right for names ending in a dot or without one; keep the
+    // picked name as is and append.
+    let mut name = chosen.as_os_str().to_os_string();
+    name.push(".md");
+    let path = PathBuf::from(name);
+    frames_dir_name(&path)?;
+    Ok(ExportDestination {
+        path,
+        extension_added: true,
+    })
+}
+
+/// Checks `destination` and returns the name of the folder for the frame images.
+fn frames_dir_name(destination: &Path) -> SessionsResult<String> {
+    check_destination_path(destination)?;
+    let is_markdown = destination
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+    let stem = destination.file_stem().and_then(|stem| stem.to_str());
+    match stem {
+        Some(stem) if !stem.is_empty() && is_markdown => Ok(format!("{stem}{FRAMES_DIR_SUFFIX}")),
+        Some(stem) if !stem.is_empty() => Err(ExportDestinationProblem::InvalidExtension.into()),
+        _ => Err(ExportDestinationProblem::MissingName.into()),
+    }
+}
+
+/// The part of the destination checks that does not depend on the extension.
+fn check_destination_path(destination: &Path) -> SessionsResult<()> {
+    if !destination.is_absolute() {
+        return Err(ExportDestinationProblem::NotAbsolute.into());
+    }
+    // Only local drives: a UNC or device path would make the write open a network connection
+    // (and leak credentials to whoever runs that server).
+    if let Some(Component::Prefix(prefix)) = destination.components().next() {
+        if !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) {
+            return Err(ExportDestinationProblem::NetworkPath.into());
+        }
+    }
+    if destination
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ExportDestinationProblem::ParentReference.into());
+    }
+    Ok(())
 }

@@ -74,6 +74,8 @@ struct World {
     // The segments the fake transcriber stores.
     produced: Vec<TranscriptSegment>,
     transcribe_calls: AtomicUsize,
+    // The profile each transcription call was asked to use.
+    transcribe_profiles: Mutex<Vec<Option<ProviderProfileId>>>,
     transcribe_started: AtomicBool,
     transcribe_mode: Mutex<TranscribeMode>,
     transcribe_failure: Mutex<Option<String>>,
@@ -507,6 +509,18 @@ impl SessionFileStore for World {
         Ok(std::path::PathBuf::from("/unused"))
     }
 
+    fn create_export_dir(&self, _dir: &std::path::Path) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn write_export_to(
+        &self,
+        _destination: &std::path::Path,
+        _content: &[u8],
+    ) -> std::io::Result<()> {
+        Ok(())
+    }
+
     fn measure_usage(&self) -> std::io::Result<StorageUsage> {
         Ok(StorageUsage::default())
     }
@@ -516,9 +530,14 @@ impl SessionTranscriber for World {
     async fn transcribe(
         &self,
         session_id: &SessionId,
+        profile: Option<&ProviderProfileId>,
         on_progress: &(dyn Fn(TranscribeProgress) + Send + Sync),
     ) -> TranscribeResult<TranscribeSummary> {
         self.transcribe_calls.fetch_add(1, Ordering::SeqCst);
+        self.transcribe_profiles
+            .lock()
+            .unwrap()
+            .push(profile.cloned());
         self.transcribe_started.store(true, Ordering::SeqCst);
         on_progress(TranscribeProgress {
             track: Some(TrackKind::Microphone),
@@ -622,6 +641,39 @@ impl Rig {
 
     fn retry(&self) -> Result<tan_application::processing::ProcessSummary, ProcessError> {
         block_on(self.process.retry(&sid(), &|_| {}))
+    }
+
+    fn execute_with(
+        &self,
+        profile: &str,
+    ) -> Result<tan_application::processing::ProcessSummary, ProcessError> {
+        let profile = ProviderProfileId::new(profile);
+        block_on(
+            self.process
+                .execute_with_profile(&sid(), Some(&profile), &|_| {}),
+        )
+    }
+
+    fn retry_with(
+        &self,
+        profile: &str,
+    ) -> Result<tan_application::processing::ProcessSummary, ProcessError> {
+        let profile = ProviderProfileId::new(profile);
+        block_on(
+            self.process
+                .retry_with_profile(&sid(), Some(&profile), &|_| {}),
+        )
+    }
+
+    /// The profile each transcription call was asked to use, as plain ids.
+    fn transcribe_profiles(&self) -> Vec<Option<String>> {
+        self.world
+            .transcribe_profiles
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_ref().map(|p| p.as_str().to_owned()))
+            .collect()
     }
 }
 
@@ -756,6 +808,7 @@ impl Setup {
             hits: Mutex::new(Vec::new()),
             produced: self.segments,
             transcribe_calls: AtomicUsize::new(0),
+            transcribe_profiles: Mutex::new(Vec::new()),
             transcribe_started: AtomicBool::new(false),
             transcribe_mode: Mutex::new(self.transcribe_mode),
             transcribe_failure: Mutex::new(None),
@@ -1372,6 +1425,140 @@ fn stray_notes_left_by_a_crash_are_all_replaced() {
     let notes = rig.world.notes.lock().unwrap();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].0.id, summary.note_id);
+}
+
+fn add_profile(rig: &Rig, id: &str, kind: ProviderKind) {
+    rig.world
+        .profiles
+        .lock()
+        .unwrap()
+        .push(profile(id, kind, false));
+}
+
+fn quick_note(rig: &Rig) {
+    rig.script_chat(vec![Ok(
+        VALID_NOTE.replace(r#"[{"frame_id": "F2", "reason": "fiyat tablosu"}]"#, "[]")
+    )]);
+}
+
+#[test]
+fn a_chosen_transcription_profile_is_used_for_that_run_only() {
+    let rig = Setup {
+        vision: false,
+        ..Setup::new()
+    }
+    .build();
+    add_profile(&rig, "cloud-stt", ProviderKind::OpenAi);
+    let assignments_before = rig.world.assignments.lock().unwrap().clone();
+
+    quick_note(&rig);
+    rig.execute_with("cloud-stt").unwrap();
+    assert_eq!(
+        rig.job()
+            .transcription_profile()
+            .map(tan_domain::ProviderProfileId::as_str),
+        Some("cloud-stt")
+    );
+    assert_eq!(
+        *rig.world.assignments.lock().unwrap(),
+        assignments_before,
+        "the general assignments are not written"
+    );
+
+    // The next run goes back to the general assignment (none: local whisper).
+    quick_note(&rig);
+    rig.execute().unwrap();
+    assert_eq!(rig.job().transcription_profile(), None);
+    assert_eq!(
+        rig.transcribe_profiles(),
+        vec![Some("cloud-stt".to_owned()), None]
+    );
+}
+
+#[test]
+fn a_resumed_run_keeps_its_transcription_profile_unless_a_new_one_is_chosen() {
+    let rig = Setup {
+        vision: false,
+        ..Setup::new()
+    }
+    .build();
+    add_profile(&rig, "cloud-a", ProviderKind::OpenAi);
+    add_profile(&rig, "cloud-b", ProviderKind::Gemini);
+    *rig.world.transcribe_failure.lock().unwrap() = Some("the upload broke".to_owned());
+    assert!(rig.execute_with("cloud-a").is_err());
+
+    // A plain retry stays on the profile the run was started with.
+    assert!(rig.retry().is_err());
+    // An explicit one replaces it, and it is kept from then on.
+    assert!(rig.retry_with("cloud-b").is_err());
+    *rig.world.transcribe_failure.lock().unwrap() = None;
+    quick_note(&rig);
+    rig.retry().unwrap();
+    assert_eq!(
+        rig.transcribe_profiles(),
+        vec![
+            Some("cloud-a".to_owned()),
+            Some("cloud-a".to_owned()),
+            Some("cloud-b".to_owned()),
+            Some("cloud-b".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_resumed_run_whose_profile_was_deleted_uses_the_general_assignment() {
+    let rig = Setup {
+        vision: false,
+        ..Setup::new()
+    }
+    .build();
+    add_profile(&rig, "cloud-stt", ProviderKind::OpenAi);
+    *rig.world.transcribe_failure.lock().unwrap() = Some("the upload broke".to_owned());
+    assert!(rig.execute_with("cloud-stt").is_err());
+
+    rig.world
+        .profiles
+        .lock()
+        .unwrap()
+        .retain(|p| p.id.as_str() != "cloud-stt");
+    *rig.world.transcribe_failure.lock().unwrap() = None;
+    quick_note(&rig);
+    rig.retry().unwrap();
+    assert_eq!(
+        rig.transcribe_profiles(),
+        vec![Some("cloud-stt".to_owned()), None]
+    );
+}
+
+#[test]
+fn an_unknown_or_incapable_transcription_profile_is_a_typed_error_and_changes_nothing() {
+    let rig = Setup::new().build();
+    add_profile(&rig, "claude", ProviderKind::Anthropic);
+
+    let error = rig.execute_with("no-such-profile").unwrap_err();
+    assert!(
+        matches!(error, ProcessError::UnknownTranscriptionProfile),
+        "{error}"
+    );
+
+    let error = rig.execute_with("claude").unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ProcessError::Transcribe(TranscribeError::Provider(AiError::Unsupported(_)))
+        ),
+        "{error}"
+    );
+    let error = rig.retry_with("claude").unwrap_err();
+    assert!(matches!(error, ProcessError::Transcribe(_)), "{error}");
+
+    // Nothing ran: no job, no model call, the session keeps its status.
+    assert!(block_on(ProcessingJobRepository::get(&*rig.world, &sid()))
+        .unwrap()
+        .is_none());
+    assert_eq!(rig.transcribe_calls(), 0);
+    assert_eq!(rig.session().status(), SessionStatus::Recorded);
+    assert!(!rig.process.is_running(&sid()));
 }
 
 #[test]

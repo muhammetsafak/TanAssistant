@@ -26,7 +26,9 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 
-use tan_domain::{NoteId, ProcessingJob, ProcessingStep, SessionId, SessionStatus};
+use tan_domain::{
+    NoteId, ProcessingJob, ProcessingStep, ProviderProfileId, SessionId, SessionStatus,
+};
 
 use crate::error::RepositoryError;
 use crate::ports::AiError;
@@ -59,10 +61,13 @@ pub trait ProcessingJobRepository: Send + Sync {
 /// [`crate::transcription::TranscribeSession`]; it is a port so the pipeline can be tested
 /// without audio engines.
 pub trait SessionTranscriber: Send + Sync {
-    /// Transcribes every audio track of the session and stores the transcript.
+    /// Transcribes every audio track of the session and stores the transcript. With `profile`
+    /// the cloud provider of that profile does it for this call only; without one the general
+    /// transcription assignment (or local whisper) applies. Nothing is assigned permanently.
     fn transcribe(
         &self,
         session_id: &SessionId,
+        profile: Option<&ProviderProfileId>,
         on_progress: &(dyn Fn(TranscribeProgress) + Send + Sync),
     ) -> impl Future<Output = TranscribeResult<TranscribeSummary>> + Send;
 }
@@ -110,6 +115,8 @@ pub enum ProcessError {
     Cancelled,
     /// Transcription failed.
     Transcribe(TranscribeError),
+    /// The transcription profile chosen for the run does not exist.
+    UnknownTranscriptionProfile,
     /// No provider is assigned to the summary task.
     NoChatModel,
     /// An AI call failed (or a provider adapter could not be built).
@@ -134,6 +141,9 @@ impl fmt::Display for ProcessError {
             Self::AlreadyRunning => f.write_str("the session is already being processed"),
             Self::Cancelled => f.write_str("processing was cancelled"),
             Self::Transcribe(error) => write!(f, "{error}"),
+            Self::UnknownTranscriptionProfile => {
+                f.write_str("the transcription profile chosen for this run does not exist")
+            }
             Self::NoChatModel => f.write_str(
                 "no AI provider is assigned to the summary task; assign one in the settings",
             ),

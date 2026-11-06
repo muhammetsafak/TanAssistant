@@ -10,7 +10,7 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tan_domain::{ActionItemId, EpochMs, SessionId, SessionStatus, TrackKind};
@@ -18,7 +18,10 @@ use tan_domain::{ActionItemId, EpochMs, SessionId, SessionStatus, TrackKind};
 use crate::error::RepositoryError;
 use crate::ports::{NoteRepository, SessionRepository};
 
-pub use export::{render_markdown, ExportSessionMarkdown, EXPORT_FILE_NAME};
+pub use export::{
+    render_markdown, resolve_export_destination, ExportDestination, ExportDestinationProblem,
+    ExportSessionMarkdown, EXPORT_FILE_NAME, FRAMES_DIR_SUFFIX,
+};
 pub use queries::{
     AudioTrackState, GetSessionDetail, ListSessions, NoteWithItems, Page, SearchSessions,
     SessionDetail, SessionFilter, SessionListItem, SessionPage, SessionSearchResult,
@@ -66,6 +69,13 @@ pub trait SessionFileStore: Send + Sync {
         content: &str,
     ) -> io::Result<PathBuf>;
 
+    /// Creates `dir` and its missing parents (a folder the user chose for an export).
+    fn create_export_dir(&self, dir: &Path) -> io::Result<()>;
+
+    /// Writes `content` to the absolute path `destination` (replacing the file) and never
+    /// leaves a half-written file. The parent folder must exist already.
+    fn write_export_to(&self, destination: &Path, content: &[u8]) -> io::Result<()>;
+
     /// Measures disk usage.
     fn measure_usage(&self) -> io::Result<StorageUsage>;
 }
@@ -95,6 +105,8 @@ pub enum SessionsError {
     NotFound(&'static str),
     /// The input was rejected.
     Invalid(String),
+    /// The export destination was rejected, for the typed reason.
+    ExportDestination(ExportDestinationProblem),
     /// The session is in a state that does not allow the operation.
     Busy(SessionStatus),
     /// A file operation failed.
@@ -108,6 +120,9 @@ impl fmt::Display for SessionsError {
         match self {
             Self::NotFound(entity) => write!(f, "{entity} not found"),
             Self::Invalid(why) => write!(f, "invalid input: {why}"),
+            Self::ExportDestination(problem) => {
+                write!(f, "invalid input: export destination: {problem}")
+            }
             Self::Busy(status) => write!(f, "the session cannot be changed while it is {status}"),
             // Details stay in `source()` for logs; the user-facing text is generic.
             Self::Files(_) => f.write_str("a file operation failed"),
