@@ -128,10 +128,14 @@
     border-bottom: 1px solid var(--color-border);
   }
 
+  .sidebar nav {
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+  }
+
   .sidebar__nav {
     flex-direction: row;
-    overflow-x: auto;
-    min-width: 0;
   }
 
   .sidebar__link {

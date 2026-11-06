@@ -216,6 +216,8 @@
 
 /* Tables: each table scrolls inside its own container, never the page. */
 .table-scroll {
+  /* Containing block for absolutely positioned .sr-only text, so it cannot widen the page. */
+  position: relative;
   overflow-x: auto;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);

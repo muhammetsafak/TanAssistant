@@ -37,7 +37,8 @@
 .cell-model {
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
-  overflow-wrap: anywhere;
+  /* break-word (unlike anywhere) keeps the column as wide as the longest word. */
+  overflow-wrap: break-word;
 }
 
 .cell-test {
