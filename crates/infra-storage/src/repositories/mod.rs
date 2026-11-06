@@ -2,6 +2,7 @@
 
 mod frames;
 mod notes;
+mod processing;
 mod providers;
 mod secrets;
 mod sessions;
@@ -20,6 +21,7 @@ use crate::db::DbError;
 
 pub use frames::SqliteFrameRepository;
 pub use notes::SqliteNoteRepository;
+pub use processing::{DataDirFiles, SqliteProcessingRepository};
 pub use providers::{SqliteProviderProfileRepository, SqliteTaskAssignmentRepository};
 pub use secrets::SqliteSecretMetadataRepository;
 pub use sessions::SqliteSessionRepository;

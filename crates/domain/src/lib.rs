@@ -80,6 +80,7 @@ pub mod ids;
 pub mod language;
 pub mod media;
 pub mod note;
+pub mod processing;
 pub mod provider;
 pub mod session;
 pub mod settings;
@@ -110,6 +111,9 @@ pub use ids::{ActionItemId, FrameId, NoteId, ProviderProfileId, SecretId, Sessio
 pub use language::{InvalidLanguageCode, LanguageCode, LanguageSetting, UiLanguage};
 pub use media::{AudioTrack, Frame, TrackKind};
 pub use note::{ActionItem, Note};
+pub use processing::{
+    ProcessingError, ProcessingJob, ProcessingJobRecord, ProcessingStep, StepState,
+};
 pub use provider::{ProviderKind, ProviderProfile, TaskAssignment, TaskKind};
 pub use session::{Session, SessionError, SessionKind, SessionRecord, SessionStatus};
 pub use settings::{AppSettings, SettingsError, SettingsPatch};

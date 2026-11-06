@@ -312,6 +312,40 @@ fn note_with_frame_refs_and_action_items_round_trips() {
 }
 
 #[test]
+fn replacing_a_sessions_note_leaves_exactly_the_new_note_and_is_atomic() {
+    let t = test_db();
+    with_session(&t, "s1");
+    with_session(&t, "s2");
+    let repo = SqliteNoteRepository::new(t.db.clone());
+    block_on(repo.save(&note("old-1", "s1", 1), &[item("a1", "old-1", "Eski")])).unwrap();
+    block_on(repo.save(&note("old-2", "s1", 2), &[])).unwrap();
+    block_on(repo.save(&note("other", "s2", 3), &[])).unwrap();
+
+    // A failing replacement (dangling frame reference) changes nothing.
+    let mut dangling = note("new", "s1", 10);
+    dangling.frame_refs = vec![FrameId::new("no-such-frame")];
+    assert!(block_on(repo.replace_for_session(&dangling, &[])).is_err());
+    assert!(block_on(repo.get(&NoteId::new("old-1"))).unwrap().is_some());
+    assert!(block_on(repo.get(&NoteId::new("old-2"))).unwrap().is_some());
+
+    let fresh = note("new", "s1", 10);
+    let items = vec![item("a2", "new", "Yeni")];
+    block_on(repo.replace_for_session(&fresh, &items)).unwrap();
+    assert_eq!(block_on(repo.get(&fresh.id)).unwrap(), Some(fresh.clone()));
+    assert_eq!(block_on(repo.list_action_items(&fresh.id)).unwrap(), items);
+    assert!(block_on(repo.get(&NoteId::new("old-1"))).unwrap().is_none());
+    assert!(block_on(repo.get(&NoteId::new("old-2"))).unwrap().is_none());
+    assert!(block_on(repo.list_action_items(&NoteId::new("old-1")))
+        .unwrap()
+        .is_empty());
+    assert!(block_on(repo.get(&NoteId::new("other"))).unwrap().is_some());
+
+    // Running it again with the same note id keeps it (an update, not a delete).
+    block_on(repo.replace_for_session(&fresh, &items)).unwrap();
+    assert_eq!(block_on(repo.get(&fresh.id)).unwrap(), Some(fresh));
+}
+
+#[test]
 fn action_items_can_be_toggled_edited_and_removed() {
     let t = test_db();
     with_session(&t, "s1");

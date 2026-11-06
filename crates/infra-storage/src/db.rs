@@ -86,6 +86,11 @@ const MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0002_provider_vision.sql"),
         down: include_str!("../migrations/0002_provider_vision.down.sql"),
     },
+    Migration {
+        version: 3,
+        up: include_str!("../migrations/0003_processing.sql"),
+        down: include_str!("../migrations/0003_processing.down.sql"),
+    },
 ];
 
 /// Newest schema version this build knows; derived from the migration list so the two cannot

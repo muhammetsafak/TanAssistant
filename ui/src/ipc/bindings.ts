@@ -94,10 +94,51 @@ export const commands = {
 	 *  remembered) and from the amount of speech in the tracks.
 	 */
 	estimateTranscription: (sessionId: string) => typedError<TranscriptionEstimateDto_Serialize, TranscriptionIpcError>(__TAURI_INVOKE("estimate_transcription", { sessionId })),
+	/**
+	 *  Processes a recorded session from scratch: transcript, frame descriptions and the
+	 *  structured note (summary, decisions, action items, open questions, key frames). Replaces an
+	 *  earlier note. Progress arrives as [`ProcessingProgressEvent`]s; the call returns when the
+	 *  run ends.
+	 */
+	processSession: (sessionId: string) => typedError<ProcessSummaryDto, ProcessingIpcError_Serialize>(__TAURI_INVOKE("process_session", { sessionId })),
+	/**  Continues a failed or cancelled run: finished steps are kept, the rest runs again. */
+	retryProcessing: (sessionId: string) => typedError<ProcessSummaryDto, ProcessingIpcError_Serialize>(__TAURI_INVOKE("retry_processing", { sessionId })),
+	/**
+	 *  Cancels the session's running run (its `process_session` call returns `cancelled`). Returns
+	 *  whether there was a run to cancel.
+	 */
+	cancelProcessing: (sessionId: string) => typedError<boolean, ProcessingIpcError_Serialize>(__TAURI_INVOKE("cancel_processing", { sessionId })),
+	/**  Whether a session is being processed and how far its job got. */
+	processingStatus: (sessionId: string) => typedError<ProcessingStatusDto_Serialize, ProcessingIpcError_Serialize>(__TAURI_INVOKE("processing_status", { sessionId })),
+	/**  Lists sessions, newest first, with an optional filter and page. */
+	listSessions: (filter: SessionFilterDto_Deserialize | null, page: PageDto_Deserialize | null) => typedError<SessionPageDto_Serialize, SessionsIpcError>(__TAURI_INVOKE("list_sessions", { filter, page })),
+	/**
+	 *  Full-text search over transcripts and notes (every word must match; prefixes count),
+	 *  grouped by session.
+	 */
+	searchSessions: (query: string) => typedError<SessionSearchResultDto_Serialize[], SessionsIpcError>(__TAURI_INVOKE("search_sessions", { query })),
+	/**  A session with its audio tracks, frames, transcript, note and processing job. */
+	getSessionDetail: (sessionId: string) => typedError<SessionDetailDto_Serialize, SessionsIpcError>(__TAURI_INVOKE("get_session_detail", { sessionId })),
+	/**  Marks an action item done or not done. */
+	toggleActionItem: (actionItemId: string, done: boolean) => typedError<null, SessionsIpcError>(__TAURI_INVOKE("toggle_action_item", { actionItemId, done })),
+	/**
+	 *  Exports the session's note, key frames and transcript as a Markdown file in the session
+	 *  folder (frame links are relative to it) and returns the file's absolute path.
+	 */
+	exportSessionMarkdown: (sessionId: string) => typedError<string, SessionsIpcError>(__TAURI_INVOKE("export_session_markdown", { sessionId })),
+	/**  How much disk Tan's data uses: total, audio, frames and whisper models. */
+	getStorageUsage: () => typedError<StorageUsageDto, SessionsIpcError>(__TAURI_INVOKE("get_storage_usage")),
+	/**
+	 *  Deletes a session with its files, transcript, frames, note and action items. Irreversible,
+	 *  so the caller must pass `confirm: true` (after asking the user); a session that is being
+	 *  recorded or processed is refused.
+	 */
+	deleteSession: (sessionId: string, confirm: boolean) => typedError<null, SessionsIpcError>(__TAURI_INVOKE("delete_session", { sessionId, confirm })),
 };
 
 /** Events */
 export const events = {
+	processingProgressEvent: makeEvent<ProcessingProgressEvent, ProcessingProgressEvent>("processing-progress-event"),
 	recordingProgressEvent: makeEvent<RecordingProgressEvent, RecordingProgressEvent>("recording-progress-event"),
 	recordingStateEvent: makeEvent<RecordingStateEvent, RecordingStateEvent>("recording-state-event"),
 	recordingWarningEvent: makeEvent<RecordingWarningEvent, RecordingWarningEvent>("recording-warning-event"),
@@ -106,6 +147,37 @@ export const events = {
 };
 
 /* Types */
+/**  A task from the note. */
+export type ActionItemDto = ActionItemDto_Serialize | ActionItemDto_Deserialize;
+
+/**  A task from the note. */
+export type ActionItemDto_Deserialize = {
+	/**  Identity (pass it to `toggle_action_item`). */
+	id: string,
+	/**  What has to be done. */
+	task: string,
+	/**  Who is responsible, when known. */
+	owner?: string | null,
+	/**  Due date at midnight UTC (milliseconds since the Unix epoch), when known. */
+	due?: number | null,
+	/**  Whether the user marked it done. */
+	done: boolean,
+};
+
+/**  A task from the note. */
+export type ActionItemDto_Serialize = {
+	/**  Identity (pass it to `toggle_action_item`). */
+	id: string,
+	/**  What has to be done. */
+	task: string,
+	/**  Who is responsible, when known. */
+	owner: string | null,
+	/**  Due date at midnight UTC (milliseconds since the Unix epoch), when known. */
+	due: number | null,
+	/**  Whether the user marked it done. */
+	done: boolean,
+};
+
 /**  A recording in progress. */
 export type ActiveRecordingDto = {
 	/**  The session being recorded. */
@@ -214,6 +286,37 @@ export type AudioDeviceDto = {
 	isDefault: boolean,
 };
 
+/**  An audio track of a session. */
+export type AudioTrackDto = AudioTrackDto_Serialize | AudioTrackDto_Deserialize;
+
+/**  An audio track of a session. */
+export type AudioTrackDto_Deserialize = {
+	/**  `microphone` or `system`. */
+	kind: string,
+	/**  Path relative to the session folder. */
+	path: string,
+	/**  Samples per second. */
+	sampleRate: number,
+	/**  Length in milliseconds. */
+	durationMs: number,
+	/**  When the retention policy deleted the file; `null` while it is kept. */
+	deletedAt?: number | null,
+};
+
+/**  An audio track of a session. */
+export type AudioTrackDto_Serialize = {
+	/**  `microphone` or `system`. */
+	kind: string,
+	/**  Path relative to the session folder. */
+	path: string,
+	/**  Samples per second. */
+	sampleRate: number,
+	/**  Length in milliseconds. */
+	durationMs: number,
+	/**  When the retention policy deleted the file; `null` while it is kept. */
+	deletedAt: number | null,
+};
+
 /**  What a provider can do. */
 export type CapabilitiesDto = {
 	/**  Text generation. */
@@ -269,6 +372,33 @@ export type ErrorCode =
 /**  Anything else; details are in the log. */
 "internal";
 
+/**  A stored screen frame. */
+export type FrameDto = FrameDto_Serialize | FrameDto_Deserialize;
+
+/**  A stored screen frame. */
+export type FrameDto_Deserialize = {
+	/**  Identity (note key frames refer to it). */
+	id: string,
+	/**  Offset from the session start, in milliseconds. */
+	timestampMs: number,
+	/**  Image path relative to the session folder (`sessionDir`). */
+	path: string,
+	/**  The vision model's description, when it ran. */
+	description?: string | null,
+};
+
+/**  A stored screen frame. */
+export type FrameDto_Serialize = {
+	/**  Identity (note key frames refer to it). */
+	id: string,
+	/**  Offset from the session start, in milliseconds. */
+	timestampMs: number,
+	/**  Image path relative to the session folder (`sessionDir`). */
+	path: string,
+	/**  The vision model's description, when it ran. */
+	description: string | null,
+};
+
 /**  Error returned to the UI. */
 export type IpcError = {
 	/**  Failure class. */
@@ -276,6 +406,257 @@ export type IpcError = {
 	/**  Human-readable, value-free description (English; the UI localises by `code`). */
 	message: string,
 };
+
+/**
+ *  A model its provider has announced it will switch off. The UI compares a profile's model
+ *  with `model` and warns before `shutdownDate`.
+ */
+export type ModelDeprecationDto = ModelDeprecationDto_Serialize | ModelDeprecationDto_Deserialize;
+
+/**
+ *  A model its provider has announced it will switch off. The UI compares a profile's model
+ *  with `model` and warns before `shutdownDate`.
+ */
+export type ModelDeprecationDto_Deserialize = {
+	/**  The model identifier, as a profile stores it (exact match). */
+	model: string,
+	/**  The day the provider shuts the model down, `YYYY-MM-DD`. */
+	shutdownDate: string,
+	/**  The model the provider recommends instead, when it names one. */
+	replacement?: string | null,
+};
+
+/**
+ *  A model its provider has announced it will switch off. The UI compares a profile's model
+ *  with `model` and warns before `shutdownDate`.
+ */
+export type ModelDeprecationDto_Serialize = {
+	/**  The model identifier, as a profile stores it (exact match). */
+	model: string,
+	/**  The day the provider shuts the model down, `YYYY-MM-DD`. */
+	shutdownDate: string,
+	/**  The model the provider recommends instead, when it names one. */
+	replacement: string | null,
+};
+
+/**  The generated note. */
+export type NoteDto = NoteDto_Serialize | NoteDto_Deserialize;
+
+/**  The generated note. */
+export type NoteDto_Deserialize = {
+	/**  Identity. */
+	id: string,
+	/**  Language the note was generated in. */
+	language: string,
+	/**  The summary. */
+	summary: string,
+	/**  Decisions taken. */
+	decisions: string[],
+	/**  Questions left open. */
+	openQuestions: string[],
+	/**  Ids of the key frames, in order (see `frames` of the detail). */
+	keyFrameIds: string[],
+	/**  When it was generated. */
+	createdAt: number | null,
+	/**  The tasks. */
+	actionItems: ActionItemDto_Deserialize[],
+};
+
+/**  The generated note. */
+export type NoteDto_Serialize = {
+	/**  Identity. */
+	id: string,
+	/**  Language the note was generated in. */
+	language: string,
+	/**  The summary. */
+	summary: string,
+	/**  Decisions taken. */
+	decisions: string[],
+	/**  Questions left open. */
+	openQuestions: string[],
+	/**  Ids of the key frames, in order (see `frames` of the detail). */
+	keyFrameIds: string[],
+	/**  When it was generated. */
+	createdAt: number | null,
+	/**  The tasks. */
+	actionItems: ActionItemDto_Serialize[],
+};
+
+/**  Which page of the list to return. */
+export type PageDto = PageDto_Serialize | PageDto_Deserialize;
+
+/**  Which page of the list to return. */
+export type PageDto_Deserialize = {
+	/**  Sessions to skip (default 0). */
+	offset?: number | null,
+	/**  Sessions to return (default 50, at most 200). */
+	limit?: number | null,
+};
+
+/**  Which page of the list to return. */
+export type PageDto_Serialize = {
+	/**  Sessions to skip (default 0). */
+	offset: number | null,
+	/**  Sessions to return (default 50, at most 200). */
+	limit: number | null,
+};
+
+/**  What a finished run produced. */
+export type ProcessSummaryDto = {
+	/**  The session. */
+	sessionId: string,
+	/**  The stored note. */
+	noteId: string,
+	/**  Decisions in the note. */
+	decisions: number,
+	/**  Action items in the note. */
+	actionItems: number,
+	/**  Frames the note refers to. */
+	keyFrames: number,
+	/**  Frames with a vision description. */
+	framesDescribed: number,
+	/**  Whether frame analysis was skipped because no vision model is assigned. */
+	framesSkipped: boolean,
+};
+
+/**  Machine-readable failure class of the processing commands. */
+export type ProcessingErrorCode = 
+/**  The input was rejected. */
+"validation" | 
+/**  The session does not exist. */
+"session_not_found" | 
+/**  The session is still being recorded. */
+"not_ready" | 
+/**  The session is already being processed. */
+"already_running" | 
+/**  The run was cancelled; `retry_processing` continues it. */
+"cancelled" | 
+/**  Transcription failed; see `transcriptionCode` for the reason. */
+"transcription_failed" | 
+/**  No AI provider is assigned to the summary task. */
+"no_chat_model" | 
+/**  The model's reply was not a valid note, even after a repair request. */
+"invalid_model_output" | 
+/**  The session has no transcript or screen content to write a note from. */
+"nothing_to_summarize" | 
+/**  The provider rejected the API key. */
+"provider_auth" | 
+/**  The provider is rate limiting. */
+"provider_rate_limited" | 
+/**  The provider did not answer in time. */
+"provider_timeout" | 
+/**  The provider refused the request. */
+"provider_invalid_request" | 
+/**  The provider cannot do what was asked. */
+"provider_unsupported" | 
+/**  The provider could not be reached. */
+"provider_network" | 
+/**  The provider answered with another error. */
+"provider_error" | 
+/**  The API key could not be read from the secret store. */
+"secret_unavailable" | 
+/**  Anything else; details are in the log. */
+"internal";
+
+/**  Error returned by the processing commands. */
+export type ProcessingIpcError = ProcessingIpcError_Serialize | ProcessingIpcError_Deserialize;
+
+/**  Error returned by the processing commands. */
+export type ProcessingIpcError_Deserialize = {
+	/**  Failure class. */
+	code: ProcessingErrorCode,
+	/**
+	 *  For `transcription_failed`: the transcription failure class (shared with
+	 *  `transcribe_session`), so the UI can reuse its messages.
+	 */
+	transcriptionCode?: TranscriptionErrorCode | null,
+	/**  Human-readable, key-free description (English; the UI localises by `code`). */
+	message: string,
+};
+
+/**  Error returned by the processing commands. */
+export type ProcessingIpcError_Serialize = {
+	/**  Failure class. */
+	code: ProcessingErrorCode,
+	/**
+	 *  For `transcription_failed`: the transcription failure class (shared with
+	 *  `transcribe_session`), so the UI can reuse its messages.
+	 */
+	transcriptionCode: TranscriptionErrorCode | null,
+	/**  Human-readable, key-free description (English; the UI localises by `code`). */
+	message: string,
+};
+
+/**  How far processing got for a session. */
+export type ProcessingJobDto = ProcessingJobDto_Serialize | ProcessingJobDto_Deserialize;
+
+/**  How far processing got for a session. */
+export type ProcessingJobDto_Deserialize = {
+	/**  The session. */
+	sessionId: string,
+	/**  The steps in execution order. */
+	steps: StepStatusDto_Deserialize[],
+	/**  When the job was created, milliseconds since the Unix epoch. */
+	createdAt: number | null,
+	/**  When a step last changed. */
+	updatedAt: number | null,
+	/**  When the last step finished; `null` while unfinished. */
+	finishedAt?: number | null,
+};
+
+/**  How far processing got for a session. */
+export type ProcessingJobDto_Serialize = {
+	/**  The session. */
+	sessionId: string,
+	/**  The steps in execution order. */
+	steps: StepStatusDto_Serialize[],
+	/**  When the job was created, milliseconds since the Unix epoch. */
+	createdAt: number | null,
+	/**  When a step last changed. */
+	updatedAt: number | null,
+	/**  When the last step finished; `null` while unfinished. */
+	finishedAt: number | null,
+};
+
+/**  Emitted as a processing run advances (when a step starts, as it works, when it ends). */
+export type ProcessingProgressEvent = {
+	/**  The session being processed. */
+	sessionId: string,
+	/**  The step being worked on. */
+	step: ProcessingStepDto,
+	/**  Progress inside the step, `0..=100`. */
+	stepPercent: number,
+	/**  Progress of the whole run, `0..=100`. */
+	percent: number,
+};
+
+/**  Whether a session is being processed and how far its job got. */
+export type ProcessingStatusDto = ProcessingStatusDto_Serialize | ProcessingStatusDto_Deserialize;
+
+/**  Whether a session is being processed and how far its job got. */
+export type ProcessingStatusDto_Deserialize = {
+	/**  Whether this application is processing the session right now. */
+	running: boolean,
+	/**  The job, if the session was ever processed. */
+	job?: ProcessingJobDto_Deserialize | null,
+};
+
+/**  Whether a session is being processed and how far its job got. */
+export type ProcessingStatusDto_Serialize = {
+	/**  Whether this application is processing the session right now. */
+	running: boolean,
+	/**  The job, if the session was ever processed. */
+	job: ProcessingJobDto_Serialize | null,
+};
+
+/**  A step of the pipeline. */
+export type ProcessingStepDto = 
+/**  Speech-to-text. */
+"transcribe" | 
+/**  Vision descriptions of the screen frames. */
+"describe_frames" | 
+/**  The structured note. */
+"synthesize";
 
 /**  Which AI provider. */
 export type ProviderKindDto = 
@@ -308,6 +689,11 @@ export type ProviderKindInfoDto_Deserialize = {
 	capabilities: CapabilitiesDto,
 	/**  Model suggestions. */
 	suggestedModels: SuggestedModelsDto_Deserialize,
+	/**
+	 *  Models of this provider that are scheduled for shutdown; the key is left out when there
+	 *  are none.
+	 */
+	deprecatedModels?: ModelDeprecationDto_Deserialize[],
 };
 
 /**  Static facts about a provider kind, to pre-fill the profile form. */
@@ -325,6 +711,11 @@ export type ProviderKindInfoDto_Serialize = {
 	capabilities: CapabilitiesDto,
 	/**  Model suggestions. */
 	suggestedModels: SuggestedModelsDto_Serialize,
+	/**
+	 *  Models of this provider that are scheduled for shutdown; the key is left out when there
+	 *  are none.
+	 */
+	deprecatedModels?: ModelDeprecationDto_Serialize[],
 };
 
 /**  A configured provider profile. */
@@ -555,6 +946,36 @@ export type ScreenUnavailableReasonDto =
  */
 "wayland_unsupported";
 
+/**  One search hit. */
+export type SearchHitDto = SearchHitDto_Serialize | SearchHitDto_Deserialize;
+
+/**  One search hit. */
+export type SearchHitDto_Deserialize = {
+	/**  What matched. */
+	source: SearchSourceDto,
+	/**  For transcript hits: where in the meeting, in milliseconds. */
+	startMs?: number | null,
+	/**  The beginning of the matching text. */
+	excerpt: string,
+};
+
+/**  One search hit. */
+export type SearchHitDto_Serialize = {
+	/**  What matched. */
+	source: SearchSourceDto,
+	/**  For transcript hits: where in the meeting, in milliseconds. */
+	startMs: number | null,
+	/**  The beginning of the matching text. */
+	excerpt: string,
+};
+
+/**  Where a search hit was found. */
+export type SearchSourceDto = 
+/**  A transcript segment. */
+"transcript" | 
+/**  The note (summary, decisions, open questions). */
+"note";
+
 /**  Which backend holds secret values. */
 export type SecretBackendDto = 
 /**  The OS vault. */
@@ -587,6 +1008,226 @@ export type SecretStoreStatusDto = {
 	locked: boolean,
 	/**  Whether a master password has been set (always false for the OS vault). */
 	masterPasswordSet: boolean,
+};
+
+/**  Everything the session screen shows. */
+export type SessionDetailDto = SessionDetailDto_Serialize | SessionDetailDto_Deserialize;
+
+/**  Everything the session screen shows. */
+export type SessionDetailDto_Deserialize = {
+	/**  The session. */
+	session: SessionDto_Deserialize,
+	/**  Absolute path of the session folder; frame and audio paths are relative to it. */
+	sessionDir: string,
+	/**  Its audio tracks. */
+	audioTracks: AudioTrackDto_Deserialize[],
+	/**  Its frames in time order. */
+	frames: FrameDto_Deserialize[],
+	/**  The transcript in time order. */
+	transcript: TranscriptLineDto_Deserialize[],
+	/**  The latest note, if one was generated. */
+	note?: NoteDto_Deserialize | null,
+	/**  The processing job, if the session was ever processed. */
+	job?: ProcessingJobDto_Deserialize | null,
+};
+
+/**  Everything the session screen shows. */
+export type SessionDetailDto_Serialize = {
+	/**  The session. */
+	session: SessionDto_Serialize,
+	/**  Absolute path of the session folder; frame and audio paths are relative to it. */
+	sessionDir: string,
+	/**  Its audio tracks. */
+	audioTracks: AudioTrackDto_Serialize[],
+	/**  Its frames in time order. */
+	frames: FrameDto_Serialize[],
+	/**  The transcript in time order. */
+	transcript: TranscriptLineDto_Serialize[],
+	/**  The latest note, if one was generated. */
+	note: NoteDto_Serialize | null,
+	/**  The processing job, if the session was ever processed. */
+	job: ProcessingJobDto_Serialize | null,
+};
+
+/**  A session as the UI lists it. */
+export type SessionDto = SessionDto_Serialize | SessionDto_Deserialize;
+
+/**  A session as the UI lists it. */
+export type SessionDto_Deserialize = {
+	/**  Identity. */
+	id: string,
+	/**  Title. */
+	title: string,
+	/**  What produced the session (`meeting`). */
+	kind: string,
+	/**  Lifecycle status. */
+	status: SessionStatusDto,
+	/**  When capture started, milliseconds since the Unix epoch. */
+	startedAt: number | null,
+	/**  When capture ended; `null` while recording. */
+	endedAt?: number | null,
+	/**  Length in milliseconds once capture has ended. */
+	durationMs?: number | null,
+	/**  Spoken language: `auto` or a language code. */
+	language: string,
+	/**  Language the note is generated in. */
+	noteLanguage: string,
+};
+
+/**  A session as the UI lists it. */
+export type SessionDto_Serialize = {
+	/**  Identity. */
+	id: string,
+	/**  Title. */
+	title: string,
+	/**  What produced the session (`meeting`). */
+	kind: string,
+	/**  Lifecycle status. */
+	status: SessionStatusDto,
+	/**  When capture started, milliseconds since the Unix epoch. */
+	startedAt: number | null,
+	/**  When capture ended; `null` while recording. */
+	endedAt: number | null,
+	/**  Length in milliseconds once capture has ended. */
+	durationMs: number | null,
+	/**  Spoken language: `auto` or a language code. */
+	language: string,
+	/**  Language the note is generated in. */
+	noteLanguage: string,
+};
+
+/**  Which sessions to list; every set field must match. */
+export type SessionFilterDto = SessionFilterDto_Serialize | SessionFilterDto_Deserialize;
+
+/**  Which sessions to list; every set field must match. */
+export type SessionFilterDto_Deserialize = {
+	/**  Only sessions in this status. */
+	status?: SessionStatusDto | null,
+	/**  Only sessions whose title contains this text (case-insensitive). */
+	titleContains?: string | null,
+	/**  Only sessions that started at or after this time (milliseconds since the Unix epoch). */
+	startedFrom?: number | null,
+	/**  Only sessions that started before this time. */
+	startedBefore?: number | null,
+};
+
+/**  Which sessions to list; every set field must match. */
+export type SessionFilterDto_Serialize = {
+	/**  Only sessions in this status. */
+	status: SessionStatusDto | null,
+	/**  Only sessions whose title contains this text (case-insensitive). */
+	titleContains: string | null,
+	/**  Only sessions that started at or after this time (milliseconds since the Unix epoch). */
+	startedFrom: number | null,
+	/**  Only sessions that started before this time. */
+	startedBefore: number | null,
+};
+
+/**  A session row of the list. */
+export type SessionListItemDto = SessionListItemDto_Serialize | SessionListItemDto_Deserialize;
+
+/**  A session row of the list. */
+export type SessionListItemDto_Deserialize = {
+	/**  The session. */
+	session: SessionDto_Deserialize,
+	/**  Whether a note has been generated. */
+	hasNote: boolean,
+	/**  Action items in the note. */
+	actionItemsTotal: number,
+	/**  Of those, the ones marked done. */
+	actionItemsDone: number,
+};
+
+/**  A session row of the list. */
+export type SessionListItemDto_Serialize = {
+	/**  The session. */
+	session: SessionDto_Serialize,
+	/**  Whether a note has been generated. */
+	hasNote: boolean,
+	/**  Action items in the note. */
+	actionItemsTotal: number,
+	/**  Of those, the ones marked done. */
+	actionItemsDone: number,
+};
+
+/**  One page of the session list. */
+export type SessionPageDto = SessionPageDto_Serialize | SessionPageDto_Deserialize;
+
+/**  One page of the session list. */
+export type SessionPageDto_Deserialize = {
+	/**  The sessions of this page, newest first. */
+	items: SessionListItemDto_Deserialize[],
+	/**  Sessions matching the filter across all pages. */
+	total: number,
+	/**  The offset that was applied. */
+	offset: number,
+	/**  The page size that was applied (at most 200). */
+	limit: number,
+};
+
+/**  One page of the session list. */
+export type SessionPageDto_Serialize = {
+	/**  The sessions of this page, newest first. */
+	items: SessionListItemDto_Serialize[],
+	/**  Sessions matching the filter across all pages. */
+	total: number,
+	/**  The offset that was applied. */
+	offset: number,
+	/**  The page size that was applied (at most 200). */
+	limit: number,
+};
+
+/**  A session with the hits that matched a search. */
+export type SessionSearchResultDto = SessionSearchResultDto_Serialize | SessionSearchResultDto_Deserialize;
+
+/**  A session with the hits that matched a search. */
+export type SessionSearchResultDto_Deserialize = {
+	/**  The session. */
+	session: SessionDto_Deserialize,
+	/**  Its matches, best first. */
+	hits: SearchHitDto_Deserialize[],
+};
+
+/**  A session with the hits that matched a search. */
+export type SessionSearchResultDto_Serialize = {
+	/**  The session. */
+	session: SessionDto_Serialize,
+	/**  Its matches, best first. */
+	hits: SearchHitDto_Serialize[],
+};
+
+/**  Where a session is in its lifecycle. */
+export type SessionStatusDto = 
+/**  Capture is running. */
+"recording" | 
+/**  Capture finished; nothing processed yet. */
+"recorded" | 
+/**  The pipeline is running. */
+"processing" | 
+/**  The pipeline finished. */
+"processed" | 
+/**  Capture or processing failed; processing can be retried. */
+"failed";
+
+/**  Machine-readable failure class of the session commands. */
+export type SessionsErrorCode = 
+/**  The input was rejected. */
+"validation" | 
+/**  The session (or action item) does not exist. */
+"not_found" | 
+/**  The session is being recorded or processed and cannot be changed now. */
+"busy" | 
+/**  A file operation failed; details are in the log. */
+"files_failed" | 
+/**  Anything else; details are in the log. */
+"internal";
+
+/**  Error returned by the session commands. */
+export type SessionsIpcError = {
+	/**  Failure class. */
+	code: SessionsErrorCode,
+	/**  Human-readable description (English; the UI localises by `code`). */
+	message: string,
 };
 
 /**  A partial settings update: only the fields that are present change. */
@@ -670,6 +1311,54 @@ export type StartRecordingOptionsDto_Serialize = {
 	microphoneDeviceId: string | null,
 	/**  Display to sample (an id from `list_displays`). */
 	displayId: string | null,
+};
+
+/**  Where a step stands. */
+export type StepStateDto = 
+/**  Not started. */
+"pending" | 
+/**  Running (or interrupted). */
+"running" | 
+/**  Finished. */
+"done" | 
+/**  Deliberately not run (no vision model assigned); counts as finished. */
+"skipped" | 
+/**  Stopped with an error; see the step's `error`. */
+"failed";
+
+/**  One step of a processing job. */
+export type StepStatusDto = StepStatusDto_Serialize | StepStatusDto_Deserialize;
+
+/**  One step of a processing job. */
+export type StepStatusDto_Deserialize = {
+	/**  The step. */
+	step: ProcessingStepDto,
+	/**  Its state. */
+	state: StepStateDto,
+	/**  Why it failed, for `failed`. */
+	error?: string | null,
+};
+
+/**  One step of a processing job. */
+export type StepStatusDto_Serialize = {
+	/**  The step. */
+	step: ProcessingStepDto,
+	/**  Its state. */
+	state: StepStateDto,
+	/**  Why it failed, for `failed`. */
+	error: string | null,
+};
+
+/**  Disk space used by Tan's data. */
+export type StorageUsageDto = {
+	/**  Everything under the data directory, in bytes. */
+	totalBytes: number | null,
+	/**  Audio files. */
+	audioBytes: number | null,
+	/**  Frame images. */
+	frameBytes: number | null,
+	/**  Downloaded whisper models. */
+	modelBytes: number | null,
 };
 
 /**  Suggested model identifiers of a provider (`null`: the provider cannot do that task). */
@@ -763,6 +1452,41 @@ export type TranscribeSummaryDto_Serialize = {
 	providerKind: ProviderKindDto | null,
 	/**  For a cloud engine: the profile that was used. */
 	profileId: string | null,
+};
+
+/**  One transcribed utterance. */
+export type TranscriptLineDto = TranscriptLineDto_Serialize | TranscriptLineDto_Deserialize;
+
+/**  One transcribed utterance. */
+export type TranscriptLineDto_Deserialize = {
+	/**  `microphone` or `system`. */
+	track: string,
+	/**  Start offset in milliseconds. */
+	startMs: number,
+	/**  End offset in milliseconds. */
+	endMs: number,
+	/**  Spoken language, when known. */
+	language?: string | null,
+	/**  The text, in the spoken language. */
+	text: string,
+	/**  `me`, `others` (the UI localises them) or another label. */
+	speaker?: string | null,
+};
+
+/**  One transcribed utterance. */
+export type TranscriptLineDto_Serialize = {
+	/**  `microphone` or `system`. */
+	track: string,
+	/**  Start offset in milliseconds. */
+	startMs: number,
+	/**  End offset in milliseconds. */
+	endMs: number,
+	/**  Spoken language, when known. */
+	language: string | null,
+	/**  The text, in the spoken language. */
+	text: string,
+	/**  `me`, `others` (the UI localises them) or another label. */
+	speaker: string | null,
 };
 
 /**  Which engine produced a transcript. */

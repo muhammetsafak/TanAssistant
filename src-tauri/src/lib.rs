@@ -6,6 +6,7 @@ pub mod state;
 pub mod tray;
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use specta_typescript::Typescript;
 use tan_domain::UiLanguage;
@@ -57,6 +58,17 @@ pub fn ipc_builder() -> Builder<tauri::Wry> {
             commands::transcription::delete_whisper_model,
             commands::transcription::transcribe_session,
             commands::transcription::estimate_transcription,
+            commands::processing::process_session,
+            commands::processing::retry_processing,
+            commands::processing::cancel_processing,
+            commands::processing::processing_status,
+            commands::sessions::list_sessions,
+            commands::sessions::search_sessions,
+            commands::sessions::get_session_detail,
+            commands::sessions::toggle_action_item,
+            commands::sessions::export_session_markdown,
+            commands::sessions::get_storage_usage,
+            commands::sessions::delete_session,
         ])
         .events(collect_events![
             commands::recording::RecordingProgressEvent,
@@ -64,6 +76,7 @@ pub fn ipc_builder() -> Builder<tauri::Wry> {
             commands::recording::RecordingWarningEvent,
             commands::transcription::WhisperModelDownloadEvent,
             commands::transcription::TranscriptionProgressEvent,
+            commands::processing::ProcessingProgressEvent,
         ])
 }
 
@@ -75,6 +88,35 @@ pub fn ipc_builder() -> Builder<tauri::Wry> {
 pub fn export_bindings(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     ipc_builder().export(Typescript::default(), path)?;
     Ok(())
+}
+
+/// How often the audio-retention policy runs after the run at startup.
+const RETENTION_INTERVAL: Duration = Duration::from_hours(24);
+
+/// Applies the audio-retention policy now and then once a day, on a background thread (it
+/// deletes files, which must not block the UI). The thread ends with the process.
+fn spawn_retention(retention: std::sync::Arc<state::Retention>) {
+    let spawned = std::thread::Builder::new()
+        .name("audio-retention".to_owned())
+        .spawn(move || loop {
+            match tauri::async_runtime::block_on(retention.execute()) {
+                Ok(report) if report.files_deleted > 0 || report.sessions_failed > 0 => {
+                    tracing::info!(
+                        sessions = report.sessions_cleaned,
+                        files = report.files_deleted,
+                        bytes = report.bytes_freed,
+                        failed = report.sessions_failed,
+                        "applied the audio retention policy"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => tracing::error!(%error, "cannot apply the audio retention policy"),
+            }
+            std::thread::sleep(RETENTION_INTERVAL);
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "cannot start the audio retention thread");
+    }
 }
 
 /// Set once a requested exit has waited for the running recording (so it exits only once).
@@ -129,9 +171,20 @@ pub fn run() {
                 Err(error) => tracing::error!(%error, "cannot recover interrupted recordings"),
             }
 
+            // A crash can also leave a session half processed: make it retryable.
+            match tauri::async_runtime::block_on(state.process_session.recover_interrupted()) {
+                Ok(0) => {}
+                Ok(settled) => {
+                    tracing::warn!(settled, "settled sessions whose processing was interrupted");
+                }
+                Err(error) => tracing::error!(%error, "cannot settle interrupted processing"),
+            }
+
             let ui_language = tauri::async_runtime::block_on(state.get_settings.execute())
                 .map_or(UiLanguage::Tr, |settings| settings.ui_language);
+            let retention = state.apply_retention.clone();
             app.manage(state);
+            spawn_retention(retention);
             // The tray is a convenience; the app works without it.
             if let Err(error) = tray::init(app.handle(), ui_language) {
                 tracing::warn!(%error, "cannot create the tray icon");

@@ -1,6 +1,6 @@
 //! `NoteRepository` over SQLite.
 
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tan_application::ports::NoteRepository;
 use tan_application::RepositoryError;
 use tan_domain::{ActionItem, ActionItemId, EpochMs, FrameId, Note, NoteId, SessionId};
@@ -85,6 +85,103 @@ fn searchable_text(note: &Note) -> String {
     text
 }
 
+/// Writes the note, its child rows, its action items and its search entry inside `tx`.
+fn write_note(
+    tx: &Transaction<'_>,
+    note: &Note,
+    action_items: &[ActionItem],
+) -> Result<(), DbError> {
+    let note_id = note.id.as_str();
+
+    tx.execute(
+        "INSERT INTO notes (id, session_id, language, summary, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (id) DO UPDATE SET
+             session_id = excluded.session_id,
+             language = excluded.language,
+             summary = excluded.summary,
+             created_at = excluded.created_at",
+        params![
+            note_id,
+            note.session_id.as_str(),
+            note.language.as_str(),
+            note.summary,
+            note.created_at.get(),
+        ],
+    )?;
+
+    tx.execute(
+        "DELETE FROM note_items WHERE note_id = ?1",
+        params![note_id],
+    )?;
+    for (kind, texts) in [
+        (KIND_DECISION, &note.decisions),
+        (KIND_OPEN_QUESTION, &note.open_questions),
+    ] {
+        for (position, text) in (0_i64..).zip(texts.iter()) {
+            tx.execute(
+                "INSERT INTO note_items (note_id, kind, position, text)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![note_id, kind, position, text],
+            )?;
+        }
+    }
+
+    tx.execute(
+        "DELETE FROM note_frame_refs WHERE note_id = ?1",
+        params![note_id],
+    )?;
+    for (position, frame_id) in (0_i64..).zip(note.frame_refs.iter()) {
+        tx.execute(
+            "INSERT INTO note_frame_refs (note_id, position, frame_id)
+             VALUES (?1, ?2, ?3)",
+            params![note_id, position, frame_id.as_str()],
+        )?;
+    }
+
+    tx.execute(
+        "DELETE FROM action_items WHERE note_id = ?1",
+        params![note_id],
+    )?;
+    for (position, item) in (0_i64..).zip(action_items.iter()) {
+        tx.execute(
+            "INSERT INTO action_items (id, note_id, position, task, owner, due, done)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                item.id.as_str(),
+                note_id,
+                position,
+                item.task,
+                item.owner,
+                item.due.map(EpochMs::get),
+                item.done,
+            ],
+        )?;
+    }
+
+    remove_ref_docs(tx, SOURCE_NOTE, note_id)?;
+    add_doc(
+        tx,
+        &note.session_id,
+        SOURCE_NOTE,
+        note_id,
+        None,
+        &searchable_text(note),
+    )?;
+    Ok(())
+}
+
+/// Rejects action items that belong to another note.
+fn check_items(note: &Note, action_items: &[ActionItem]) -> Result<(), RepositoryError> {
+    if let Some(stray) = action_items.iter().find(|item| item.note_id != note.id) {
+        return Err(RepositoryError::Invalid(format!(
+            "action item {} belongs to note {}, not {}",
+            stray.id, stray.note_id, note.id
+        )));
+    }
+    Ok(())
+}
+
 /// SQLite-backed [`NoteRepository`].
 #[derive(Debug, Clone)]
 pub struct SqliteNoteRepository {
@@ -101,92 +198,37 @@ impl SqliteNoteRepository {
 
 impl NoteRepository for SqliteNoteRepository {
     async fn save(&self, note: &Note, action_items: &[ActionItem]) -> Result<(), RepositoryError> {
-        if let Some(stray) = action_items.iter().find(|item| item.note_id != note.id) {
-            return Err(RepositoryError::Invalid(format!(
-                "action item {} belongs to note {}, not {}",
-                stray.id, stray.note_id, note.id
-            )));
-        }
+        check_items(note, action_items)?;
         self.db.with_conn(|conn| {
             let tx = conn.transaction()?;
-            let note_id = note.id.as_str();
+            write_note(&tx, note, action_items)?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
 
-            tx.execute(
-                "INSERT INTO notes (id, session_id, language, summary, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT (id) DO UPDATE SET
-                     session_id = excluded.session_id,
-                     language = excluded.language,
-                     summary = excluded.summary,
-                     created_at = excluded.created_at",
-                params![
-                    note_id,
-                    note.session_id.as_str(),
-                    note.language.as_str(),
-                    note.summary,
-                    note.created_at.get(),
-                ],
-            )?;
-
-            tx.execute(
-                "DELETE FROM note_items WHERE note_id = ?1",
-                params![note_id],
-            )?;
-            for (kind, texts) in [
-                (KIND_DECISION, &note.decisions),
-                (KIND_OPEN_QUESTION, &note.open_questions),
-            ] {
-                for (position, text) in (0_i64..).zip(texts.iter()) {
-                    tx.execute(
-                        "INSERT INTO note_items (note_id, kind, position, text)
-                         VALUES (?1, ?2, ?3, ?4)",
-                        params![note_id, kind, position, text],
-                    )?;
-                }
+    async fn replace_for_session(
+        &self,
+        note: &Note,
+        action_items: &[ActionItem],
+    ) -> Result<(), RepositoryError> {
+        check_items(note, action_items)?;
+        self.db.with_conn(|conn| {
+            let tx = conn.transaction()?;
+            let previous = {
+                let mut stmt =
+                    tx.prepare("SELECT id FROM notes WHERE session_id = ?1 AND id <> ?2")?;
+                let rows = stmt
+                    .query_map(params![note.session_id.as_str(), note.id.as_str()], |row| {
+                        row.get::<_, String>(0)
+                    })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for id in &previous {
+                remove_ref_docs(&tx, SOURCE_NOTE, id)?;
+                tx.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
             }
-
-            tx.execute(
-                "DELETE FROM note_frame_refs WHERE note_id = ?1",
-                params![note_id],
-            )?;
-            for (position, frame_id) in (0_i64..).zip(note.frame_refs.iter()) {
-                tx.execute(
-                    "INSERT INTO note_frame_refs (note_id, position, frame_id)
-                     VALUES (?1, ?2, ?3)",
-                    params![note_id, position, frame_id.as_str()],
-                )?;
-            }
-
-            tx.execute(
-                "DELETE FROM action_items WHERE note_id = ?1",
-                params![note_id],
-            )?;
-            for (position, item) in (0_i64..).zip(action_items.iter()) {
-                tx.execute(
-                    "INSERT INTO action_items (id, note_id, position, task, owner, due, done)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![
-                        item.id.as_str(),
-                        note_id,
-                        position,
-                        item.task,
-                        item.owner,
-                        item.due.map(EpochMs::get),
-                        item.done,
-                    ],
-                )?;
-            }
-
-            remove_ref_docs(&tx, SOURCE_NOTE, note_id)?;
-            add_doc(
-                &tx,
-                &note.session_id,
-                SOURCE_NOTE,
-                note_id,
-                None,
-                &searchable_text(note),
-            )?;
-
+            write_note(&tx, note, action_items)?;
             tx.commit()?;
             Ok(())
         })

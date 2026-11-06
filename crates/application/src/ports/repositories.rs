@@ -101,6 +101,14 @@ pub trait NoteRepository: Send + Sync {
         action_items: &[ActionItem],
     ) -> impl Future<Output = RepositoryResult<()>> + Send;
 
+    /// Saves `note` (as [`save`](Self::save) does) and removes every other note of the same
+    /// session, all in one transaction: afterwards the session has exactly this note.
+    fn replace_for_session(
+        &self,
+        note: &Note,
+        action_items: &[ActionItem],
+    ) -> impl Future<Output = RepositoryResult<()>> + Send;
+
     /// Loads one note.
     fn get(&self, id: &NoteId) -> impl Future<Output = RepositoryResult<Option<Note>>> + Send;
 

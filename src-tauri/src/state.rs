@@ -15,18 +15,27 @@ use tan_application::credentials::{
     UpsertVariable,
 };
 use tan_application::ports::{Clock, IdGenerator};
+use tan_application::processing::{ProcessPorts, ProcessSession, SessionTranscriber};
 use tan_application::recording::{RecordingEvents, RecordingPorts, RecordingService};
+use tan_application::sessions::{
+    ApplyRetention, DeleteSession, ExportSessionMarkdown, GetSessionDetail, GetStorageUsage,
+    ListSessions, SearchSessions, ToggleActionItem,
+};
 use tan_application::settings::{GetSettings, UpdateSettings};
-use tan_application::transcription::{TranscribePorts, TranscribeSession};
+use tan_application::transcription::{
+    TranscribePorts, TranscribeProgress, TranscribeResult, TranscribeSession, TranscribeSummary,
+};
 use tan_domain::EpochMs;
+use tan_domain::SessionId;
 use tan_infra_ai::AiProviderFactory;
 use tan_infra_capture::{DHasher, FileMediaStore, PlatformAudioCapture, PlatformScreenCapture};
 use tan_infra_secrets::{open_secret_store, SelectedSecretStore};
+use tan_infra_storage::repositories::{DataDirFiles, SqliteProcessingRepository};
 use tan_infra_storage::{
-    new_id, DataLayout, Database, SqliteFrameRepository, SqliteProviderProfileRepository,
-    SqliteSecretMetadataRepository, SqliteSessionRepository, SqliteSettingsRepository,
-    SqliteTaskAssignmentRepository, SqliteTranscriptRepository, SqliteVariableRepository,
-    StorageError,
+    new_id, DataLayout, Database, SqliteFrameRepository, SqliteNoteRepository,
+    SqliteProviderProfileRepository, SqliteSearchIndex, SqliteSecretMetadataRepository,
+    SqliteSessionRepository, SqliteSettingsRepository, SqliteTaskAssignmentRepository,
+    SqliteTranscriptRepository, SqliteVariableRepository, StorageError,
 };
 use tan_infra_transcription::{
     ModelError, ModelManager, SessionFiles, WavAudioChunker, WhisperTranscriber,
@@ -125,6 +134,43 @@ pub type Transcribe = TranscribeSession<
     SessionFiles,
 >;
 
+/// Lets the processing pipeline run the transcription use case (a port, so the pipeline never
+/// names the transcription adapters).
+pub struct SessionTranscription(pub Arc<Transcribe>);
+
+impl SessionTranscriber for SessionTranscription {
+    async fn transcribe(
+        &self,
+        session_id: &SessionId,
+        on_progress: &(dyn Fn(TranscribeProgress) + Send + Sync),
+    ) -> TranscribeResult<TranscribeSummary> {
+        self.0.execute_with_progress(session_id, on_progress).await
+    }
+}
+
+/// The processing pipeline wired to SQLite, the AI providers and the transcription use case.
+pub type Process = ProcessSession<
+    SqliteSessionRepository,
+    SqliteFrameRepository,
+    SqliteTranscriptRepository,
+    SqliteNoteRepository,
+    Assignments,
+    Profiles,
+    AiFactory,
+    SqliteProcessingRepository,
+    DataDirFiles,
+    SessionTranscription,
+>;
+
+/// The retention policy wired to SQLite and the data directory.
+pub type Retention = ApplyRetention<
+    SqliteSessionRepository,
+    SqliteProcessingRepository,
+    SqliteProcessingRepository,
+    DataDirFiles,
+    SqliteSettingsRepository,
+>;
+
 /// Everything the IPC commands need, built once at startup and managed by Tauri.
 pub struct AppState {
     /// Where application data lives.
@@ -184,7 +230,32 @@ pub struct AppState {
     pub whisper_models: Arc<ModelManager>,
     /// Transcribes a session: the assigned provider, or local whisper. The processing pipeline
     /// calls it too.
-    pub transcribe_session: Transcribe,
+    pub transcribe_session: Arc<Transcribe>,
+    /// Turns a recorded session into a structured note (transcript, frame descriptions, note).
+    pub process_session: Arc<Process>,
+    /// Lists sessions.
+    pub list_sessions: ListSessions<SqliteSessionRepository, SqliteNoteRepository>,
+    /// Full-text search over transcripts and notes.
+    pub search_sessions: SearchSessions<SqliteSessionRepository, SqliteSearchIndex>,
+    /// Loads a session with everything derived from it.
+    pub get_session_detail: GetSessionDetail<
+        SqliteSessionRepository,
+        SqliteFrameRepository,
+        SqliteTranscriptRepository,
+        SqliteNoteRepository,
+        SqliteProcessingRepository,
+        SqliteProcessingRepository,
+    >,
+    /// Marks an action item done or not done.
+    pub toggle_action_item: ToggleActionItem<SqliteNoteRepository>,
+    /// Writes the Markdown export of a session.
+    pub export_session: ExportSessionMarkdown<DataDirFiles>,
+    /// Deletes a session with its files.
+    pub delete_session: DeleteSession<SqliteSessionRepository, DataDirFiles>,
+    /// Measures disk usage (walks the data directory: run it on a blocking thread).
+    pub storage_usage: Arc<GetStorageUsage<DataDirFiles>>,
+    /// Deletes the audio of old processed sessions; run at startup and once a day.
+    pub apply_retention: Arc<Retention>,
 }
 
 /// The data directory: `TAN_DATA_DIR` if set, otherwise the OS application data directory.
@@ -198,6 +269,8 @@ pub fn resolve_layout() -> Result<DataLayout, StartupError> {
 impl AppState {
     /// Opens the database and the secret store under `layout` and wires every use case.
     /// `recording_events` receives the progress and state of recordings (the UI shell).
+    // The composition root is one long list of wiring by nature; splitting it would only hide it.
+    #[allow(clippy::too_many_lines)]
     pub fn build(
         layout: DataLayout,
         recording_events: Arc<dyn RecordingEvents>,
@@ -216,6 +289,10 @@ impl AppState {
         let sessions = Arc::new(SqliteSessionRepository::new(database.clone()));
         let frames = Arc::new(SqliteFrameRepository::new(database.clone()));
         let transcripts = Arc::new(SqliteTranscriptRepository::new(database.clone()));
+        let notes = Arc::new(SqliteNoteRepository::new(database.clone()));
+        let processing = Arc::new(SqliteProcessingRepository::new(database.clone()));
+        let search_index = Arc::new(SqliteSearchIndex::new(database.clone()));
+        let files = Arc::new(DataDirFiles::new(layout.clone()));
         let settings = Arc::new(SqliteSettingsRepository::new(database));
         let resolve_secret = Arc::new(ResolveSecret::new(metadata.clone(), secret_store.clone()));
         let ai_factory = Arc::new(
@@ -227,19 +304,41 @@ impl AppState {
         let whisper_models = Arc::new(
             ModelManager::new(layout.root().join("models")).map_err(StartupError::Models)?,
         );
-        let transcribe_session = TranscribeSession::new(TranscribePorts {
+        let transcribe_session = Arc::new(TranscribeSession::new(TranscribePorts {
             sessions: sessions.clone(),
-            transcripts,
+            transcripts: transcripts.clone(),
             assignments: assignments.clone(),
             profiles: profiles.clone(),
             factory: ai_factory.clone(),
             local: Arc::new(WhisperTranscriber::new(whisper_models.clone())),
             chunker: Arc::new(WavAudioChunker),
             files: Arc::new(SessionFiles::new(layout.sessions_dir())),
-        });
+        }));
+        let process_session = Arc::new(ProcessSession::new(ProcessPorts {
+            sessions: sessions.clone(),
+            frames: frames.clone(),
+            transcripts: transcripts.clone(),
+            notes: notes.clone(),
+            assignments: assignments.clone(),
+            profiles: profiles.clone(),
+            factory: ai_factory.clone(),
+            jobs: processing.clone(),
+            files: files.clone(),
+            transcriber: Arc::new(SessionTranscription(transcribe_session.clone())),
+            ids: ids.clone(),
+            clock: clock.clone(),
+        }));
+        let apply_retention = Arc::new(ApplyRetention::new(
+            sessions.clone(),
+            processing.clone(),
+            processing.clone(),
+            files.clone(),
+            settings.clone(),
+            clock.clone(),
+        ));
         let recording = Arc::new(RecordingService::new(
-            sessions,
-            frames,
+            sessions.clone(),
+            frames.clone(),
             settings.clone(),
             RecordingPorts {
                 audio: audio_capture.clone(),
@@ -290,6 +389,22 @@ impl AppState {
             screen_capture,
             whisper_models,
             transcribe_session,
+            process_session,
+            list_sessions: ListSessions::new(sessions.clone(), notes.clone()),
+            search_sessions: SearchSessions::new(sessions.clone(), search_index),
+            get_session_detail: GetSessionDetail::new(
+                sessions.clone(),
+                frames,
+                transcripts,
+                notes.clone(),
+                processing.clone(),
+                processing,
+            ),
+            toggle_action_item: ToggleActionItem::new(notes),
+            export_session: ExportSessionMarkdown::new(files.clone()),
+            delete_session: DeleteSession::new(sessions, files.clone()),
+            storage_usage: Arc::new(GetStorageUsage::new(files)),
+            apply_retention,
         })
     }
 }

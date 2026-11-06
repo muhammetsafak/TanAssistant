@@ -2,7 +2,9 @@
 
 pub mod ai;
 pub mod credentials;
+pub mod processing;
 pub mod recording;
+pub mod sessions;
 pub mod settings;
 pub mod transcription;
 
