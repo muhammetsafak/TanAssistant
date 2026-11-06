@@ -131,8 +131,12 @@ jobs:
             echo "$(cygpath -w "${sdk%/}")\\Bin" >> "$GITHUB_PATH"
           fi
 
+      # The deployment target of the bundle (`minimumSystemVersion`; the Tauri CLI exports it):
+      # below the SDK version ggml-metal's `@available` guards need the clang runtime.
       - name: Whisper GPU backend, Metal (macOS)
         if: runner.os == 'macOS'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
         run: cargo build -p tan-app --features metal
 
       # ggml's Vulkan shader generator nests CMake projects so deep that the default target
