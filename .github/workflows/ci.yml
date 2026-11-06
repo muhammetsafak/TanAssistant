@@ -44,6 +44,7 @@ jobs:
             pkg-config \
             libasound2-dev \
             libclang-dev \
+            cmake \
             libxcb1-dev \
             libxrandr-dev \
             libdbus-1-dev \
@@ -51,7 +52,29 @@ jobs:
             libwayland-dev \
             libegl-dev \
             libgbm-dev \
-            libdrm-dev
+            libdrm-dev \
+            libvulkan-dev \
+            glslc \
+            spirv-headers
+
+      # whisper-rs builds whisper.cpp with CMake and generates its bindings with bindgen, which
+      # needs libclang. Linux gets both from apt (above); macOS has libclang in the Xcode
+      # command line tools; Windows needs LLVM for libclang.
+      - name: Install CMake (macOS)
+        if: runner.os == 'macOS'
+        run: command -v cmake >/dev/null || brew install cmake
+
+      - name: Install LLVM (libclang) and CMake (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if [ ! -f "/c/Program Files/LLVM/bin/libclang.dll" ]; then
+            choco install llvm --no-progress -y
+          fi
+          if ! command -v cmake >/dev/null; then
+            choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' --no-progress -y
+            echo 'C:\Program Files\CMake\bin' >> "$GITHUB_PATH"
+          fi
+          echo 'LIBCLANG_PATH=C:\Program Files\LLVM\bin' >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -76,6 +99,41 @@ jobs:
 
       - name: Capture spike examples (build)
         run: cargo build -p tan-infra-capture --examples
+
+      # GPU backends of local whisper (ADR-011): the distribution builds enable Vulkan on
+      # Windows and Linux and Metal on macOS. The runners have no GPU, so the application is
+      # built (which links the backend into a real binary) but not run on one. Vulkan also gets
+      # its regression test: with the driver hidden from the loader the build must fall back
+      # to the CPU instead of aborting; that test needs no GPU.
+      - name: Install the Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if [ -z "${VULKAN_SDK:-}" ] || [ ! -d "$(cygpath -u "$VULKAN_SDK")" ]; then
+            choco install vulkan-sdk --no-progress -y
+            sdk="$(ls -d /c/VulkanSDK/*/ | sort -V | tail -1)"
+            echo "VULKAN_SDK=$(cygpath -w "${sdk%/}")" >> "$GITHUB_ENV"
+            echo "$(cygpath -w "${sdk%/}")\\Bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Whisper GPU backend, Vulkan (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build -p tan-app --features vulkan
+          cargo test -p tan-infra-transcription --features vulkan --test vulkan_fallback
+
+      - name: Whisper GPU backend, Metal (macOS)
+        if: runner.os == 'macOS'
+        run: cargo build -p tan-app --features metal
+
+      # ggml's Vulkan shader generator nests CMake projects so deep that the default target
+      # directory exceeds MAX_PATH (260 characters) on Windows: build into a short one.
+      - name: Whisper GPU backend, Vulkan (Windows)
+        if: runner.os == 'Windows'
+        env:
+          CARGO_TARGET_DIR: 'C:\t'
+        run: |
+          cargo build -p tan-app --features vulkan
+          cargo test -p tan-infra-transcription --features vulkan --test vulkan_fallback
 
       - name: Dependency direction
         run: bash scripts/check-deps.sh

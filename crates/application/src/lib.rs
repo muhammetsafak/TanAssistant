@@ -6,6 +6,7 @@ pub mod error;
 pub mod ports;
 pub mod recording;
 pub mod settings;
+pub mod transcription;
 
 pub use error::{RepositoryError, RepositoryResult};
 

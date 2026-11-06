@@ -51,11 +51,19 @@ pub fn ipc_builder() -> Builder<tauri::Wry> {
             commands::recording::recording_capabilities,
             commands::recording::list_audio_devices,
             commands::recording::list_displays,
+            commands::transcription::list_whisper_models,
+            commands::transcription::download_whisper_model,
+            commands::transcription::select_whisper_model,
+            commands::transcription::delete_whisper_model,
+            commands::transcription::transcribe_session,
+            commands::transcription::estimate_transcription,
         ])
         .events(collect_events![
             commands::recording::RecordingProgressEvent,
             commands::recording::RecordingStateEvent,
             commands::recording::RecordingWarningEvent,
+            commands::transcription::WhisperModelDownloadEvent,
+            commands::transcription::TranscriptionProgressEvent,
         ])
 }
 

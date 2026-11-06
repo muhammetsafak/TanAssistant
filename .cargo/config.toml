@@ -1,0 +1,26 @@
+# Build environment for whisper.cpp, which `whisper-rs-sys` compiles with CMake. These apply to
+# every build of the workspace (the variables are ignored by everything else) and can be
+# overridden from the shell: an environment variable that is already set wins.
+
+[env]
+# Portable CPU code. With `GGML_NATIVE` on, ggml compiles for the CPU of the *build machine*
+# (`/arch:AVX512` on an AVX-512 box, `-march=native` / `-mcpu=native` elsewhere), and a package
+# built that way dies with "illegal instruction" on an older CPU (ADR-011). Off, ggml targets a
+# fixed baseline: AVX2 + FMA + F16C on x86_64 (every CPU since 2013), plain ARMv8 on Apple
+# Silicon and aarch64 Linux.
+GGML_NATIVE = "OFF"
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+GGML_AVX512 = "OFF"
+
+# Optimisation. The `cmake` crate replaces CMake's own `CMAKE_<LANG>_FLAGS_<CONFIG>` with the
+# flags `cc` derives, and it drops every `-O` switch from those, so whisper.cpp was built with
+# no optimisation at all in the MSVC release build (about 10x slower; measured in the Phase 09
+# review). `whisper-rs-sys` passes `CMAKE_*` environment variables on as definitions, which
+# restores the switch. `-O2` and `-DNDEBUG` mean the same to MSVC, gcc and clang.
+CMAKE_C_FLAGS_RELEASE = "-O2 -DNDEBUG"
+CMAKE_CXX_FLAGS_RELEASE = "-O2 -DNDEBUG"
+CMAKE_C_FLAGS_RELWITHDEBINFO = "-O2 -DNDEBUG"
+CMAKE_CXX_FLAGS_RELWITHDEBINFO = "-O2 -DNDEBUG"

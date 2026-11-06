@@ -35,5 +35,18 @@ specta = "=2.0.0-rc.26"
 specta-typescript = "=0.0.13"
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 
+[dev-dependencies]
+# The end-to-end transcription test writes WAV tracks and uses a temporary data directory.
+hound = "3.5"
+tempfile.workspace = true
+
+[features]
+# GPU backends of local whisper (ADR-011); a build with one uses the GPU when the machine has
+# one and falls back to the CPU. Distribution builds: `vulkan` on Windows and Linux, `metal`
+# on macOS. On Windows the Vulkan build needs a short CARGO_TARGET_DIR (see README).
+vulkan = ["tan-infra-transcription/vulkan"]
+metal = ["tan-infra-transcription/metal"]
+cuda = ["tan-infra-transcription/cuda"]
+
 [lints]
 workspace = true

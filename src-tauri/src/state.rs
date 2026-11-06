@@ -17,6 +17,7 @@ use tan_application::credentials::{
 use tan_application::ports::{Clock, IdGenerator};
 use tan_application::recording::{RecordingEvents, RecordingPorts, RecordingService};
 use tan_application::settings::{GetSettings, UpdateSettings};
+use tan_application::transcription::{TranscribePorts, TranscribeSession};
 use tan_domain::EpochMs;
 use tan_infra_ai::AiProviderFactory;
 use tan_infra_capture::{DHasher, FileMediaStore, PlatformAudioCapture, PlatformScreenCapture};
@@ -24,7 +25,11 @@ use tan_infra_secrets::{open_secret_store, SelectedSecretStore};
 use tan_infra_storage::{
     new_id, DataLayout, Database, SqliteFrameRepository, SqliteProviderProfileRepository,
     SqliteSecretMetadataRepository, SqliteSessionRepository, SqliteSettingsRepository,
-    SqliteTaskAssignmentRepository, SqliteVariableRepository, StorageError,
+    SqliteTaskAssignmentRepository, SqliteTranscriptRepository, SqliteVariableRepository,
+    StorageError,
+};
+use tan_infra_transcription::{
+    ModelError, ModelManager, SessionFiles, WavAudioChunker, WhisperTranscriber,
 };
 
 /// Environment variable that overrides the data directory (development, tests, portable use).
@@ -66,6 +71,8 @@ pub enum StartupError {
     SecretStore(tan_application::ports::SecretStoreError),
     /// The HTTP client for the AI providers could not be created.
     AiClient(tan_application::ports::AiError),
+    /// The whisper model manager could not be created.
+    Models(ModelError),
 }
 
 impl fmt::Display for StartupError {
@@ -79,6 +86,7 @@ impl fmt::Display for StartupError {
             Self::Database(e) => write!(f, "cannot open the database: {e}"),
             Self::SecretStore(e) => write!(f, "cannot set up the secret store: {e}"),
             Self::AiClient(e) => write!(f, "cannot set up the AI client: {e}"),
+            Self::Models(e) => write!(f, "cannot set up the whisper models: {e}"),
         }
     }
 }
@@ -91,6 +99,7 @@ impl Error for StartupError {
             Self::Database(e) => Some(e),
             Self::SecretStore(e) => Some(e),
             Self::AiClient(e) => Some(e),
+            Self::Models(e) => Some(e),
         }
     }
 }
@@ -103,6 +112,18 @@ type AiFactory = AiProviderFactory<Metadata, SelectedSecretStore>;
 /// The recording use case wired to the SQLite repositories.
 pub type Recording =
     RecordingService<SqliteSessionRepository, SqliteFrameRepository, SqliteSettingsRepository>;
+
+/// The transcription use case wired to SQLite, local whisper and the AI providers.
+pub type Transcribe = TranscribeSession<
+    SqliteSessionRepository,
+    SqliteTranscriptRepository,
+    Assignments,
+    Profiles,
+    AiFactory,
+    WhisperTranscriber,
+    WavAudioChunker,
+    SessionFiles,
+>;
 
 /// Everything the IPC commands need, built once at startup and managed by Tauri.
 pub struct AppState {
@@ -159,6 +180,11 @@ pub struct AppState {
     pub audio_capture: Arc<PlatformAudioCapture>,
     /// Lists displays for the recording options.
     pub screen_capture: Arc<PlatformScreenCapture>,
+    /// The whisper model files (`<data>/models/`).
+    pub whisper_models: Arc<ModelManager>,
+    /// Transcribes a session: the assigned provider, or local whisper. The processing pipeline
+    /// calls it too.
+    pub transcribe_session: Transcribe,
 }
 
 /// The data directory: `TAN_DATA_DIR` if set, otherwise the OS application data directory.
@@ -189,6 +215,7 @@ impl AppState {
         let assignments = Arc::new(SqliteTaskAssignmentRepository::new(database.clone()));
         let sessions = Arc::new(SqliteSessionRepository::new(database.clone()));
         let frames = Arc::new(SqliteFrameRepository::new(database.clone()));
+        let transcripts = Arc::new(SqliteTranscriptRepository::new(database.clone()));
         let settings = Arc::new(SqliteSettingsRepository::new(database));
         let resolve_secret = Arc::new(ResolveSecret::new(metadata.clone(), secret_store.clone()));
         let ai_factory = Arc::new(
@@ -197,6 +224,19 @@ impl AppState {
 
         let audio_capture = Arc::new(PlatformAudioCapture);
         let screen_capture = Arc::new(PlatformScreenCapture);
+        let whisper_models = Arc::new(
+            ModelManager::new(layout.root().join("models")).map_err(StartupError::Models)?,
+        );
+        let transcribe_session = TranscribeSession::new(TranscribePorts {
+            sessions: sessions.clone(),
+            transcripts,
+            assignments: assignments.clone(),
+            profiles: profiles.clone(),
+            factory: ai_factory.clone(),
+            local: Arc::new(WhisperTranscriber::new(whisper_models.clone())),
+            chunker: Arc::new(WavAudioChunker),
+            files: Arc::new(SessionFiles::new(layout.sessions_dir())),
+        });
         let recording = Arc::new(RecordingService::new(
             sessions,
             frames,
@@ -248,6 +288,8 @@ impl AppState {
             recording,
             audio_capture,
             screen_capture,
+            whisper_models,
+            transcribe_session,
         })
     }
 }

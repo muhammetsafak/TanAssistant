@@ -67,6 +67,33 @@ export const commands = {
 	listAudioDevices: () => typedError<AudioDeviceDto[], RecordingIpcError>(__TAURI_INVOKE("list_audio_devices")),
 	/**  Lists the capturable displays. */
 	listDisplays: () => typedError<DisplayDto[], RecordingIpcError>(__TAURI_INVOKE("list_displays")),
+	/**  Lists the whisper models Tan can download, best choice first, with their state on disk. */
+	listWhisperModels: () => typedError<WhisperModelDto[], TranscriptionIpcError>(__TAURI_INVOKE("list_whisper_models")),
+	/**
+	 *  Downloads a whisper model and verifies its checksum. Progress arrives as
+	 *  [`WhisperModelDownloadEvent`]s; an interrupted download resumes when called again.
+	 */
+	downloadWhisperModel: (modelId: string) => typedError<WhisperModelDto, TranscriptionIpcError>(__TAURI_INVOKE("download_whisper_model", { modelId })),
+	/**  Chooses which installed whisper model local transcription uses. */
+	selectWhisperModel: (modelId: string) => typedError<null, TranscriptionIpcError>(__TAURI_INVOKE("select_whisper_model", { modelId })),
+	/**
+	 *  Deletes a whisper model (and any partial download of it). Returns whether anything was
+	 *  removed.
+	 */
+	deleteWhisperModel: (modelId: string) => typedError<boolean, TranscriptionIpcError>(__TAURI_INVOKE("delete_whisper_model", { modelId })),
+	/**
+	 *  Transcribes the audio tracks of a session with the provider assigned to the transcription
+	 *  task, or local whisper when none is assigned, and stores the transcript. This can take
+	 *  minutes for a long recording; the processing pipeline calls the same use case.
+	 */
+	transcribeSession: (sessionId: string) => typedError<TranscribeSummaryDto_Serialize, TranscriptionIpcError>(__TAURI_INVOKE("transcribe_session", { sessionId })),
+	/**
+	 *  Forecasts how long `transcribe_session` would take for a session: the assigned provider
+	 *  gets no time (it depends on the service); local whisper is forecast from a short
+	 *  calibration run on the selected model (the first call takes a few seconds, the result is
+	 *  remembered) and from the amount of speech in the tracks.
+	 */
+	estimateTranscription: (sessionId: string) => typedError<TranscriptionEstimateDto_Serialize, TranscriptionIpcError>(__TAURI_INVOKE("estimate_transcription", { sessionId })),
 };
 
 /** Events */
@@ -74,6 +101,8 @@ export const events = {
 	recordingProgressEvent: makeEvent<RecordingProgressEvent, RecordingProgressEvent>("recording-progress-event"),
 	recordingStateEvent: makeEvent<RecordingStateEvent, RecordingStateEvent>("recording-state-event"),
 	recordingWarningEvent: makeEvent<RecordingWarningEvent, RecordingWarningEvent>("recording-warning-event"),
+	transcriptionProgressEvent: makeEvent<TranscriptionProgressEvent_Serialize, TranscriptionProgressEvent_Deserialize>("transcription-progress-event"),
+	whisperModelDownloadEvent: makeEvent<WhisperModelDownloadEvent, WhisperModelDownloadEvent>("whisper-model-download-event"),
 };
 
 /* Types */
@@ -705,6 +734,163 @@ export type TrackSummaryDto = {
 	streamIssues: number,
 };
 
+/**  What a finished transcription produced. */
+export type TranscribeSummaryDto = TranscribeSummaryDto_Serialize | TranscribeSummaryDto_Deserialize;
+
+/**  What a finished transcription produced. */
+export type TranscribeSummaryDto_Deserialize = {
+	/**  The session. */
+	sessionId: string,
+	/**  Segments stored. */
+	segmentCount: number,
+	/**  The engine that was used. */
+	engine: TranscriptionEngineDto,
+	/**  For a cloud engine: which provider. */
+	providerKind?: ProviderKindDto | null,
+	/**  For a cloud engine: the profile that was used. */
+	profileId?: string | null,
+};
+
+/**  What a finished transcription produced. */
+export type TranscribeSummaryDto_Serialize = {
+	/**  The session. */
+	sessionId: string,
+	/**  Segments stored. */
+	segmentCount: number,
+	/**  The engine that was used. */
+	engine: TranscriptionEngineDto,
+	/**  For a cloud engine: which provider. */
+	providerKind: ProviderKindDto | null,
+	/**  For a cloud engine: the profile that was used. */
+	profileId: string | null,
+};
+
+/**  Which engine produced a transcript. */
+export type TranscriptionEngineDto = 
+/**  Local whisper (the default). */
+"local_whisper" | 
+/**  A cloud provider the user assigned. */
+"provider";
+
+/**  Machine-readable failure class of the transcription commands. */
+export type TranscriptionErrorCode = 
+/**  The input was rejected. */
+"validation" | 
+/**  The whisper model id is not in the catalog. */
+"unknown_model" | 
+/**  The model is being downloaded or deleted right now. */
+"model_busy" | 
+/**  The model is not installed (it cannot be selected). */
+"model_not_installed" | 
+/**  The download failed (network or server); retrying resumes it. */
+"download_failed" | 
+/**  The downloaded file failed its checksum and was deleted. */
+"checksum_mismatch" | 
+/**  The session does not exist. */
+"session_not_found" | 
+/**  The session has no audio track. */
+"no_audio" | 
+/**  Local whisper is in use but no model is installed. */
+"local_model_missing" | 
+/**  An audio file is missing or unreadable. */
+"audio_unreadable" | 
+/**  The local engine failed. */
+"engine_failed" | 
+/**  The provider rejected the API key. */
+"provider_auth" | 
+/**  The provider is rate limiting. */
+"provider_rate_limited" | 
+/**  The provider did not answer in time. */
+"provider_timeout" | 
+/**  The provider refused the request. */
+"provider_invalid_request" | 
+/**  The provider does not offer transcription. */
+"provider_unsupported" | 
+/**  The provider could not be reached. */
+"provider_network" | 
+/**  The provider answered with another error. */
+"provider_error" | 
+/**  The API key could not be read from the secret store. */
+"secret_unavailable" | 
+/**  Anything else; details are in the log. */
+"internal";
+
+/**  A forecast of how long transcribing a session will take. */
+export type TranscriptionEstimateDto = TranscriptionEstimateDto_Serialize | TranscriptionEstimateDto_Deserialize;
+
+/**  A forecast of how long transcribing a session will take. */
+export type TranscriptionEstimateDto_Deserialize = {
+	/**  The engine that would be used. */
+	engine: TranscriptionEngineDto,
+	/**  For a cloud engine: which provider. */
+	providerKind?: ProviderKindDto | null,
+	/**  Estimated seconds; `null` for a cloud provider (it depends on the service). */
+	estimatedSeconds?: number | null,
+	/**
+	 *  What does the work: `cpu`, `vulkan (<device>)`, `metal`, `cuda` or `cloud`. A forecast
+	 *  on `cpu` is where the UI offers to switch to a cloud provider.
+	 */
+	backend: string,
+	/**  Total audio of the session, in seconds. */
+	audioSeconds: number,
+	/**  Speech in it after silence is skipped, in seconds (local engine only). */
+	speechSeconds?: number | null,
+};
+
+/**  A forecast of how long transcribing a session will take. */
+export type TranscriptionEstimateDto_Serialize = {
+	/**  The engine that would be used. */
+	engine: TranscriptionEngineDto,
+	/**  For a cloud engine: which provider. */
+	providerKind: ProviderKindDto | null,
+	/**  Estimated seconds; `null` for a cloud provider (it depends on the service). */
+	estimatedSeconds: number | null,
+	/**
+	 *  What does the work: `cpu`, `vulkan (<device>)`, `metal`, `cuda` or `cloud`. A forecast
+	 *  on `cpu` is where the UI offers to switch to a cloud provider.
+	 */
+	backend: string,
+	/**  Total audio of the session, in seconds. */
+	audioSeconds: number,
+	/**  Speech in it after silence is skipped, in seconds (local engine only). */
+	speechSeconds: number | null,
+};
+
+/**  Error returned by the transcription commands. */
+export type TranscriptionIpcError = {
+	/**  Failure class. */
+	code: TranscriptionErrorCode,
+	/**  Human-readable, key-free description (English; the UI localises by `code`). */
+	message: string,
+};
+
+/**  Emitted before each track of a transcription starts and when it is done. */
+export type TranscriptionProgressEvent = TranscriptionProgressEvent_Serialize | TranscriptionProgressEvent_Deserialize;
+
+/**  Emitted before each track of a transcription starts and when it is done. */
+export type TranscriptionProgressEvent_Deserialize = {
+	/**  The session being transcribed. */
+	sessionId: string,
+	/**  The track being started (`microphone` or `system`); `null` when everything is done. */
+	track?: string | null,
+	/**  Tracks finished so far. */
+	tracksDone: number,
+	/**  Tracks in the session. */
+	tracksTotal: number,
+};
+
+/**  Emitted before each track of a transcription starts and when it is done. */
+export type TranscriptionProgressEvent_Serialize = {
+	/**  The session being transcribed. */
+	sessionId: string,
+	/**  The track being started (`microphone` or `system`); `null` when everything is done. */
+	track: string | null,
+	/**  Tracks finished so far. */
+	tracksDone: number,
+	/**  Tracks in the session. */
+	tracksTotal: number,
+};
+
 /**  Language of the application UI. */
 export type UiLanguageDto = 
 /**  Turkish. */
@@ -815,6 +1001,36 @@ export type VariableDto = {
 	value: string,
 	/**  What it is for. */
 	description: string,
+};
+
+/**  Emitted while a model downloads (about five times a second, plus at the start and end). */
+export type WhisperModelDownloadEvent = {
+	/**  The model being downloaded. */
+	modelId: string,
+	/**  Bytes on disk so far. */
+	downloaded: number,
+	/**  Total size of the model. */
+	total: number,
+};
+
+/**  A downloadable whisper model and its state on disk. */
+export type WhisperModelDto = {
+	/**  Stable identifier, used by the other commands. */
+	id: string,
+	/**  Name shown to the user. */
+	displayName: string,
+	/**  Size of the model file in bytes. */
+	sizeBytes: number,
+	/**  Quantization of the weights (`q5_0`, `q8_0`, ...). */
+	quantization: string,
+	/**  The recommended default for Turkish. */
+	recommended: boolean,
+	/**  Whether the verified model is installed. */
+	installed: boolean,
+	/**  Whether local transcription uses this model. */
+	selected: boolean,
+	/**  Bytes of an interrupted download waiting to be resumed (0 when none). */
+	partialBytes: number,
 };
 
 /* Tauri Specta runtime */

@@ -7,6 +7,31 @@ publish.workspace = true
 [dependencies]
 tan-application.workspace = true
 tan-domain.workspace = true
+whisper-rs = { version = "0.16", features = ["tracing_backend"] }
+rubato = "5"
+hound = "3.5"
+sha2 = "0.11"
+reqwest.workspace = true
+tokio = { workspace = true, features = ["rt", "fs", "io-util"] }
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+default = []
+# GPU backends (ADR-011). A build with one uses the GPU when the machine has one and falls back
+# to the CPU otherwise. Distribution builds: `vulkan` on Windows and Linux, `metal` on macOS.
+cuda = ["whisper-rs/cuda"]
+metal = ["whisper-rs/metal"]
+# `raw-api` exposes the C bindings: the Vulkan probe calls `ggml_backend_vk_reg` (whisper.rs).
+vulkan = ["whisper-rs/vulkan", "whisper-rs/raw-api"]
+# Tests that need a downloaded whisper model (`TAN_WHISPER_MODEL=<path to a ggml .bin>`).
+model-tests = []
+
+[dev-dependencies]
+tempfile.workspace = true
+wiremock.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
