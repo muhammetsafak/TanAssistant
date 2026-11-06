@@ -6,8 +6,13 @@
 //! ([`LocalTranscriber`]) is used. The audio helpers behind [`AudioChunker`] and
 //! [`SessionAudioFiles`] are ports too, so this crate never touches a file or a codec.
 //!
+//! A cloud provider never gets a whole recording: [`chunking`] cuts each track at the pauses
+//! the speech map reports into short pieces, sends them a few at a time (retrying a piece that
+//! failed for a transient reason) and puts the segments back on the recording's timeline.
+//!
 //! Every error type here is safe to show to the user: none carries an API key.
 
+mod chunking;
 mod session;
 
 use std::error::Error;
@@ -21,6 +26,7 @@ use tan_domain::{ProviderKind, ProviderProfileId, SessionId, TrackKind};
 use crate::error::RepositoryError;
 use crate::ports::{AiError, TranscriptionModel};
 
+pub use chunking::{is_transient, plan_chunks, ChunkSettings, RetryPolicy};
 pub use session::{merge_tracks, TranscribePorts, TranscribeSession};
 
 /// Speaker label of the microphone track (the user). The UI localises it.
@@ -30,9 +36,14 @@ pub const SPEAKER_OTHERS: &str = "others";
 
 /// Longest audio piece sent to a cloud provider, in milliseconds.
 ///
-/// Pieces are 16 kHz mono 16-bit WAV (about 1.9 MB per minute), so six minutes stay far below
-/// the smallest upload cap among the providers (Gemini, about 14 MB inline).
-pub const CLOUD_CHUNK_MS: u64 = 6 * 60 * 1_000;
+/// Short pieces keep every upload far below the smallest cap among the providers (`OpenAI` 25 MB,
+/// Gemini about 14 MB inline) whatever the codec does, give a model that returns no timestamps
+/// a useful granularity (one segment per piece) and bound the work lost when one piece fails.
+pub const CLOUD_CHUNK_MS: u64 = 30_000;
+
+/// Largest encoded piece the use case will upload, in bytes: the smallest provider cap (Gemini's
+/// inline limit, 14 MB) so a piece that passes goes to every provider.
+pub const CLOUD_UPLOAD_LIMIT_BYTES: usize = 14 * 1024 * 1024;
 
 /// Whisper transcribes in windows of this length, whatever they hold (a shorter piece is padded
 /// to it), so its running time is per window, not per second of audio.
@@ -68,22 +79,68 @@ impl fmt::Display for AudioPrepError {
 
 impl Error for AudioPrepError {}
 
-/// Splits long recordings into pieces a cloud provider accepts.
+/// Where the speech is in a recording, as the voice-activity detector sees it. All times are
+/// milliseconds from the start of the file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeechMap {
+    /// Length of the recording.
+    pub duration_ms: u64,
+    /// Stretches that hold speech (padded and bridged by the detector), in time order. Silence
+    /// is everything between them.
+    pub regions: Vec<AudioSpan>,
+    /// Loudness (RMS) of consecutive windows of the whole recording; used to cut inside a
+    /// stretch of speech that is longer than a piece, at its quietest moment.
+    pub energies: Vec<f32>,
+    /// Length of one window of `energies`.
+    pub energy_window_ms: u64,
+}
+
+/// How a piece is encoded for upload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadFormat {
+    /// The adapter's preferred compressed format (small, lossless where it can be).
+    Compressed,
+    /// Plain 16 kHz mono 16-bit WAV: bigger (about 1 MB for a 30-second piece) but accepted by
+    /// every provider. The fallback when a provider refuses the compressed format.
+    Wav,
+}
+
+/// A piece of audio ready to upload.
+#[derive(Clone, PartialEq, Eq)]
+pub struct EncodedAudio {
+    /// File name including the extension (providers sniff the format from it).
+    pub file_name: String,
+    /// MIME type, e.g. `audio/flac`.
+    pub mime_type: String,
+    /// The encoded file.
+    pub data: Vec<u8>,
+}
+
+impl fmt::Debug for EncodedAudio {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EncodedAudio")
+            .field("file_name", &self.file_name)
+            .field("mime_type", &self.mime_type)
+            .field("bytes", &self.data.len())
+            .finish()
+    }
+}
+
+/// Prepares recordings for a cloud provider: finds the speech and encodes pieces of it.
 pub trait AudioChunker: Send + Sync {
-    /// Plans the pieces of the file: spans of at most `max_chunk_ms`, cut at quiet moments so
-    /// words are not split. A short file yields one span covering all of it.
-    fn plan(
+    /// Runs voice-activity detection over the whole file.
+    fn speech_map(
         &self,
         audio: &Path,
-        max_chunk_ms: u64,
-    ) -> impl Future<Output = Result<Vec<AudioSpan>, AudioPrepError>> + Send;
+    ) -> impl Future<Output = Result<SpeechMap, AudioPrepError>> + Send;
 
-    /// The span as a 16 kHz mono 16-bit WAV file.
-    fn load_wav(
+    /// The span as a 16 kHz mono file in the requested format.
+    fn encode(
         &self,
         audio: &Path,
         span: AudioSpan,
-    ) -> impl Future<Output = Result<Vec<u8>, AudioPrepError>> + Send;
+        format: UploadFormat,
+    ) -> impl Future<Output = Result<EncodedAudio, AudioPrepError>> + Send;
 }
 
 /// Resolves a stored track path (relative to the session directory) to a file on disk.
@@ -135,6 +192,18 @@ pub struct TranscribeProgress {
     pub tracks_done: usize,
     /// Tracks in the session.
     pub tracks_total: usize,
+}
+
+/// Where the pieces of one track stand while a cloud provider transcribes it. Sent when the
+/// pieces are planned and after each one finishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkProgress {
+    /// The track being transcribed.
+    pub track: TrackKind,
+    /// Pieces finished.
+    pub chunks_done: usize,
+    /// Pieces in the track.
+    pub chunks_total: usize,
 }
 
 /// A forecast of how long transcribing a session will take.

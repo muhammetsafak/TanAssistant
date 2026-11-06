@@ -99,7 +99,10 @@ impl TranscriptionModel for OpenAiClient {
                 "the audio is larger than 25 MB; split it into shorter chunks".to_owned(),
             ));
         }
-        // Only whisper-1 returns segment timestamps; the newer models answer with text only.
+        // Checked against the API reference (2026-11-06): `verbose_json` and
+        // `timestamp_granularities[]` exist for `whisper-1` only; `gpt-transcribe` and the
+        // `gpt-4o-*-transcribe` models accept `json` (text, no timestamps), so they get a single
+        // segment per request and the caller supplies the timing by sending short pieces.
         let with_segments = self.config.model.starts_with("whisper");
         // `gpt-transcribe` takes `languages[]` (and must not get `language` as well); whisper-1
         // and the older models take a single `language`.
@@ -297,8 +300,15 @@ struct TranscriptionResponse {
     #[serde(default)]
     text: String,
     language: Option<String>,
+    /// `gpt-transcribe` names the detected languages here instead of `language`.
+    languages: Option<Vec<WireLanguage>>,
     duration: Option<f64>,
     segments: Option<Vec<WireSegment>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireLanguage {
+    code: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -326,11 +336,18 @@ impl TranscriptionResponse {
         duration_hint_ms: Option<u64>,
     ) -> Vec<TranscriptSegmentDto> {
         // verbose_json names the language in English ("turkish"); only a short code parses.
-        let language = requested.or_else(|| {
-            self.language
-                .as_deref()
-                .and_then(|l| LanguageCode::new(l).ok())
-        });
+        let language = requested
+            .or_else(|| {
+                self.languages
+                    .as_deref()
+                    .and_then(<[WireLanguage]>::first)
+                    .and_then(|l| LanguageCode::new(&l.code).ok())
+            })
+            .or_else(|| {
+                self.language
+                    .as_deref()
+                    .and_then(|l| LanguageCode::new(l).ok())
+            });
         let segments: Vec<TranscriptSegmentDto> = self
             .segments
             .unwrap_or_default()

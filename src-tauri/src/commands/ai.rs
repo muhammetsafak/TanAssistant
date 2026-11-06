@@ -16,7 +16,7 @@ use tan_application::ports::{requires_api_key, AiError, Capabilities};
 use tan_domain::{
     ProviderKind, ProviderProfile, ProviderProfileId, SecretId, TaskAssignment, TaskKind,
 };
-use tan_infra_ai::defaults::{default_base_url, suggested_models};
+use tan_infra_ai::defaults::{default_base_url, deprecated_models, suggested_models};
 use tauri::State;
 
 use crate::state::AppState;
@@ -246,6 +246,19 @@ pub struct SuggestedModelsDto {
     pub transcription: Option<String>,
 }
 
+/// A model its provider has announced it will switch off. The UI compares a profile's model
+/// with `model` and warns before `shutdownDate`.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDeprecationDto {
+    /// The model identifier, as a profile stores it (exact match).
+    pub model: String,
+    /// The day the provider shuts the model down, `YYYY-MM-DD`.
+    pub shutdown_date: String,
+    /// The model the provider recommends instead, when it names one.
+    pub replacement: Option<String>,
+}
+
 /// Static facts about a provider kind, to pre-fill the profile form.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -261,6 +274,11 @@ pub struct ProviderKindInfoDto {
     pub capabilities: CapabilitiesDto,
     /// Model suggestions.
     pub suggested_models: SuggestedModelsDto,
+    /// Models of this provider that are scheduled for shutdown; the key is left out when there
+    /// are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[specta(optional)]
+    pub deprecated_models: Vec<ModelDeprecationDto>,
 }
 
 /// Machine-readable failure class of the AI commands.
@@ -428,6 +446,14 @@ pub fn list_provider_kinds() -> Vec<ProviderKindInfoDto> {
                     vision: models.vision.map(str::to_owned),
                     transcription: models.transcription.map(str::to_owned),
                 },
+                deprecated_models: deprecated_models(kind)
+                    .iter()
+                    .map(|notice| ModelDeprecationDto {
+                        model: notice.model.to_owned(),
+                        shutdown_date: notice.shutdown_date.to_owned(),
+                        replacement: notice.replacement.map(str::to_owned),
+                    })
+                    .collect(),
             }
         })
         .collect()
@@ -473,4 +499,30 @@ pub async fn clear_task_assignment(
 ) -> Result<(), AiIpcError> {
     state.clear_task_assignment.execute(task.into()).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{list_provider_kinds, ProviderKindDto};
+
+    #[test]
+    fn openai_reports_its_scheduled_shutdowns_and_the_others_none() {
+        let kinds = list_provider_kinds();
+        for info in &kinds {
+            if matches!(info.kind, ProviderKindDto::OpenAi) {
+                let whisper = info
+                    .deprecated_models
+                    .iter()
+                    .find(|d| d.model == "whisper-1")
+                    .expect("whisper-1 is scheduled for shutdown");
+                assert_eq!(whisper.shutdown_date, "2027-02-26");
+                assert_eq!(whisper.replacement.as_deref(), Some("gpt-transcribe"));
+                // The suggested model is one that stays.
+                let suggested = info.suggested_models.transcription.as_deref().unwrap();
+                assert!(info.deprecated_models.iter().all(|d| d.model != suggested));
+            } else {
+                assert!(info.deprecated_models.is_empty());
+            }
+        }
+    }
 }

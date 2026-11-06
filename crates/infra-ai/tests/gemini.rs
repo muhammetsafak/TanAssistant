@@ -297,3 +297,39 @@ async fn a_cut_off_transcript_is_an_error() {
         Err(AiError::Provider { .. })
     ));
 }
+
+#[tokio::test]
+async fn a_compressed_flac_piece_is_sent_inline_with_its_own_mime_type() {
+    let server = MockServer::start().await;
+    let reply = json!({
+        "segments": [{ "start": "00:01", "end": "00:05", "text": "Merhaba." }],
+    });
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({
+            "contents": [{ "parts": [
+                { "inlineData": { "mimeType": "audio/flac", "data": b64(b"fLaC\x01\x02") } },
+            ]}],
+        })))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(generation(&reply.to_string(), "STOP")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let request = TranscriptionRequest {
+        audio: AudioSource::Bytes {
+            file_name: "audio.flac".to_owned(),
+            mime_type: "audio/flac".to_owned(),
+            data: b"fLaC\x01\x02".to_vec(),
+        },
+        language: None,
+        duration_ms: Some(30_000),
+        prompt: None,
+    };
+    let segments = client(&server, "gemini-x")
+        .transcribe(request)
+        .await
+        .unwrap();
+    // Times are relative to the piece; the use case shifts them onto the recording.
+    assert_eq!((segments[0].start_ms, segments[0].end_ms), (1_000, 5_000));
+}

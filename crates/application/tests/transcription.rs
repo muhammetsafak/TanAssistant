@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_executor::block_on;
@@ -16,9 +17,10 @@ use tan_application::ports::{
     VisionModel, VisionRequest,
 };
 use tan_application::transcription::{
-    merge_tracks, AudioChunker, AudioPrepError, AudioSpan, LocalEngineStatus, LocalSpeed,
-    LocalTranscriber, SessionAudioFiles, TranscribeError, TranscribePorts, TranscribeProgress,
-    TranscribeSession, TranscriptionEngine, CLOUD_CHUNK_MS, SPEAKER_ME, SPEAKER_OTHERS,
+    merge_tracks, AudioChunker, AudioPrepError, AudioSpan, ChunkProgress, ChunkSettings,
+    EncodedAudio, LocalEngineStatus, LocalSpeed, LocalTranscriber, RetryPolicy, SessionAudioFiles,
+    SpeechMap, TranscribeError, TranscribePorts, TranscribeProgress, TranscribeSession,
+    TranscriptionEngine, UploadFormat, SPEAKER_ME, SPEAKER_OTHERS,
 };
 use tan_application::{RepositoryError, RepositoryResult};
 use tan_domain::{
@@ -151,6 +153,27 @@ impl TaskAssignmentRepository for MemConfig {
 struct EngineState {
     requests: Mutex<Vec<TranscriptionRequest>>,
     answers: Mutex<Vec<AiResult<Vec<TranscriptSegmentDto>>>>,
+    in_flight: AtomicUsize,
+    max_in_flight: AtomicUsize,
+}
+
+/// Returns `Pending` once, so other requests get to start before this one finishes.
+struct YieldOnce(bool);
+
+impl std::future::Future for YieldOnce {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<()> {
+        if self.0 {
+            return std::task::Poll::Ready(());
+        }
+        self.0 = true;
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    }
 }
 
 #[derive(Clone, Default)]
@@ -168,6 +191,10 @@ impl FakeEngine {
     fn requests(&self) -> Vec<TranscriptionRequest> {
         self.state.requests.lock().unwrap().clone()
     }
+
+    fn max_in_flight(&self) -> usize {
+        self.state.max_in_flight.load(Ordering::SeqCst)
+    }
 }
 
 impl TranscriptionModel for FakeEngine {
@@ -176,12 +203,19 @@ impl TranscriptionModel for FakeEngine {
         request: TranscriptionRequest,
     ) -> AiResult<Vec<TranscriptSegmentDto>> {
         self.state.requests.lock().unwrap().push(request);
-        let mut answers = self.state.answers.lock().unwrap();
-        if answers.is_empty() {
-            Ok(Vec::new())
-        } else {
-            answers.remove(0)
-        }
+        let answer = {
+            let mut answers = self.state.answers.lock().unwrap();
+            if answers.is_empty() {
+                Ok(Vec::new())
+            } else {
+                answers.remove(0)
+            }
+        };
+        let now = self.state.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.state.max_in_flight.fetch_max(now, Ordering::SeqCst);
+        YieldOnce(false).await;
+        self.state.in_flight.fetch_sub(1, Ordering::SeqCst);
+        answer
     }
 }
 
@@ -261,23 +295,38 @@ impl ProviderFactory for FakeFactory {
     }
 }
 
-/// Plans two 6-minute-style pieces for any file longer than nothing; loads a tagged blob.
+/// Reports the configured spans as the speech of any file; encodes a tagged blob.
 struct FakeChunker {
     spans: Vec<AudioSpan>,
+    speech_maps: Arc<AtomicUsize>,
 }
 
 impl AudioChunker for FakeChunker {
-    async fn plan(
-        &self,
-        _audio: &Path,
-        max_chunk_ms: u64,
-    ) -> Result<Vec<AudioSpan>, AudioPrepError> {
-        assert_eq!(max_chunk_ms, CLOUD_CHUNK_MS);
-        Ok(self.spans.clone())
+    async fn speech_map(&self, _audio: &Path) -> Result<SpeechMap, AudioPrepError> {
+        self.speech_maps.fetch_add(1, Ordering::SeqCst);
+        Ok(SpeechMap {
+            duration_ms: self.spans.last().map_or(0, |s| s.end_ms),
+            regions: self.spans.clone(),
+            energies: Vec::new(),
+            energy_window_ms: 30,
+        })
     }
 
-    async fn load_wav(&self, audio: &Path, span: AudioSpan) -> Result<Vec<u8>, AudioPrepError> {
-        Ok(format!("{}@{}", audio.display(), span.start_ms).into_bytes())
+    async fn encode(
+        &self,
+        audio: &Path,
+        span: AudioSpan,
+        format: UploadFormat,
+    ) -> Result<EncodedAudio, AudioPrepError> {
+        let (file_name, mime_type) = match format {
+            UploadFormat::Compressed => ("audio.flac", "audio/flac"),
+            UploadFormat::Wav => ("audio.wav", "audio/wav"),
+        };
+        Ok(EncodedAudio {
+            file_name: file_name.to_owned(),
+            mime_type: mime_type.to_owned(),
+            data: format!("{}@{}", audio.display(), span.start_ms).into_bytes(),
+        })
     }
 }
 
@@ -307,6 +356,7 @@ struct Rig {
     transcripts: Arc<MemTranscripts>,
     local: FakeEngine,
     cloud: FakeEngine,
+    speech_maps: Arc<AtomicUsize>,
 }
 
 fn session(id: &str, language: LanguageSetting) -> Session {
@@ -348,6 +398,7 @@ struct RigBuilder {
     profiles: Vec<ProviderProfile>,
     assignment: Option<TaskAssignment>,
     spans: Vec<AudioSpan>,
+    chunking: ChunkSettings,
 }
 
 impl RigBuilder {
@@ -368,8 +419,15 @@ impl RigBuilder {
             assignment: None,
             spans: vec![AudioSpan {
                 start_ms: 0,
-                end_ms: 60_000,
+                end_ms: 25_000,
             }],
+            chunking: ChunkSettings {
+                retry: RetryPolicy {
+                    base_delay: std::time::Duration::ZERO,
+                    ..RetryPolicy::default()
+                },
+                ..ChunkSettings::default()
+            },
         }
     }
 
@@ -399,6 +457,7 @@ impl RigBuilder {
             profiles: self.profiles,
             assignment: self.assignment,
         });
+        let speech_maps = Arc::new(AtomicUsize::new(0));
         let subject = TranscribeSession::new(TranscribePorts {
             sessions: Arc::new(MemSessions {
                 sessions: self.sessions,
@@ -412,14 +471,19 @@ impl RigBuilder {
                 engine: local.clone(),
                 status: self.local_status,
             }),
-            chunker: Arc::new(FakeChunker { spans: self.spans }),
+            chunker: Arc::new(FakeChunker {
+                spans: self.spans,
+                speech_maps: speech_maps.clone(),
+            }),
             files: Arc::new(FakeFiles),
         });
+        let subject = subject.with_chunking(self.chunking);
         Rig {
             subject,
             transcripts,
             local,
             cloud,
+            speech_maps,
         }
     }
 }
@@ -507,8 +571,8 @@ fn an_assigned_provider_is_used_instead_of_local_whisper() {
     let requests = rig.cloud.requests();
     assert_eq!(requests.len(), 2);
     assert!(
-        matches!(&requests[0].audio, AudioSource::Bytes { mime_type, .. } if mime_type == "audio/wav"),
-        "providers get an uploadable WAV, not a path"
+        matches!(&requests[0].audio, AudioSource::Bytes { mime_type, .. } if mime_type == "audio/flac"),
+        "providers get an uploadable compressed piece, not a path"
     );
 }
 
@@ -519,11 +583,11 @@ fn long_audio_is_uploaded_in_pieces_and_shifted_back_onto_the_file_timeline() {
     builder.spans = vec![
         AudioSpan {
             start_ms: 0,
-            end_ms: 360_000,
+            end_ms: 20_000,
         },
         AudioSpan {
             start_ms: 360_000,
-            end_ms: 500_000,
+            end_ms: 380_000,
         },
     ];
     builder.cloud_answers = vec![
@@ -544,7 +608,7 @@ fn long_audio_is_uploaded_in_pieces_and_shifted_back_onto_the_file_timeline() {
         .iter()
         .map(|r| r.duration_ms.unwrap())
         .collect();
-    assert_eq!(durations, [360_000, 140_000]);
+    assert_eq!(durations, [20_000, 20_000]);
 }
 
 #[test]
@@ -778,4 +842,368 @@ fn merge_is_deterministic_when_segments_start_together() {
     ]);
     let texts: Vec<_> = merged.iter().map(|s| s.text.as_str()).collect();
     assert_eq!(texts, ["short", "mic", "system"]);
+}
+
+// ---- cloud transcription in pieces -----------------------------------------------------------
+
+fn span(start_ms: u64, end_ms: u64) -> AudioSpan {
+    AudioSpan { start_ms, end_ms }
+}
+
+/// A microphone-only session whose speech is `spans`, sent `concurrency` pieces at a time.
+fn pieces_rig(spans: &[AudioSpan], concurrency: usize) -> RigBuilder {
+    let mut builder = RigBuilder::new().assign(ProviderKind::OpenAi);
+    builder.tracks = vec![track("s1", TrackKind::Microphone)];
+    builder.spans = spans.to_vec();
+    builder.chunking.concurrency = concurrency;
+    builder
+}
+
+/// The start offset each request's tagged blob names, in request order.
+fn request_offsets(engine: &FakeEngine) -> Vec<u64> {
+    engine
+        .requests()
+        .iter()
+        .map(|request| match &request.audio {
+            AudioSource::Bytes { data, .. } => String::from_utf8_lossy(data)
+                .rsplit('@')
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap(),
+            AudioSource::Path(_) => panic!("a piece must be uploaded as bytes"),
+        })
+        .collect()
+}
+
+fn stored_times(rig: &Rig) -> Vec<(u64, u64)> {
+    rig.transcripts
+        .get_now("s1")
+        .unwrap()
+        .iter()
+        .map(|s| (s.start_ms, s.end_ms))
+        .collect()
+}
+
+#[test]
+fn a_model_without_timestamps_gives_each_piece_one_segment_at_the_pieces_own_time() {
+    let spans = [
+        span(0, 20_000),
+        span(40_000, 50_000),
+        span(100_000, 130_000),
+    ];
+    let mut builder = pieces_rig(&spans, 3);
+    // What the adapters answer without timestamps: one segment over the piece (0..length).
+    builder.cloud_answers = vec![
+        Ok(vec![dto(0, 20_000, "first")]),
+        Ok(vec![dto(0, 10_000, "second")]),
+        Ok(vec![dto(0, 30_000, "third")]),
+    ];
+    let rig = builder.build();
+
+    block_on(rig.subject.execute(&SessionId::new("s1"))).unwrap();
+
+    assert_eq!(
+        stored_times(&rig),
+        [(0, 20_000), (40_000, 50_000), (100_000, 130_000)]
+    );
+    let lengths: Vec<_> = rig
+        .cloud
+        .requests()
+        .iter()
+        .map(|r| r.duration_ms.unwrap())
+        .collect();
+    assert_eq!(lengths, [20_000, 10_000, 30_000]);
+    assert_eq!(request_offsets(&rig.cloud), [0, 40_000, 100_000]);
+}
+
+#[test]
+fn a_model_with_segment_times_is_shifted_by_each_pieces_offset_and_stays_monotonic() {
+    let spans = [span(0, 20_000), span(40_000, 60_000), span(90_000, 110_000)];
+    let mut builder = pieces_rig(&spans, 3);
+    builder.cloud_answers = vec![
+        // Out of order, and the last one overruns the piece: it is clamped to it.
+        Ok(vec![
+            dto(10_000, 15_000, "b"),
+            dto(0, 9_000, "a"),
+            dto(15_000, 99_000, "c"),
+        ]),
+        Ok(vec![dto(1_000, 2_000, "d"), dto(2_000, 19_000, "e")]),
+        Ok(vec![dto(0, 5_000, "f")]),
+    ];
+    let rig = builder.build();
+
+    block_on(rig.subject.execute(&SessionId::new("s1"))).unwrap();
+
+    let stored = rig.transcripts.get_now("s1").unwrap();
+    let texts: Vec<_> = stored.iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(texts, ["a", "b", "c", "d", "e", "f"]);
+    assert_eq!(
+        stored_times(&rig),
+        [
+            (0, 9_000),
+            (10_000, 15_000),
+            (15_000, 20_000),
+            (41_000, 42_000),
+            (42_000, 59_000),
+            (90_000, 95_000)
+        ]
+    );
+    assert!(stored.windows(2).all(|w| w[0].start_ms <= w[1].start_ms));
+}
+
+#[test]
+fn a_transient_failure_retries_only_the_piece_that_failed() {
+    let spans = [span(0, 20_000), span(40_000, 60_000), span(90_000, 110_000)];
+    let mut builder = pieces_rig(&spans, 1);
+    builder.cloud_answers = vec![
+        Ok(vec![dto(0, 100, "one")]),
+        Err(AiError::Timeout),
+        Ok(vec![dto(0, 100, "two")]),
+        Ok(vec![dto(0, 100, "three")]),
+    ];
+    let rig = builder.build();
+
+    block_on(rig.subject.execute(&SessionId::new("s1"))).unwrap();
+
+    assert_eq!(
+        request_offsets(&rig.cloud),
+        [0, 40_000, 40_000, 90_000],
+        "only the second piece is sent twice"
+    );
+    assert_eq!(
+        stored_times(&rig),
+        [(0, 100), (40_000, 40_100), (90_000, 90_100)]
+    );
+}
+
+#[test]
+fn a_piece_that_keeps_failing_ends_the_track_with_a_typed_error_after_its_attempts() {
+    let mut builder = pieces_rig(&[span(0, 20_000), span(40_000, 60_000)], 1);
+    builder.cloud_answers = vec![
+        Ok(vec![dto(0, 100, "one")]),
+        Err(AiError::RateLimited { retry_after: None }),
+        Err(AiError::RateLimited { retry_after: None }),
+        Err(AiError::Network("reset".to_owned())),
+    ];
+    let rig = builder.build();
+
+    let error = block_on(rig.subject.execute(&SessionId::new("s1"))).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            TranscribeError::Engine {
+                track: TrackKind::Microphone,
+                error: AiError::Network(_)
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(request_offsets(&rig.cloud), [0, 40_000, 40_000, 40_000]);
+}
+
+#[test]
+fn a_permanent_failure_is_not_retried_and_the_pieces_in_flight_are_dropped() {
+    let spans = [
+        span(0, 20_000),
+        span(40_000, 60_000),
+        span(90_000, 110_000),
+        span(200_000, 220_000),
+    ];
+    let mut builder = pieces_rig(&spans, 2);
+    builder.cloud_answers = vec![Err(AiError::Auth)];
+    let rig = builder.build();
+
+    let error = block_on(rig.subject.execute(&SessionId::new("s1"))).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            TranscribeError::Engine {
+                error: AiError::Auth,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    // Two pieces were in flight; no retry, and the later ones were never started.
+    assert_eq!(request_offsets(&rig.cloud), [0, 40_000]);
+}
+
+#[test]
+fn pieces_are_sent_a_few_at_a_time_never_more_than_the_limit() {
+    let spans: Vec<_> = (0..9)
+        .map(|i| span(i * 60_000, i * 60_000 + 20_000))
+        .collect();
+    let mut builder = pieces_rig(&spans, 3);
+    builder.cloud_answers = (0..9)
+        .map(|i| Ok(vec![dto(0, 20_000, &format!("piece {i}"))]))
+        .collect();
+    let rig = builder.build();
+
+    block_on(rig.subject.execute(&SessionId::new("s1"))).unwrap();
+
+    assert_eq!(rig.cloud.max_in_flight(), 3);
+    let stored = rig.transcripts.get_now("s1").unwrap();
+    let texts: Vec<_> = stored.iter().map(|s| s.text.clone()).collect();
+    let expected: Vec<_> = (0..9).map(|i| format!("piece {i}")).collect();
+    assert_eq!(texts, expected, "time order whichever piece finishes first");
+}
+
+#[test]
+fn chunk_progress_counts_finished_pieces_of_each_track() {
+    let spans = [span(0, 20_000), span(40_000, 60_000), span(90_000, 110_000)];
+    let rig = pieces_rig(&spans, 2).build();
+    let seen = Mutex::new(Vec::new());
+
+    block_on(
+        rig.subject
+            .execute_with_chunk_progress(&SessionId::new("s1"), &|_| {}, &|p| {
+                seen.lock().unwrap().push(p);
+            }),
+    )
+    .unwrap();
+
+    let chunk = |chunks_done| ChunkProgress {
+        track: TrackKind::Microphone,
+        chunks_done,
+        chunks_total: 3,
+    };
+    assert_eq!(
+        seen.into_inner().unwrap(),
+        [chunk(0), chunk(1), chunk(2), chunk(3)]
+    );
+}
+
+#[test]
+fn local_whisper_never_goes_through_the_chunking_path() {
+    let mut builder = RigBuilder::new();
+    builder.local_answers = vec![Ok(vec![dto(0, 100, "a")]), Ok(vec![dto(0, 100, "b")])];
+    let rig = builder.build();
+    let chunks_seen = Mutex::new(0_usize);
+
+    block_on(
+        rig.subject
+            .execute_with_chunk_progress(&SessionId::new("s1"), &|_| {}, &|_| {
+                *chunks_seen.lock().unwrap() += 1;
+            }),
+    )
+    .unwrap();
+
+    assert_eq!(rig.speech_maps.load(Ordering::SeqCst), 0, "no speech map");
+    assert_eq!(*chunks_seen.lock().unwrap(), 0);
+    assert!(
+        rig.cloud.requests().is_empty(),
+        "the cloud engine is not used"
+    );
+    let requests = rig.local.requests();
+    assert_eq!(requests.len(), 2, "one request per track, the whole file");
+    assert!(requests
+        .iter()
+        .all(|r| matches!(r.audio, AudioSource::Path(_))));
+}
+
+fn request_mimes(engine: &FakeEngine) -> Vec<String> {
+    engine
+        .requests()
+        .iter()
+        .map(|request| match &request.audio {
+            AudioSource::Bytes { mime_type, .. } => mime_type.clone(),
+            AudioSource::Path(_) => panic!("a piece must be uploaded as bytes"),
+        })
+        .collect()
+}
+
+#[test]
+fn a_provider_that_refuses_the_compressed_format_gets_wav_for_that_piece_and_the_rest() {
+    let spans = [span(0, 20_000), span(40_000, 60_000), span(90_000, 110_000)];
+    let mut builder = pieces_rig(&spans, 1);
+    builder.cloud_answers = vec![
+        Err(AiError::InvalidRequest(
+            "unsupported file format".to_owned(),
+        )),
+        Ok(vec![dto(0, 100, "one")]),
+        Ok(vec![dto(0, 100, "two")]),
+        Ok(vec![dto(0, 100, "three")]),
+    ];
+    let rig = builder.build();
+
+    block_on(rig.subject.execute(&SessionId::new("s1"))).unwrap();
+
+    assert_eq!(
+        request_mimes(&rig.cloud),
+        ["audio/flac", "audio/wav", "audio/wav", "audio/wav"],
+        "one refusal switches the track to WAV; later pieces do not try FLAC again"
+    );
+    assert_eq!(request_offsets(&rig.cloud), [0, 0, 40_000, 90_000]);
+    assert_eq!(
+        stored_times(&rig),
+        [(0, 100), (40_000, 40_100), (90_000, 90_100)]
+    );
+}
+
+#[test]
+fn a_refusal_of_wav_itself_is_final() {
+    let mut builder = pieces_rig(&[span(0, 20_000)], 1);
+    builder.cloud_answers = vec![
+        Err(AiError::InvalidRequest("bad".to_owned())),
+        Err(AiError::InvalidRequest("still bad".to_owned())),
+    ];
+    let rig = builder.build();
+
+    let error = block_on(rig.subject.execute(&SessionId::new("s1"))).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            TranscribeError::Engine {
+                error: AiError::InvalidRequest(_),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(request_mimes(&rig.cloud), ["audio/flac", "audio/wav"]);
+}
+
+#[test]
+fn a_retry_after_beyond_the_tolerated_wait_is_returned_not_retried_early() {
+    let mut builder = pieces_rig(&[span(0, 20_000)], 1);
+    builder.cloud_answers = vec![Err(AiError::RateLimited {
+        retry_after: Some(std::time::Duration::from_secs(3_600)),
+    })];
+    let rig = builder.build();
+
+    let error = block_on(rig.subject.execute(&SessionId::new("s1"))).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            TranscribeError::Engine {
+                error: AiError::RateLimited { .. },
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(rig.cloud.requests().len(), 1, "no early second request");
+}
+
+#[test]
+fn a_model_that_answers_200_with_an_unusable_reply_is_tried_again() {
+    let mut builder = pieces_rig(&[span(0, 20_000)], 1);
+    builder.cloud_answers = vec![
+        Err(AiError::Provider {
+            status: 200,
+            message: "the transcript could not be understood".to_owned(),
+        }),
+        Ok(vec![dto(0, 100, "fine now")]),
+    ];
+    let rig = builder.build();
+
+    block_on(rig.subject.execute(&SessionId::new("s1"))).unwrap();
+
+    assert_eq!(rig.cloud.requests().len(), 2);
+    assert_eq!(stored_times(&rig), [(0, 100)]);
 }

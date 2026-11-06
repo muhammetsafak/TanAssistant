@@ -10,6 +10,7 @@ tan-domain.workspace = true
 whisper-rs = { version = "0.16", features = ["tracing_backend"] }
 rubato = "5"
 hound = "3.5"
+flacenc.workspace = true
 sha2 = "0.11"
 reqwest.workspace = true
 tokio = { workspace = true, features = ["rt", "fs", "io-util"] }

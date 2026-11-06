@@ -1,21 +1,29 @@
-//! Audio preparation: read a WAV file, mix it down to mono, resample to 16 kHz and cut long
-//! recordings into pieces at quiet moments.
+//! Audio preparation: read a WAV file, mix it down to mono, resample to 16 kHz, find the speech
+//! and cut long recordings into pieces.
 //!
-//! Whisper needs 16 kHz mono `f32`; cloud providers cap the upload size, so they get 16 kHz
-//! mono 16-bit WAV pieces. Tracks are stored at the device's native rate (usually 48 kHz
-//! stereo), so every consumer goes through here.
+//! Whisper needs 16 kHz mono `f32`; cloud providers cap the upload size, so they get short 16 kHz
+//! mono 16-bit FLAC pieces (lossless, so recognition is not degraded, and every provider takes
+//! it). Tracks are stored at the device's native rate (usually 48 kHz stereo), so every consumer
+//! goes through here.
 //!
 //! Reading is by span (`seek` + read), so an hour-long file is never held in memory whole:
-//! only the planning pass scans it, keeping one number per 100 ms.
+//! only the scanning pass reads all of it, keeping one number per 30 ms.
 
 use std::io::{self, BufReader, Cursor, Read, Seek};
 use std::path::{Component, Path, PathBuf};
 
+use flacenc::component::BitRepr;
+use flacenc::error::Verify;
 use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Fft, FixedSync, Resampler};
-use tan_application::transcription::{AudioChunker, AudioPrepError, AudioSpan, SessionAudioFiles};
+use tan_application::transcription::{
+    AudioChunker, AudioPrepError, AudioSpan, EncodedAudio, SessionAudioFiles, SpeechMap,
+    UploadFormat,
+};
 use tan_domain::SessionId;
+
+use crate::vad;
 
 /// The sample rate whisper models expect.
 pub const WHISPER_SAMPLE_RATE: u32 = 16_000;
@@ -222,7 +230,35 @@ pub fn resample_to_16k(mono: Vec<f32>, from_rate: u32) -> Result<Vec<f32>, Audio
     Ok(output.take_data())
 }
 
-/// Encodes 16 kHz mono samples as a 16-bit PCM WAV file.
+/// What [`UploadFormat::Compressed`] means: the one place to change the codec uploads use.
+/// FLAC is lossless (recognition is not degraded), pure Rust (no system codec to build) and
+/// accepted by the `OpenAI` API reference and by Gemini. `OpenAI`'s guide page does not list it
+/// among the formats, so the use case falls back to [`UploadFormat::Wav`] when a provider
+/// refuses it.
+const COMPRESSED_FORMAT: CompressedFormat = CompressedFormat::Flac;
+
+#[derive(Debug, Clone, Copy)]
+enum CompressedFormat {
+    Flac,
+}
+
+/// Encodes 16 kHz mono samples as an upload file: `(file name, MIME type, bytes)`.
+fn encode_for_upload(
+    samples: &[f32],
+    format: UploadFormat,
+) -> Result<(&'static str, &'static str, Vec<u8>), AudioPrepError> {
+    match format {
+        UploadFormat::Wav => Ok(("audio.wav", "audio/wav", encode_wav_16k_mono(samples)?)),
+        UploadFormat::Compressed => match COMPRESSED_FORMAT {
+            CompressedFormat::Flac => {
+                Ok(("audio.flac", "audio/flac", encode_flac_16k_mono(samples)?))
+            }
+        },
+    }
+}
+
+/// Encodes 16 kHz mono samples as a 16-bit PCM WAV file (the upload fallback, and what tests
+/// read back).
 pub fn encode_wav_16k_mono(samples: &[f32]) -> Result<Vec<u8>, AudioPrepError> {
     let spec = WavSpec {
         channels: 1,
@@ -241,6 +277,31 @@ pub fn encode_wav_16k_mono(samples: &[f32]) -> Result<Vec<u8>, AudioPrepError> {
         writer.finalize().map_err(prep_error)?;
     }
     Ok(cursor.into_inner())
+}
+
+/// Encodes 16 kHz mono samples as a 16-bit FLAC file (about half the size of the WAV for
+/// speech; never larger than it by more than a few percent).
+pub fn encode_flac_16k_mono(samples: &[f32]) -> Result<Vec<u8>, AudioPrepError> {
+    let pcm: Vec<i32> = samples
+        .iter()
+        .map(|&sample| {
+            #[allow(clippy::cast_possible_truncation)] // clamped to the i16 range first
+            let value = (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16;
+            i32::from(value)
+        })
+        .collect();
+    let config = flacenc::config::Encoder::default()
+        .into_verified()
+        .map_err(|(_, e)| prep_error(format!("invalid FLAC encoder settings: {e}")))?;
+    let source =
+        flacenc::source::MemSource::from_samples(&pcm, 1, 16, WHISPER_SAMPLE_RATE as usize);
+    let stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
+        .map_err(|e| prep_error(format!("FLAC encoding failed: {e}")))?;
+    let mut sink = flacenc::bitsink::ByteSink::new();
+    stream
+        .write(&mut sink)
+        .map_err(|e| prep_error(format!("FLAC encoding failed: {e}")))?;
+    Ok(sink.as_slice().to_vec())
 }
 
 /// Plans pieces of at most `max_chunk_ms` from the per-100-ms energies of a file that lasts
@@ -296,27 +357,53 @@ fn join_error(e: &tokio::task::JoinError) -> AudioPrepError {
     prep_error(format!("audio task failed: {e}"))
 }
 
+/// The speech map of a WAV file: the speech regions from the voice-activity detector (the same
+/// one local whisper uses) plus the energy windows it looked at.
+pub fn speech_map_of(wav: &mut WavFile) -> Result<SpeechMap, AudioPrepError> {
+    let duration_ms = wav.info().duration_ms();
+    let energies = wav.window_energies(vad::FRAME_MS)?;
+    let regions = vad::regions_from_energies(&energies)
+        .into_iter()
+        .map(|region| AudioSpan {
+            start_ms: (region.start as u64 * vad::FRAME_MS).min(duration_ms),
+            end_ms: (region.end as u64 * vad::FRAME_MS).min(duration_ms),
+        })
+        .collect();
+    Ok(SpeechMap {
+        duration_ms,
+        regions,
+        energies,
+        energy_window_ms: vad::FRAME_MS,
+    })
+}
+
 /// [`AudioChunker`] for WAV files. The work is blocking, so it runs on tokio's blocking pool.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WavAudioChunker;
 
 impl AudioChunker for WavAudioChunker {
-    async fn plan(
-        &self,
-        audio: &Path,
-        max_chunk_ms: u64,
-    ) -> Result<Vec<AudioSpan>, AudioPrepError> {
+    async fn speech_map(&self, audio: &Path) -> Result<SpeechMap, AudioPrepError> {
         let path = audio.to_path_buf();
-        tokio::task::spawn_blocking(move || plan_file(&mut WavFile::open(&path)?, max_chunk_ms))
+        tokio::task::spawn_blocking(move || speech_map_of(&mut WavFile::open(&path)?))
             .await
             .map_err(|e| join_error(&e))?
     }
 
-    async fn load_wav(&self, audio: &Path, span: AudioSpan) -> Result<Vec<u8>, AudioPrepError> {
+    async fn encode(
+        &self,
+        audio: &Path,
+        span: AudioSpan,
+        format: UploadFormat,
+    ) -> Result<EncodedAudio, AudioPrepError> {
         let path = audio.to_path_buf();
         tokio::task::spawn_blocking(move || {
             let samples = WavFile::open(&path)?.load_16k_mono(span)?;
-            encode_wav_16k_mono(&samples)
+            let (file_name, mime_type, data) = encode_for_upload(&samples, format)?;
+            Ok(EncodedAudio {
+                file_name: file_name.to_owned(),
+                mime_type: mime_type.to_owned(),
+                data,
+            })
         })
         .await
         .map_err(|e| join_error(&e))?
@@ -665,6 +752,114 @@ mod tests {
         assert!(spans.iter().all(|s| s.end_ms - s.start_ms <= 10_000));
     }
 
+    /// Deterministic pseudo-noise in `-1.0..1.0` for sample `index` (an integer hash), so the
+    /// tests need no RNG crate.
+    fn noise_at(index: usize) -> f32 {
+        let mut x = (index as u32).wrapping_mul(0x9E37_79B1) ^ 0x85EB_CA6B;
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x2C1B_3C6D);
+        x ^= x >> 12;
+        x = x.wrapping_mul(0x297A_2D39);
+        x ^= x >> 15;
+        (x >> 8) as f32 / (1_u32 << 23) as f32 - 1.0
+    }
+
+    #[test]
+    fn a_flac_piece_is_a_valid_flac_stream_and_far_below_the_upload_cap() {
+        // Speech-like: a tone, which compresses well.
+        let tone: Vec<f32> = (0..16_000 * 30)
+            .map(|i| (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 16_000.0).sin() * 0.4)
+            .collect();
+        let flac = encode_flac_16k_mono(&tone).unwrap();
+        assert_eq!(&flac[..4], b"fLaC");
+        let wav = encode_wav_16k_mono(&tone).unwrap();
+        assert!(
+            flac.len() < wav.len() / 2,
+            "{} vs {}",
+            flac.len(),
+            wav.len()
+        );
+
+        // The worst case: full-scale white noise does not compress, so a piece is at most about
+        // as large as raw PCM, 32 KB per second. A 30 s piece stays near 1 MB; even the
+        // 14 MB inline cap of Gemini (the smallest) would take 7 minutes of it.
+        let hiss: Vec<f32> = (0..16_000 * 30).map(noise_at).collect();
+        let worst = encode_flac_16k_mono(&hiss).unwrap();
+        assert_eq!(&worst[..4], b"fLaC");
+        assert!(worst.len() < 1_100_000, "{} bytes", worst.len());
+        assert!(worst.len() < 25 * 1024 * 1024);
+    }
+
+    #[test]
+    fn the_speech_map_finds_the_bursts_and_the_chunker_encodes_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("talk.wav");
+        // 48 kHz stereo (the stored format), 40 s: speech-like noise bursts at 2..8 s and
+        // 20..26 s, silence elsewhere.
+        write_wav(
+            &path,
+            spec(2, 48_000, 16, SampleFormat::Int),
+            48_000 * 40,
+            |frame, channel| {
+                let t = frame as f32 / 48_000.0;
+                if (2.0..8.0).contains(&t) || (20.0..26.0).contains(&t) {
+                    noise_at(frame * 2 + usize::from(channel)) * 0.3
+                } else {
+                    0.0
+                }
+            },
+        );
+        let mut wav = WavFile::open(&path).unwrap();
+        let map = speech_map_of(&mut wav).unwrap();
+        assert_eq!(map.duration_ms, 40_000);
+        assert_eq!(map.energy_window_ms, vad::FRAME_MS);
+        assert_eq!(map.regions.len(), 2, "{:?}", map.regions);
+        // Padded by 250 ms on both sides.
+        assert!(
+            (1_700..=2_000).contains(&map.regions[0].start_ms),
+            "{:?}",
+            map.regions[0]
+        );
+        assert!(
+            (8_000..=8_300).contains(&map.regions[0].end_ms),
+            "{:?}",
+            map.regions[0]
+        );
+        assert!((19_700..=20_000).contains(&map.regions[1].start_ms));
+
+        let chunker = WavAudioChunker;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let from_chunker = rt.block_on(chunker.speech_map(&path)).unwrap();
+        assert_eq!(from_chunker, map);
+
+        let piece = map.regions[0];
+        let compressed = rt
+            .block_on(chunker.encode(&path, piece, UploadFormat::Compressed))
+            .unwrap();
+        assert_eq!(compressed.file_name, "audio.flac");
+        assert_eq!(compressed.mime_type, "audio/flac");
+        assert_eq!(&compressed.data[..4], b"fLaC");
+
+        // The fallback every provider accepts: 16 kHz mono 16-bit WAV of the same piece.
+        let wav = rt
+            .block_on(chunker.encode(&path, piece, UploadFormat::Wav))
+            .unwrap();
+        assert_eq!(wav.file_name, "audio.wav");
+        assert_eq!(wav.mime_type, "audio/wav");
+        let reread = WavReader::new(Cursor::new(wav.data.clone())).unwrap();
+        assert_eq!(reread.spec().sample_rate, 16_000);
+        assert_eq!(reread.spec().channels, 1);
+        assert!(wav.data.len() > compressed.data.len());
+        // About 1 MB per 30 s: far below every provider's cap.
+        assert!(wav.data.len() < 32 * (piece.end_ms - piece.start_ms) as usize + 1_000);
+
+        assert!(rt
+            .block_on(chunker.encode(Path::new("/no/such.wav"), piece, UploadFormat::Compressed))
+            .is_err());
+    }
+
     #[test]
     fn session_files_stay_inside_the_session_folder() {
         let files = SessionFiles::new("/data/sessions");
@@ -674,17 +869,24 @@ mod tests {
             ok.ends_with("sessions/0190-abc_1/audio/microphone.wav")
                 || ok.ends_with("sessions\\0190-abc_1\\audio\\microphone.wav")
         );
-        for bad in [
+        let mut bad_paths = vec![
             "",
             "../x.wav",
             "audio/../../x.wav",
             "/etc/passwd",
-            "C:\\x.wav",
-            "C:/x.wav",
             "./a/../b",
-        ] {
+        ];
+        // A drive path is absolute on Windows only. On Unix `C:\x.wav` is an ordinary (if odd)
+        // file name that stays inside the session folder, so it is no rejection case there.
+        if cfg!(windows) {
+            bad_paths.extend(["C:\\x.wav", "C:/x.wav", "\\\\server\\share\\x.wav"]);
+        }
+        for bad in bad_paths {
             assert!(files.audio_path(&id, bad).is_err(), "{bad:?}");
         }
+        // Whatever the platform, an absolute path of the running OS is refused.
+        let absolute = std::env::temp_dir().join("x.wav");
+        assert!(files.audio_path(&id, absolute.to_str().unwrap()).is_err());
         for bad_id in ["", "..", "a/b", "a b"] {
             assert!(files
                 .audio_path(&SessionId::new(bad_id), "audio/x.wav")

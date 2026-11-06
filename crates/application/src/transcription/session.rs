@@ -8,10 +8,11 @@ use tan_domain::{
     TrackKind, TranscriptSegment,
 };
 
+use super::chunking::{self, ChunkError};
 use super::{
-    speaker_label, AudioChunker, AudioSpan, LocalEngineStatus, LocalTranscriber, SessionAudioFiles,
-    TranscribeError, TranscribeProgress, TranscribeResult, TranscribeSummary, TranscriptionEngine,
-    TranscriptionEstimate, CLOUD_CHUNK_MS, WHISPER_WINDOW_MS,
+    speaker_label, AudioChunker, ChunkProgress, ChunkSettings, LocalEngineStatus, LocalTranscriber,
+    SessionAudioFiles, TranscribeError, TranscribeProgress, TranscribeResult, TranscribeSummary,
+    TranscriptionEngine, TranscriptionEstimate, WHISPER_WINDOW_MS,
 };
 use crate::ports::{
     AiError, AudioSource, Capabilities, ProviderFactory, ProviderProfileRepository,
@@ -44,7 +45,8 @@ pub struct TranscribePorts<S, T, A, P, F, L, C, D> {
 enum Delivery {
     /// The engine reads the whole file itself (local whisper).
     WholeFile,
-    /// The file is cut into WAV pieces that are uploaded one by one (cloud providers).
+    /// The speech is cut into short compressed pieces that are uploaded a few at a time (cloud
+    /// providers).
     Chunked,
 }
 
@@ -56,6 +58,7 @@ enum Delivery {
 /// lifecycle.
 pub struct TranscribeSession<S, T, A, P, F, L, C, D> {
     ports: TranscribePorts<S, T, A, P, F, L, C, D>,
+    chunking: ChunkSettings,
 }
 
 impl<S, T, A, P, F, L, C, D> TranscribeSession<S, T, A, P, F, L, C, D>
@@ -72,7 +75,18 @@ where
     /// Creates the use case.
     #[must_use]
     pub fn new(ports: TranscribePorts<S, T, A, P, F, L, C, D>) -> Self {
-        Self { ports }
+        Self {
+            ports,
+            chunking: ChunkSettings::default(),
+        }
+    }
+
+    /// Changes how a cloud provider is fed (piece length, pieces in flight, retrying). Local
+    /// whisper is not affected: it reads the whole file itself.
+    #[must_use]
+    pub fn with_chunking(mut self, chunking: ChunkSettings) -> Self {
+        self.chunking = chunking;
+        self
     }
 
     /// Transcribes the session and stores the transcript.
@@ -89,6 +103,18 @@ where
         session_id: &SessionId,
         on_progress: &(dyn Fn(TranscribeProgress) + Send + Sync),
     ) -> TranscribeResult<TranscribeSummary> {
+        self.execute_with_chunk_progress(session_id, on_progress, &|_| {})
+            .await
+    }
+
+    /// Like [`Self::execute_with_progress`], also reporting [`ChunkProgress`] to `on_chunk` while
+    /// a cloud provider works through the pieces of a track (local whisper sends none).
+    pub async fn execute_with_chunk_progress(
+        &self,
+        session_id: &SessionId,
+        on_progress: &(dyn Fn(TranscribeProgress) + Send + Sync),
+        on_chunk: &(dyn Fn(ChunkProgress) + Send + Sync),
+    ) -> TranscribeResult<TranscribeSummary> {
         let (session, tracks) = self.load(session_id).await?;
 
         let (segment_count, engine) = if let Some(profile) = self.assigned_profile().await? {
@@ -99,7 +125,14 @@ where
                 .await
                 .map_err(TranscribeError::Provider)?;
             let count = self
-                .transcribe_tracks(&model, Delivery::Chunked, &session, &tracks, on_progress)
+                .transcribe_tracks(
+                    &model,
+                    Delivery::Chunked,
+                    &session,
+                    &tracks,
+                    on_progress,
+                    on_chunk,
+                )
                 .await?;
             let engine = TranscriptionEngine::Provider {
                 profile_id: profile.id,
@@ -117,6 +150,7 @@ where
                     &session,
                     &tracks,
                     on_progress,
+                    on_chunk,
                 )
                 .await?;
             (count, TranscriptionEngine::LocalWhisper)
@@ -238,6 +272,7 @@ where
         session: &Session,
         tracks: &[AudioTrack],
         on_progress: &(dyn Fn(TranscribeProgress) + Send + Sync),
+        on_chunk: &(dyn Fn(ChunkProgress) + Send + Sync),
     ) -> TranscribeResult<usize> {
         let language = match &session.language {
             LanguageSetting::Fixed(code) => Some(code.clone()),
@@ -262,8 +297,7 @@ where
                 error,
             };
 
-            let mut dtos: Vec<TranscriptSegmentDto> = Vec::new();
-            match delivery {
+            let dtos: Vec<TranscriptSegmentDto> = match delivery {
                 Delivery::WholeFile => {
                     let request = TranscriptionRequest {
                         audio: AudioSource::Path(path),
@@ -271,26 +305,31 @@ where
                         duration_ms: Some(track.duration_ms),
                         prompt: None,
                     };
-                    dtos = model.transcribe(request).await.map_err(engine_error)?;
+                    model.transcribe(request).await.map_err(engine_error)?
                 }
                 Delivery::Chunked => {
-                    for span in self.ports.chunker.plan(&path, CLOUD_CHUNK_MS).await? {
-                        let wav = self.ports.chunker.load_wav(&path, span).await?;
-                        let request = TranscriptionRequest {
-                            audio: AudioSource::Bytes {
-                                file_name: "audio.wav".to_owned(),
-                                mime_type: "audio/wav".to_owned(),
-                                data: wav,
-                            },
-                            language: language.clone(),
-                            duration_ms: Some(span.end_ms.saturating_sub(span.start_ms)),
-                            prompt: None,
-                        };
-                        let part = model.transcribe(request).await.map_err(engine_error)?;
-                        dtos.extend(shift(part, span));
-                    }
+                    let kind = track.kind;
+                    chunking::transcribe_track(
+                        model,
+                        &*self.ports.chunker,
+                        &self.chunking,
+                        &path,
+                        language.as_ref(),
+                        &|done, total| {
+                            on_chunk(ChunkProgress {
+                                track: kind,
+                                chunks_done: done,
+                                chunks_total: total,
+                            });
+                        },
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        ChunkError::Audio(error) => TranscribeError::from(error),
+                        ChunkError::Engine(error) => engine_error(error),
+                    })?
                 }
-            }
+            };
 
             all.extend(
                 dtos.into_iter().filter_map(|dto| {
@@ -312,18 +351,6 @@ where
         });
         Ok(all.len())
     }
-}
-
-/// Moves segments from chunk-relative time to file-relative time.
-fn shift(segments: Vec<TranscriptSegmentDto>, span: AudioSpan) -> Vec<TranscriptSegmentDto> {
-    segments
-        .into_iter()
-        .map(|mut dto| {
-            dto.start_ms = dto.start_ms.saturating_add(span.start_ms);
-            dto.end_ms = dto.end_ms.saturating_add(span.start_ms);
-            dto
-        })
-        .collect()
 }
 
 /// Builds a stored segment; empty text is dropped.

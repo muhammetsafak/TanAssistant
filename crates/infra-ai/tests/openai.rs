@@ -356,3 +356,95 @@ async fn gpt_transcribe_gets_languages_instead_of_language() {
         .unwrap();
     assert_eq!(segments[0].text, "Merhaba");
 }
+
+/// A stand-in for a compressed piece: FLAC files start with the `fLaC` marker.
+fn flac_request(language: Option<&str>) -> TranscriptionRequest {
+    let mut data = b"fLaC".to_vec();
+    data.extend_from_slice(&[7u8; 60]);
+    TranscriptionRequest {
+        audio: AudioSource::Bytes {
+            file_name: "audio.flac".to_owned(),
+            mime_type: "audio/flac".to_owned(),
+            data,
+        },
+        language: language.map(|l| LanguageCode::new(l).unwrap()),
+        duration_ms: Some(30_000),
+        prompt: None,
+    }
+}
+
+#[tokio::test]
+async fn the_4o_transcribe_models_get_json_and_the_compressed_piece_as_the_file() {
+    for model in ["gpt-4o-mini-transcribe", "gpt-4o-transcribe"] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .and(move |r: &Request| {
+                body_contains(r, &format!("name=\"model\"\r\n\r\n{model}"))
+                    && body_contains(r, "name=\"response_format\"\r\n\r\njson")
+                    && !body_contains(r, "verbose_json")
+                    && !body_contains(r, "timestamp_granularities")
+                    && body_contains(r, "name=\"language\"\r\n\r\ntr")
+                    && !body_contains(r, "languages[]")
+                    && body_contains(r, "filename=\"audio.flac\"")
+                    && body_contains(r, "Content-Type: audio/flac")
+                    && body_contains(r, "fLaC")
+            })
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "text": " Merhaba dünya. " })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let segments = client(&server, model)
+            .transcribe(flac_request(Some("tr")))
+            .await
+            .unwrap();
+
+        // No timestamps from the model: one segment spanning the whole piece.
+        assert_eq!(segments.len(), 1, "{model}");
+        assert_eq!((segments[0].start_ms, segments[0].end_ms), (0, 30_000));
+        assert_eq!(segments[0].text, "Merhaba dünya.");
+    }
+}
+
+#[tokio::test]
+async fn whisper_1_gets_verbose_json_with_segment_times_for_the_compressed_piece() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/transcriptions"))
+        .and(|r: &Request| {
+            body_contains(r, "name=\"response_format\"\r\n\r\nverbose_json")
+                && body_contains(r, "name=\"timestamp_granularities[]\"\r\n\r\nsegment")
+                && body_contains(r, "filename=\"audio.flac\"")
+                && body_contains(r, "fLaC")
+        })
+        .respond_with(ResponseTemplate::new(200).set_body_json(whisper_segments()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let segments = client(&server, "whisper-1")
+        .transcribe(flac_request(None))
+        .await
+        .unwrap();
+    assert_eq!(segments.len(), 2);
+    assert_eq!((segments[1].start_ms, segments[1].end_ms), (2_400, 7_500));
+}
+
+#[tokio::test]
+async fn gpt_transcribe_reports_the_detected_language() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "text": "Merhaba",
+            "languages": [{ "code": "tr" }],
+        })))
+        .mount(&server)
+        .await;
+    let segments = client(&server, "gpt-transcribe")
+        .transcribe(flac_request(None))
+        .await
+        .unwrap();
+    assert_eq!(segments[0].language.as_ref().unwrap().as_str(), "tr");
+}

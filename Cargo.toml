@@ -49,6 +49,10 @@ base64 = "0.23"
 wiremock = "0.6"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 
+# Third-party (cloud transcription chunking phase)
+flacenc = { version = "0.5", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+
 [workspace.lints.rust]
 # Platform capture adapters (later phases) need narrowly-scoped unsafe; allow it
 # explicitly per module with a justification instead of forbidding it globally.
