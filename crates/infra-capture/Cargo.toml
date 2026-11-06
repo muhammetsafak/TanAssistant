@@ -22,10 +22,17 @@ xcap = { version = "0.9", features = ["wgc"] }
 
 # Linux: record the PulseAudio/PipeWire monitor source through the pure-Rust PulseAudio
 # protocol backend of cpal (also served by pipewire-pulse), so no libpulse headers are
-# needed. Frames come from xcap (X11 through xcb, Wayland through the desktop portal).
+# needed. Frames come from xcap on X11 (xcb); on Wayland from a ScreenCast portal session
+# (`ashpd`, which asks the user once to pick a source) read through PipeWire (ADR-009).
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = { version = "0.18", features = ["pulseaudio"] }
 xcap = "0.9"
+# The portal client runs on zbus' own `async-io` executor, so no tokio runtime is needed;
+# the futures are driven with `futures-executor::block_on` on the capture thread.
+ashpd = { version = "0.14", default-features = false, features = ["async-io", "screencast"] }
+pipewire = "0.10"
+directories.workspace = true
+futures-executor.workspace = true
 
 # macOS 13+: system audio and screen frames through ScreenCaptureKit.
 [target.'cfg(target_os = "macos")'.dependencies]

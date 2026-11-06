@@ -1,19 +1,15 @@
-//! Linux: frames through `xcap`.
+//! Linux: frames through `xcap` on X11 and through a `ScreenCast` portal session on Wayland.
 //!
 //! STATUS: compiled by CI only; it has not been run on a Linux desktop yet.
 //!
 //! * **X11:** xcap reads the root window through xcb; no permission is involved.
-//! * **Wayland: screen capture is off by default** (user decision, Phase 08): the recording
-//!   service skips the screen when `availability()` reports `WaylandUnsupported` and records
-//!   audio only. What follows describes why, and what the real fix needs.
-//!   xcap asks GNOME Shell's screenshot D-Bus API, then the
-//!   `org.freedesktop.portal.Screenshot` portal, then (wlroots compositors) `libwayshot`.
-//!   Newer GNOME versions restrict the Shell call, and the portal route may show a permission
-//!   dialog or a flash on every capture. The proper long-term path for periodic frames on
-//!   Wayland is a one-time `ScreenCast` portal session with a `PipeWire` stream (`ashpd`); the
-//!   spike recommended it and it is **not** implemented here, because it cannot be built or
-//!   tried without a Wayland machine. Failures are reported through the sink as warnings and
-//!   the recording continues with audio only.
+//! * **Wayland:** a compositor does not let applications read the screen, and xcap's only
+//!   route there (the screenshot portal) asks or flashes on every capture. So Wayland sessions
+//!   use the `linux_portal` module: one `ScreenCast` portal session per recording, where the user
+//!   picks the source in a system dialog once (the portal remembers it through a restore
+//!   token) and frames come from a `PipeWire` stream. When the portal is missing or the user
+//!   declines, the recording carries on with audio only (see `availability` in the parent
+//!   module and the error kinds returned by `start`).
 
 use std::sync::Arc;
 
@@ -22,25 +18,36 @@ use tan_application::ports::{
     ScreenStreamRequest,
 };
 
-use super::xcap_backend;
+use super::{linux_portal, xcap_backend};
+
+/// Whether this process runs in a Wayland session.
+fn on_wayland() -> bool {
+    super::is_wayland_session(
+        std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+        std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+    )
+}
 
 fn map_error(context: &str, error: &xcap::XCapError) -> CaptureError {
-    let wayland =
-        std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t.eq_ignore_ascii_case("wayland"));
-    let hint = if wayland {
-        " (Wayland session: the desktop must allow screenshots through the portal; an X11 \
-         session needs no permission)"
-    } else {
-        ""
-    };
-    CaptureError::failed(format!("{context}: {error}{hint}"))
+    CaptureError::failed(format!("{context}: {error}"))
+}
+
+/// Whether the `ScreenCast` portal can serve this session (asked without any dialog).
+pub(super) fn screencast_usable() -> bool {
+    linux_portal::screencast_usable()
 }
 
 pub(super) fn list_displays() -> CaptureResult<Vec<DisplayInfo>> {
+    if on_wayland() {
+        return Ok(linux_portal::list_displays());
+    }
     xcap_backend::list_displays(map_error)
 }
 
 pub(super) fn capture_once(display_id: Option<&str>) -> CaptureResult<RawFrame> {
+    if on_wayland() {
+        return linux_portal::capture_once();
+    }
     xcap_backend::capture_once(display_id, map_error)
 }
 
@@ -48,5 +55,8 @@ pub(super) fn start(
     request: &ScreenStreamRequest,
     sink: Arc<dyn FrameSink>,
 ) -> CaptureResult<Box<dyn ScreenStream>> {
+    if on_wayland() {
+        return linux_portal::start(request, sink);
+    }
     xcap_backend::start(request, sink, map_error)
 }

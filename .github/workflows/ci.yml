@@ -29,6 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # Wayland screen capture (Phase 13) reads PipeWire streams through the `pipewire` crate:
+      # libpipewire-0.3-dev and libspa-0.2-dev (headers for its bindgen build) plus libclang-dev.
+      # The portal client (`ashpd`) is pure Rust and needs no system library.
       - name: Install Linux system packages (Tauri / webkit2gtk / audio and screen capture)
         if: runner.os == 'Linux'
         run: |
@@ -49,6 +52,7 @@ jobs:
             libxrandr-dev \
             libdbus-1-dev \
             libpipewire-0.3-dev \
+            libspa-0.2-dev \
             libwayland-dev \
             libegl-dev \
             libgbm-dev \

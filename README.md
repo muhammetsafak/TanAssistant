@@ -24,6 +24,15 @@ Dependency direction: `src-tauri -> infra-* -> application -> domain`
 - Windows: Visual Studio Build Tools 2022 (C++ workload) and WebView2
 - macOS: Xcode command line tools
 - Linux: `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libgtk-3-dev patchelf`
+- Linux, audio and screen capture (build): `libasound2-dev libclang-dev libxcb1-dev libxrandr-dev`
+  `libdbus-1-dev libpipewire-0.3-dev libspa-0.2-dev libwayland-dev pkg-config` (the full list is in
+  `.github/workflows/ci.yml`).
+  - X11 sessions capture the screen directly. **Wayland sessions** use the `xdg-desktop-portal`
+    ScreenCast portal and PipeWire, so at run time they need `xdg-desktop-portal` with the backend
+    of your desktop (`xdg-desktop-portal-gnome`, `-kde` or `-wlr`) and PipeWire. The first recording
+    shows the system's "share your screen" dialog once; the choice is remembered (a restore token
+    in the data directory), so later recordings start without a dialog. Without a portal, or if you
+    decline, only audio is recorded.
 - Local transcription builds whisper.cpp (`whisper-rs`): **CMake** and **libclang** (LLVM) are
   needed on every OS, and `cmake` must be on `PATH` of the shell that runs `cargo` (a shell
   opened before the installation does not see it).

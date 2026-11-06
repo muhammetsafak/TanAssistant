@@ -4,7 +4,8 @@
 //! |---|---|
 //! | Windows | `xcap` with Windows Graphics Capture, polled on an absolute schedule |
 //! | macOS 13+ | `ScreenCaptureKit` video-only stream (pushes a frame when the screen changes) |
-//! | Linux | `xcap` (X11 through xcb; Wayland through the desktop portal / wlroots screencopy) |
+//! | Linux, X11 | `xcap` through xcb, polled on an absolute schedule |
+//! | Linux, Wayland | `ScreenCast` portal session + `PipeWire` stream (the user picks the source once; the portal remembers it) |
 //!
 //! Polling backends tick against an absolute schedule (`start + n * interval`): "capture,
 //! sleep one interval" would stretch the cadence by the capture time (about a second for a
@@ -18,10 +19,20 @@ use tan_application::ports::{
     ScreenStream, ScreenStreamRequest, ScreenUnavailableReason,
 };
 
+// Pure helpers of the Wayland adapter (pixel conversion, restore token file, probe gate). They need no
+// Linux libraries, so they are also built for the tests of the other platforms.
+#[cfg(any(target_os = "linux", test))]
+mod frame_convert;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod linux_portal;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "linux", test))]
+mod probe_gate;
+#[cfg(any(target_os = "linux", test))]
+mod restore_token;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -49,21 +60,39 @@ pub fn is_wayland_session(session_type: Option<&str>, wayland_display: Option<&s
 
 /// Screen availability from the platform and the session environment.
 ///
-/// Decision (user, Phase 08): on Linux/Wayland screen capture is **off by default** and only
-/// audio is recorded, because the only route xcap has there is the screenshot portal, which
-/// asks for permission or flashes on every capture. The proper route (a `ScreenCast` portal
-/// session with a `PipeWire` stream through `ashpd`) is a separate phase. X11, Windows and
-/// macOS are unaffected.
+/// On Linux/Wayland the screen is captured through a `ScreenCast` portal session (Phase 13;
+/// before it, Wayland recorded audio only by user decision, Phase 08). That works when the
+/// portal can serve the session, which `screencast_usable` reports; it is only called for a
+/// Wayland session on Linux, because asking the portal costs a D-Bus round trip. When it says
+/// no (no portal, no monitor or window source), the screen is off and only audio is recorded
+/// ([`ScreenUnavailableReason::WaylandUnsupported`]). The user declining the source dialog is
+/// not known here (the dialog appears when the recording starts); it surfaces as a
+/// `PermissionDenied` error from `start`, and the recording carries on with audio only.
+///
+/// X11, Windows and macOS are unaffected.
 #[must_use]
 pub fn availability_for(
     is_linux: bool,
     session_type: Option<&str>,
     wayland_display: Option<&str>,
+    screencast_usable: impl FnOnce() -> bool,
 ) -> ScreenAvailability {
-    if is_linux && is_wayland_session(session_type, wayland_display) {
+    if is_linux && is_wayland_session(session_type, wayland_display) && !screencast_usable() {
         ScreenAvailability::Unavailable(ScreenUnavailableReason::WaylandUnsupported)
     } else {
         ScreenAvailability::Available
+    }
+}
+
+/// Whether the `ScreenCast` portal can serve a session. Only ever asked on Linux.
+fn screencast_usable() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        platform::screencast_usable()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
     }
 }
 
@@ -73,6 +102,7 @@ impl ScreenCapture for PlatformScreenCapture {
             cfg!(target_os = "linux"),
             std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
             std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+            screencast_usable,
         )
     }
 
@@ -323,27 +353,47 @@ mod tests {
     }
 
     #[test]
-    fn linux_wayland_turns_the_screen_off() {
-        assert_eq!(availability_for(true, Some("wayland"), None), WAYLAND_OFF);
-        assert_eq!(availability_for(true, None, Some("wayland-0")), WAYLAND_OFF);
+    fn linux_wayland_without_a_usable_portal_turns_the_screen_off() {
+        assert_eq!(
+            availability_for(true, Some("wayland"), None, || false),
+            WAYLAND_OFF
+        );
+        assert_eq!(
+            availability_for(true, None, Some("wayland-0"), || false),
+            WAYLAND_OFF
+        );
     }
 
     #[test]
-    fn linux_x11_keeps_the_screen() {
+    fn linux_wayland_with_a_usable_portal_keeps_the_screen() {
         assert_eq!(
-            availability_for(true, Some("x11"), None),
+            availability_for(true, Some("wayland"), None, || true),
             ScreenAvailability::Available
         );
         assert_eq!(
-            availability_for(true, None, None),
+            availability_for(true, None, Some("wayland-0"), || true),
+            ScreenAvailability::Available
+        );
+    }
+
+    #[test]
+    fn linux_x11_keeps_the_screen_without_asking_the_portal() {
+        let never = || -> bool { panic!("the portal must not be asked outside Wayland") };
+        assert_eq!(
+            availability_for(true, Some("x11"), None, never),
+            ScreenAvailability::Available
+        );
+        assert_eq!(
+            availability_for(true, None, None, never),
             ScreenAvailability::Available
         );
     }
 
     #[test]
     fn other_platforms_ignore_the_wayland_variables() {
+        let never = || -> bool { panic!("the portal must not be asked outside Linux") };
         assert_eq!(
-            availability_for(false, Some("wayland"), Some("wayland-0")),
+            availability_for(false, Some("wayland"), Some("wayland-0"), never),
             ScreenAvailability::Available
         );
     }
