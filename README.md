@@ -45,7 +45,13 @@ Dependency direction: `src-tauri -> infra-* -> application -> domain`
 - GPU backends of local whisper are optional features (see *Transcription* below):
   - Vulkan (Windows, Linux): the Vulkan SDK (`winget install KhronosGroup.VulkanSDK`; Linux:
     `sudo apt-get install libvulkan-dev glslc spirv-headers`). Needs `VULKAN_SDK` and `glslc`
-    on `PATH`; the SDK installer sets both for new shells.
+    on `PATH`; the SDK installer sets both for new shells. On Linux `glslc` must be a recent
+    shaderc (2026.1 is known to work; ggml builds its cooperative-matrix shaders when `glslc`
+    knows `GL_KHR_cooperative_matrix`). ggml's shader generator skips a shader that `glslc`
+    failed to compile and the build still succeeds, so such a failure shows up only at link
+    time as `undefined symbol: matmul_id_subgroup_*_cm1_data`; build with
+    `cargo build -vv ... 2>&1 | grep 'cannot compile'` to see why. Keep a few GB of disk free
+    (the CI job for this backend runs on its own runner for that reason).
   - Metal (macOS): the Xcode command line tools are enough.
 
 ## Commands

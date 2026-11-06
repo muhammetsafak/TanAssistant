@@ -120,7 +120,7 @@ jobs:
       # Windows and Linux and Metal on macOS. The runners have no GPU, so the application is
       # built (which links the backend into a real binary) but not run on one. Vulkan also gets
       # its regression test: with the driver hidden from the loader the build must fall back
-      # to the CPU instead of aborting; that test needs no GPU.
+      # to the CPU instead of aborting; that test needs no GPU. Linux has its own job below.
       - name: Install the Vulkan SDK (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -130,12 +130,6 @@ jobs:
             echo "VULKAN_SDK=$(cygpath -w "${sdk%/}")" >> "$GITHUB_ENV"
             echo "$(cygpath -w "${sdk%/}")\\Bin" >> "$GITHUB_PATH"
           fi
-
-      - name: Whisper GPU backend, Vulkan (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          cargo build -p tan-app --features vulkan
-          cargo test -p tan-infra-transcription --features vulkan --test vulkan_fallback
 
       - name: Whisper GPU backend, Metal (macOS)
         if: runner.os == 'macOS'
@@ -170,3 +164,49 @@ jobs:
       # subfolders), so call the binary installed by `npm ci` directly instead of `npm exec`.
       - name: Tauri build (debug)
         run: ./ui/node_modules/.bin/tauri build --debug --no-bundle
+
+  # The Vulkan backend on Linux, on a runner of its own. ggml generates its Vulkan shaders with a
+  # tool that skips a shader whose compilation printed anything to stderr and carries on (the
+  # build "succeeds"), so a shader that failed to compile only shows up at link time as
+  # `undefined symbol: matmul_id_subgroup_*_cm1_data`. The run that failed this way had the
+  # workspace's whole debug build (Tauri, webkit2gtk) on the same disk and memory; here nothing
+  # else runs, and the shader generator's output is checked instead of trusted.
+  whisper-vulkan-linux:
+    name: whisper Vulkan (ubuntu-latest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # glslc must know GL_KHR_cooperative_matrix (ggml tests for it while configuring and builds
+      # the coopmat shaders when it does): the distribution's glslc 2026.1 does, an older shaderc
+      # would simply leave them out.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake libclang-dev libssl-dev pkg-config \
+            libvulkan-dev glslc spirv-headers
+          glslc --version
+          df -h /
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Build the Vulkan backend and check the shader generator
+        run: |
+          set -o pipefail
+          cargo build -vv -p tan-infra-transcription --features vulkan 2>&1 | tee "$RUNNER_TEMP/vulkan-build.log"
+          if grep -q 'cannot compile \|Error executing command for ' "$RUNNER_TEMP/vulkan-build.log"; then
+            echo '::error::ggml could not compile some Vulkan shaders'
+            grep -n -A12 'cannot compile \|Error executing command for ' "$RUNNER_TEMP/vulkan-build.log" | head -100
+            exit 1
+          fi
+          df -h /
+
+      # Links the backend into a real binary and runs the "no Vulkan driver" regression test.
+      - name: Vulkan fallback test
+        run: cargo test -p tan-infra-transcription --features vulkan --test vulkan_fallback
