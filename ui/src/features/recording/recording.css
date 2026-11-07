@@ -178,6 +178,137 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Paused: the state is told by the glyph and the words; the neutral tone only backs it up. */
+.recording-active--paused .recording-timer {
+  color: var(--color-text-muted);
+}
+
+.pause-glyph {
+  flex: none;
+  fill: currentcolor;
+}
+
+.recording-badge {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.recording-indicator--paused {
+  border-color: var(--color-primary);
+  background: var(--color-surface-muted);
+}
+
+/* Display picker: open, it takes the whole row so the previews have room. */
+.display-picker--open {
+  grid-column: 1 / -1;
+}
+
+.display-picker__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.display-picker__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.display-picker__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.display-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+.display-card:has(input:checked) {
+  border-color: var(--color-primary);
+  background: var(--color-surface-muted);
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+}
+
+.display-card:focus-within {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.display-card input {
+  flex: none;
+  margin-top: var(--space-1);
+}
+
+.display-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+
+.display-card__image,
+.display-card__thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  object-fit: contain;
+}
+
+.display-card__thumb--text {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.display-card__skeleton {
+  animation: recording-pulse 1.4s ease-in-out infinite;
+}
+
+.display-card__name {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.display-card__meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .display-card__skeleton {
+    animation: none;
+  }
+}
+
 @media (max-width: 720px) {
   .level {
     grid-template-columns: 6rem minmax(0, 1fr);

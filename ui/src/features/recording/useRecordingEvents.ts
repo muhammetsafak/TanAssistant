@@ -30,10 +30,11 @@ export function useRecordingEvents(): RecordingEvents {
   useTauriEvent(events.recordingProgressEvent, (progress) => setLive(progress));
 
   useTauriEvent(events.recordingStateEvent, (event: RecordingStateEvent) => {
-    if (event.state !== 'recording') {
-      setLive(null);
-    } else {
-      setWarnings(null);
+    // Pausing, ending: the next numbers come from the status read, not from an old tick.
+    setLive(null);
+    // A resume announces `recording` too; only a different session drops the old warnings.
+    if (event.state === 'recording') {
+      setWarnings((current) => (current?.sessionId === event.sessionId ? current : null));
     }
     void queryClient.invalidateQueries({ queryKey: recordingKeys.status });
     void queryClient.invalidateQueries({ queryKey: sessionKeys.all });

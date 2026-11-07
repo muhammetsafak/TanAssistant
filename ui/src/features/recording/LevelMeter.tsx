@@ -4,7 +4,16 @@ import { meterValue } from './levels';
 
 import './recording.css';
 
-export function LevelMeter({ label, level }: { label: string; level: number | null }) {
+export function LevelMeter({
+  label,
+  level,
+  paused = false,
+}: {
+  label: string;
+  level: number | null;
+  /** A paused recording captures nothing: the bar is empty and says so. */
+  paused?: boolean;
+}) {
   const { t } = useTranslation();
   return (
     <div className="level">
@@ -13,10 +22,14 @@ export function LevelMeter({ label, level }: { label: string; level: number | nu
         className="level__meter"
         min={0}
         max={1}
-        value={meterValue(level)}
+        value={paused ? 0 : meterValue(level)}
         aria-label={t('recording.meterLabel', { name: label })}
       />
-      {level === null ? <span className="level__idle">{t('recording.noSignal')}</span> : null}
+      {paused ? (
+        <span className="level__idle">{t('recording.meterPaused')}</span>
+      ) : level === null ? (
+        <span className="level__idle">{t('recording.noSignal')}</span>
+      ) : null}
     </div>
   );
 }

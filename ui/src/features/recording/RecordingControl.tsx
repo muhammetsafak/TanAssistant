@@ -13,14 +13,18 @@ import { formatClock } from '../sessions/format';
 import {
   useAudioDevices,
   useDisplays,
+  usePauseRecording,
   useRecordingCapabilities,
   useRecordingStatus,
+  useResumeRecording,
   useStartRecording,
   useStopRecording,
   type ActiveRecording,
   type RecordingSummary,
 } from './api';
+import { DisplayPicker } from './DisplayPicker';
 import { LevelMeter } from './LevelMeter';
+import { PauseGlyph } from './PauseGlyph';
 import { useRecordingEvents } from './useRecordingEvents';
 
 import '../../components/ui/ui.css';
@@ -52,8 +56,9 @@ export function RecordingControl() {
             </Button>
           </div>
         </>
-      ) : status.data.state === 'recording' && status.data.active ? (
-        <ActiveRecordingView active={status.data.active} />
+      ) : (status.data.state === 'recording' || status.data.state === 'paused') &&
+        status.data.active ? (
+        <ActiveRecordingView active={status.data.active} paused={status.data.state === 'paused'} />
       ) : (
         <StartForm />
       )}
@@ -160,22 +165,13 @@ function StartForm() {
         </SelectField>
 
         {screenAvailable ? (
-          <SelectField
-            label={t('recording.display')}
+          <DisplayPicker
+            displays={displays.data ?? []}
             value={displayId}
-            onChange={(event) => setDisplayId(event.target.value)}
-            aria-busy={displays.isPending}
-            hint={displays.isError ? t('recording.displaysFailed') : undefined}
-          >
-            <option value="">{t('recording.displayDefault')}</option>
-            {(displays.data ?? []).map((display) => (
-              <option key={display.id} value={display.id}>
-                {`${display.name} (${display.width}×${display.height})${
-                  display.isPrimary ? `, ${t('recording.primaryDisplay')}` : ''
-                }`}
-              </option>
-            ))}
-          </SelectField>
+            onChange={setDisplayId}
+            loading={displays.isPending}
+            failed={displays.isError}
+          />
         ) : null}
       </div>
 
@@ -205,16 +201,24 @@ function silentTracks(summary: RecordingSummary): string[] {
   return summary.tracks.filter((track) => track.peak === 0).map((track) => track.kind);
 }
 
-function ActiveRecordingView({ active }: { active: ActiveRecording }) {
+function ActiveRecordingView({ active, paused }: { active: ActiveRecording; paused: boolean }) {
   const { t } = useTranslation();
   const toast = useToast();
   const navigate = useNavigate();
   const handleError = useCommandErrorHandler();
   const stop = useStopRecording();
+  const pause = usePauseRecording();
+  const resume = useResumeRecording();
   const { live, warnings } = useRecordingEvents();
 
-  // The status read is a snapshot; the progress ticks that follow carry the live numbers.
-  const current = live?.sessionId === active.sessionId ? live : active;
+  // The status read is a snapshot; the progress ticks that follow carry the live numbers. A paused
+  // recording has none: a tick that was already on its way must not move the clock.
+  const current = !paused && live?.sessionId === active.sessionId ? live : active;
+  const switching = pause.isPending || resume.isPending;
+
+  function togglePause() {
+    (paused ? resume : pause).mutate(undefined, { onError: handleError });
+  }
 
   async function stopRecording() {
     try {
@@ -236,14 +240,21 @@ function ActiveRecordingView({ active }: { active: ActiveRecording }) {
   }
 
   return (
-    <div className="recording-active">
+    <div className={paused ? 'recording-active recording-active--paused' : 'recording-active'}>
       <div className="recording-active__header">
         <h2 className="recording-card__title" id="recording-heading">
-          <span className="recording-dot" aria-hidden="true" />
-          {t('recording.active')}
+          {paused ? <PauseGlyph /> : <span className="recording-dot" aria-hidden="true" />}
+          {paused ? t('recording.pausedTitle') : t('recording.active')}
+          {paused ? <span className="recording-badge">{t('recording.paused')}</span> : null}
         </h2>
         <p className="recording-active__name">{active.title}</p>
       </div>
+
+      {paused ? (
+        <p className="recording-note" role="status">
+          {t('recording.pausedNote')}
+        </p>
+      ) : null}
 
       <dl className="recording-stats">
         <div>
@@ -259,8 +270,16 @@ function ActiveRecordingView({ active }: { active: ActiveRecording }) {
       </dl>
 
       <div className="recording-meters">
-        <LevelMeter label={t('recording.track.microphone')} level={current.microphoneLevel} />
-        <LevelMeter label={t('recording.track.system')} level={current.systemLevel} />
+        <LevelMeter
+          label={t('recording.track.microphone')}
+          level={current.microphoneLevel}
+          paused={paused}
+        />
+        <LevelMeter
+          label={t('recording.track.system')}
+          level={current.systemLevel}
+          paused={paused}
+        />
       </div>
 
       {warnings.length > 0 ? (
@@ -277,7 +296,20 @@ function ActiveRecordingView({ active }: { active: ActiveRecording }) {
       ) : null}
 
       <div className="recording-form__actions">
-        <Button variant="danger" onClick={() => void stopRecording()} disabled={stop.isPending}>
+        <Button
+          variant={paused ? 'primary' : 'secondary'}
+          onClick={togglePause}
+          disabled={switching || stop.isPending}
+          aria-label={paused ? t('recording.resumeLabel') : t('recording.pauseLabel')}
+          aria-busy={switching}
+        >
+          {paused ? t('recording.resume') : t('recording.pause')}
+        </Button>
+        <Button
+          variant="danger"
+          onClick={() => void stopRecording()}
+          disabled={stop.isPending || switching}
+        >
           {stop.isPending ? t('recording.stopping') : t('recording.stop')}
         </Button>
       </div>
