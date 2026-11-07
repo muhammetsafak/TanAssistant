@@ -59,6 +59,14 @@ export const commands = {
 	startRecording: (options: StartRecordingOptionsDto_Deserialize) => typedError<RecordingStartedDto, RecordingIpcError>(__TAURI_INVOKE("start_recording", { options })),
 	/**  Stops the running recording. */
 	stopRecording: () => typedError<RecordingSummaryDto, RecordingIpcError>(__TAURI_INVOKE("stop_recording")),
+	/**
+	 *  Pauses the running recording: nothing is captured (microphone, system audio and screen
+	 *  are released) and the recording clock stops until `resume_recording`. A paused recording
+	 *  can also be ended with `stop_recording`.
+	 */
+	pauseRecording: () => typedError<RecordingStatusDto_Serialize, RecordingIpcError>(__TAURI_INVOKE("pause_recording")),
+	/**  Resumes a paused recording; it continues where the pause began. */
+	resumeRecording: () => typedError<RecordingStatusDto_Serialize, RecordingIpcError>(__TAURI_INVOKE("resume_recording")),
 	/**  Whether a recording is running, with its live numbers. */
 	recordingStatus: () => typedError<RecordingStatusDto_Serialize, RecordingIpcError>(__TAURI_INVOKE("recording_status")),
 	/**  What the platform can record (screen capture availability and why not). */
@@ -214,7 +222,7 @@ export type ActiveRecordingDto = {
 	title: string,
 	/**  Start time, milliseconds since the Unix epoch. */
 	startedAt: number | null,
-	/**  Time since it started, in milliseconds. */
+	/**  Active recording time in milliseconds: time spent paused is not counted. */
 	elapsedMs: number,
 	/**  Microphone level (RMS, `0..1`). */
 	microphoneLevel: number | null,
@@ -935,6 +943,10 @@ export type RecordingErrorCode =
 "already_recording" | 
 /**  No recording is running. */
 "not_recording" | 
+/**  The recording is already paused. */
+"already_paused" | 
+/**  The recording is not paused, so it cannot be resumed. */
+"not_paused" | 
 /**  The OS denied microphone or screen access; the message says which setting to change. */
 "permission_denied" | 
 /**  A requested or default device does not exist. */
@@ -954,11 +966,11 @@ export type RecordingIpcError = {
 	message: string,
 };
 
-/**  Emitted about four times a second while recording. */
+/**  Emitted about four times a second while recording (not while paused). */
 export type RecordingProgressEvent = {
 	/**  The session being recorded. */
 	sessionId: string,
-	/**  Time since the recording started, in milliseconds. */
+	/**  Active recording time in milliseconds (paused time is not counted). */
 	elapsedMs: number,
 	/**  Microphone level (RMS, `0..1`). */
 	microphoneLevel: number | null,
@@ -978,11 +990,14 @@ export type RecordingStartedDto = {
 	startedAt: number | null,
 };
 
-/**  Emitted when a recording starts or ends, whoever started it (the window or the tray). */
+/**
+ *  Emitted when a recording starts, pauses, resumes or ends, whoever caused it (the window
+ *  or the tray).
+ */
 export type RecordingStateEvent = {
-	/**  `idle` or `recording`. */
+	/**  `recording` (started or resumed), `paused` or `idle` (ended). */
 	state: string,
-	/**  The session that started or ended. */
+	/**  The session whose state changed. */
 	sessionId: string,
 };
 
@@ -991,17 +1006,23 @@ export type RecordingStatusDto = RecordingStatusDto_Serialize | RecordingStatusD
 
 /**  Whether a recording is running. */
 export type RecordingStatusDto_Deserialize = {
-	/**  `idle` or `recording`. */
+	/**  `idle`, `recording` or `paused`. */
 	state: string,
-	/**  The running recording, when `state` is `recording`. */
+	/**
+	 *  The recording in progress, when `state` is `recording` or `paused`. While paused,
+	 *  nothing is captured and `elapsedMs` stands still.
+	 */
 	active?: ActiveRecordingDto | null,
 };
 
 /**  Whether a recording is running. */
 export type RecordingStatusDto_Serialize = {
-	/**  `idle` or `recording`. */
+	/**  `idle`, `recording` or `paused`. */
 	state: string,
-	/**  The running recording, when `state` is `recording`. */
+	/**
+	 *  The recording in progress, when `state` is `recording` or `paused`. While paused,
+	 *  nothing is captured and `elapsedMs` stands still.
+	 */
 	active: ActiveRecordingDto | null,
 };
 

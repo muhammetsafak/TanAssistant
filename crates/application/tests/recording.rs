@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -190,6 +190,23 @@ const MONO_48K: AudioFormat = AudioFormat {
 
 struct FakeStream {
     stopped: Arc<AtomicBool>,
+    /// Streams of this fake that are open right now.
+    live: Arc<AtomicU32>,
+}
+
+impl FakeStream {
+    fn open(stopped: &Arc<AtomicBool>, live: &Arc<AtomicU32>) -> Self {
+        live.fetch_add(1, Ordering::SeqCst);
+        Self {
+            stopped: stopped.clone(),
+            live: live.clone(),
+        }
+    }
+
+    fn close(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        self.live.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl AudioStream for FakeStream {
@@ -202,13 +219,13 @@ impl AudioStream for FakeStream {
     }
 
     fn stop(self: Box<Self>) {
-        self.stopped.store(true, Ordering::SeqCst);
+        self.close();
     }
 }
 
 impl ScreenStream for FakeStream {
     fn stop(self: Box<Self>) {
-        self.stopped.store(true, Ordering::SeqCst);
+        self.close();
     }
 }
 
@@ -217,6 +234,9 @@ struct FakeAudio {
     sinks: Mutex<HashMap<TrackKind, Arc<dyn AudioSink>>>,
     failing: Mutex<Vec<TrackKind>>,
     stopped: Arc<AtomicBool>,
+    live: Arc<AtomicU32>,
+    /// While set, `start` waits (a slow OS call).
+    gate: AtomicBool,
 }
 
 impl FakeAudio {
@@ -235,6 +255,9 @@ impl AudioCapture for FakeAudio {
         request: &AudioStreamRequest,
         sink: Arc<dyn AudioSink>,
     ) -> CaptureResult<Box<dyn AudioStream>> {
+        while self.gate.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         if self.failing.lock().unwrap().contains(&request.source) {
             return Err(CaptureError::new(
                 CaptureErrorKind::PermissionDenied,
@@ -242,9 +265,7 @@ impl AudioCapture for FakeAudio {
             ));
         }
         self.sinks.lock().unwrap().insert(request.source, sink);
-        Ok(Box::new(FakeStream {
-            stopped: self.stopped.clone(),
-        }))
+        Ok(Box::new(FakeStream::open(&self.stopped, &self.live)))
     }
 }
 
@@ -253,6 +274,9 @@ struct FakeScreen {
     sink: Mutex<Option<Arc<dyn FrameSink>>>,
     fail: AtomicBool,
     unavailable: AtomicBool,
+    live: Arc<AtomicU32>,
+    /// While set, `start` waits (a portal dialog, a slow OS call).
+    gate: AtomicBool,
     started_with: Mutex<Option<ScreenStreamRequest>>,
 }
 
@@ -278,14 +302,15 @@ impl ScreenCapture for FakeScreen {
         request: &ScreenStreamRequest,
         sink: Arc<dyn FrameSink>,
     ) -> CaptureResult<Box<dyn ScreenStream>> {
+        while self.gate.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         if self.fail.load(Ordering::SeqCst) {
             return Err(CaptureError::unsupported("no display server"));
         }
         *self.sink.lock().unwrap() = Some(sink);
         *self.started_with.lock().unwrap() = Some(request.clone());
-        Ok(Box::new(FakeStream {
-            stopped: Arc::default(),
-        }))
+        Ok(Box::new(FakeStream::open(&Arc::default(), &self.live)))
     }
 }
 
@@ -481,7 +506,9 @@ fn chunk(frames: usize, amplitude: f32, at: Instant) -> PcmChunk {
 fn recording_session_id(h: &Harness) -> String {
     match h.service.status() {
         RecordingStatus::Recording(active) => active.session_id.to_string(),
-        RecordingStatus::Idle => panic!("expected a running recording"),
+        RecordingStatus::Idle | RecordingStatus::Paused(_) => {
+            panic!("expected a running recording")
+        }
     }
 }
 
@@ -904,4 +931,622 @@ fn recovery_leaves_a_running_recording_alone() {
         SessionStatus::Recording
     );
     block_on(h.service.stop()).unwrap();
+}
+
+// ---- pause and resume ------------------------------------------------------------------
+
+/// Feeds `duration` of audio in real time: a block every ~10 ms, each exactly as long as the
+/// time since the previous one, so the file keeps pace with the clock.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn feed_for(sinks: &[Arc<dyn AudioSink>], duration: Duration) {
+    let end = Instant::now() + duration;
+    let mut last = Instant::now();
+    while last < end {
+        std::thread::sleep(Duration::from_millis(10));
+        let now = Instant::now();
+        let frames = ((now - last).as_secs_f64() * 48_000.0) as usize;
+        for sink in sinks {
+            sink.on_chunk(chunk(frames, 0.2, now));
+        }
+        last = now;
+    }
+}
+
+fn both_sinks(h: &Harness) -> [Arc<dyn AudioSink>; 2] {
+    [
+        h.audio.sink(TrackKind::Microphone),
+        h.audio.sink(TrackKind::System),
+    ]
+}
+
+fn file_ms(h: &Harness, kind: TrackKind) -> u64 {
+    let log = h.media.log(kind);
+    let log = log.lock().unwrap();
+    (log.sample_frames + log.silence_frames) * 1_000 / 48_000
+}
+
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap()
+}
+
+#[test]
+fn a_pause_is_skipped_by_the_audio_files_and_the_session_length() {
+    // "10 s recording, 10 s pause, 10 s recording" at 1:20 scale: 0.5 s, 1 s pause, 0.5 s.
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("pause"))).unwrap();
+    let sinks = both_sinks(&h);
+
+    let first = Instant::now();
+    feed_for(&sinks, Duration::from_millis(500));
+    h.service.pause().unwrap();
+    let first = first.elapsed();
+
+    std::thread::sleep(Duration::from_millis(1_000));
+
+    let resumed = Instant::now();
+    h.service.resume().unwrap();
+    feed_for(&sinks, Duration::from_millis(500));
+    let summary = block_on(h.service.stop()).unwrap();
+    let active = millis(first + resumed.elapsed());
+
+    assert!(
+        (900..1_300).contains(&active),
+        "test timing is off: {active}"
+    );
+    let session_ms = summary.session.duration_ms().unwrap();
+    assert!(
+        session_ms.abs_diff(active) < 250,
+        "session {session_ms} ms vs active {active} ms"
+    );
+    for kind in [TrackKind::Microphone, TrackKind::System] {
+        let ms = file_ms(&h, kind);
+        assert!(
+            ms.abs_diff(active) < 250,
+            "{kind} file {ms} ms vs active {active} ms (the 1000 ms pause must not be in it)"
+        );
+        // The pause is not rendered as silence either.
+        let log = h.media.log(kind);
+        let silence_ms = log.lock().unwrap().silence_frames * 1_000 / 48_000;
+        assert!(silence_ms < 300, "{kind}: {silence_ms} ms of silence");
+    }
+    assert_eq!(summary.session.status(), SessionStatus::Recorded);
+    assert!(summary.warnings.is_empty(), "{:?}", summary.warnings);
+}
+
+#[test]
+fn pause_and_resume_follow_the_state_machine() {
+    let h = harness();
+    // Nothing recording.
+    assert!(matches!(
+        h.service.pause().unwrap_err(),
+        RecordingError::NotRecording
+    ));
+    assert!(matches!(
+        h.service.resume().unwrap_err(),
+        RecordingError::NotRecording
+    ));
+
+    block_on(h.service.start(StartOptions::titled("states"))).unwrap();
+    // Running: cannot resume.
+    assert!(matches!(
+        h.service.resume().unwrap_err(),
+        RecordingError::NotPaused
+    ));
+
+    let paused = h.service.pause().unwrap();
+    assert!(
+        matches!(h.service.status(), RecordingStatus::Paused(a) if a.session_id == paused.session_id)
+    );
+    assert!(h.service.is_busy());
+    assert!(matches!(
+        h.service.pause().unwrap_err(),
+        RecordingError::AlreadyPaused
+    ));
+    // A paused recording still blocks a second start.
+    assert!(matches!(
+        block_on(h.service.start(StartOptions::titled("again"))).unwrap_err(),
+        RecordingError::AlreadyRecording
+    ));
+
+    let resumed = h.service.resume().unwrap();
+    assert_eq!(resumed.session_id, paused.session_id);
+    assert!(matches!(h.service.status(), RecordingStatus::Recording(_)));
+    // And it can pause again.
+    h.service.pause().unwrap();
+    h.service.resume().unwrap();
+    block_on(h.service.stop()).unwrap();
+    assert!(matches!(h.service.status(), RecordingStatus::Idle));
+}
+
+#[test]
+fn pausing_closes_every_stream_and_drops_what_still_arrives() {
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("streams"))).unwrap();
+    assert_eq!(h.audio.live.load(Ordering::SeqCst), 2);
+    assert_eq!(h.screen.live.load(Ordering::SeqCst), 1);
+    let [mic, system] = both_sinks(&h);
+    let screen = h.screen.sink.lock().unwrap().clone().unwrap();
+
+    feed_for(&[mic.clone(), system.clone()], Duration::from_millis(100));
+    h.service.pause().unwrap();
+    assert_eq!(
+        h.audio.live.load(Ordering::SeqCst),
+        0,
+        "microphone and system closed"
+    );
+    assert_eq!(h.screen.live.load(Ordering::SeqCst), 0, "screen closed");
+
+    // A late callback of a stopped stream is not captured.
+    let written = |kind| {
+        let log = h.media.log(kind);
+        let log = log.lock().unwrap();
+        log.sample_frames
+    };
+    // Let the worker drain what was queued before the pause.
+    std::thread::sleep(Duration::from_millis(100));
+    let before = written(TrackKind::Microphone);
+    mic.on_chunk(chunk(48_000, 0.9, Instant::now()));
+    screen.on_frame(frame_with_hash(u64::MAX, Instant::now()));
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(written(TrackKind::Microphone), before);
+
+    h.service.resume().unwrap();
+    assert_eq!(h.audio.live.load(Ordering::SeqCst), 2, "sources reopened");
+    assert_eq!(h.screen.live.load(Ordering::SeqCst), 1, "screen reopened");
+    let summary = block_on(h.service.stop()).unwrap();
+    assert_eq!(
+        summary.frame_count, 0,
+        "the frame sent during the pause was dropped"
+    );
+    assert_eq!(h.audio.live.load(Ordering::SeqCst), 0);
+    assert_eq!(h.screen.live.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn frame_timestamps_stay_monotonic_across_a_pause() {
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("frames"))).unwrap();
+    let mic = h.audio.sink(TrackKind::Microphone);
+    mic.on_chunk(chunk(480, 0.2, Instant::now()));
+    let screen = h.screen.sink.lock().unwrap().clone().unwrap();
+    let send = |hash: u64| {
+        screen.on_frame(frame_with_hash(hash, Instant::now()));
+        // The sink drops frames while the worker is busy (by design).
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    send(0);
+    h.service.pause().unwrap();
+    std::thread::sleep(Duration::from_millis(900));
+    h.service.resume().unwrap();
+    send(u64::MAX);
+    send(0);
+    block_on(h.service.stop()).unwrap();
+
+    let session = h
+        .sessions
+        .sessions
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .cloned()
+        .unwrap();
+    let rows = block_on(h.frames.list_for_session(&session.id)).unwrap();
+    assert_eq!(rows.len(), 3);
+    let stamps: Vec<u64> = rows.iter().map(|f| f.timestamp_ms).collect();
+    assert!(stamps.windows(2).all(|w| w[0] <= w[1]), "{stamps:?}");
+    assert!(
+        stamps[2] < 700,
+        "the 900 ms pause must not be on the frame axis: {stamps:?}"
+    );
+}
+
+#[test]
+fn a_paused_recording_can_be_stopped_directly() {
+    let h = harness();
+    let session = block_on(h.service.start(StartOptions::titled("stop paused"))).unwrap();
+    let sinks = both_sinks(&h);
+    let started = Instant::now();
+    feed_for(&sinks, Duration::from_millis(400));
+    h.service.pause().unwrap();
+    let active = millis(started.elapsed());
+    std::thread::sleep(Duration::from_millis(800));
+
+    let summary = block_on(h.service.stop()).unwrap();
+    assert_eq!(summary.session.status(), SessionStatus::Recorded);
+    assert_eq!(summary.tracks.len(), 2);
+    let session_ms = summary.session.duration_ms().unwrap();
+    assert!(
+        session_ms.abs_diff(active) < 250,
+        "session {session_ms} ms vs active {active} ms"
+    );
+    for track in &summary.tracks {
+        assert!(
+            track.duration_ms.abs_diff(active) < 250,
+            "{} track {} ms vs {active} ms",
+            track.kind,
+            track.duration_ms
+        );
+        assert!(h.media.log(track.kind).lock().unwrap().finished);
+    }
+    assert_eq!(
+        h.sessions.get_now(session.id.as_str()).unwrap().status(),
+        SessionStatus::Recorded
+    );
+    assert!(matches!(
+        h.events.all().last(),
+        Some(RecordingEvent::Stopped { .. })
+    ));
+    assert!(!h.service.is_busy());
+}
+
+#[test]
+fn resume_that_cannot_reopen_any_audio_source_stays_paused() {
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("denied"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+    h.service.pause().unwrap();
+
+    *h.audio.failing.lock().unwrap() = vec![TrackKind::Microphone, TrackKind::System];
+    match h.service.resume().unwrap_err() {
+        RecordingError::Capture(e) => assert_eq!(e.kind, CaptureErrorKind::PermissionDenied),
+        other => panic!("unexpected error: {other}"),
+    }
+    assert!(matches!(h.service.status(), RecordingStatus::Paused(_)));
+    assert_eq!(h.audio.live.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        h.screen.live.load(Ordering::SeqCst),
+        0,
+        "no screen without audio"
+    );
+
+    // Once the problem is gone it resumes, and the failed attempt left no gap behind.
+    h.audio.failing.lock().unwrap().clear();
+    h.service.resume().unwrap();
+    assert!(matches!(h.service.status(), RecordingStatus::Recording(_)));
+    block_on(h.service.stop()).unwrap();
+}
+
+#[test]
+fn one_source_that_cannot_reopen_is_only_a_warning() {
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("half"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+    h.service.pause().unwrap();
+
+    *h.audio.failing.lock().unwrap() = vec![TrackKind::System];
+    h.service.resume().unwrap();
+    assert_eq!(h.audio.live.load(Ordering::SeqCst), 1);
+    feed_for(
+        &[h.audio.sink(TrackKind::Microphone)],
+        Duration::from_millis(100),
+    );
+    let summary = block_on(h.service.stop()).unwrap();
+
+    assert_eq!(summary.session.status(), SessionStatus::Recorded);
+    assert_eq!(
+        summary.tracks.len(),
+        2,
+        "both files were written before the pause"
+    );
+    assert!(
+        summary
+            .warnings
+            .iter()
+            .any(|w| w.contains("system audio could not resume")),
+        "{:?}",
+        summary.warnings
+    );
+    // The track whose source stayed closed is padded up to the end, not left short.
+    let mic = file_ms(&h, TrackKind::Microphone);
+    let system = file_ms(&h, TrackKind::System);
+    assert!(
+        mic.abs_diff(system) < 250,
+        "mic {mic} ms, system {system} ms"
+    );
+}
+
+#[test]
+fn pause_and_resume_are_published_and_progress_stops_while_paused() {
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("events"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(300));
+    h.service.pause().unwrap();
+    // Let a tick that was already due go out.
+    std::thread::sleep(Duration::from_millis(400));
+
+    let progress = |h: &Harness| {
+        h.events
+            .all()
+            .iter()
+            .filter(|e| matches!(e, RecordingEvent::Progress(_)))
+            .count()
+    };
+    let before = progress(&h);
+    assert!(before > 0);
+    let elapsed_at_pause = match h.service.status() {
+        RecordingStatus::Paused(a) => a.elapsed_ms,
+        other => panic!("expected paused, got {other:?}"),
+    };
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(progress(&h), before, "no progress while paused");
+    match h.service.status() {
+        RecordingStatus::Paused(a) => {
+            assert_eq!(a.elapsed_ms, elapsed_at_pause, "the clock stands still");
+            assert!(a.microphone_level.abs() < f32::EPSILON);
+        }
+        other => panic!("expected paused, got {other:?}"),
+    }
+
+    h.service.resume().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(progress(&h) > before, "progress continues after resume");
+    block_on(h.service.stop()).unwrap();
+
+    let kinds: Vec<&str> = h
+        .events
+        .all()
+        .iter()
+        .filter_map(|e| match e {
+            RecordingEvent::Started { .. } => Some("started"),
+            RecordingEvent::Paused { .. } => Some("paused"),
+            RecordingEvent::Resumed { .. } => Some("resumed"),
+            RecordingEvent::Stopped { .. } => Some("stopped"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(kinds, ["started", "paused", "resumed", "stopped"]);
+}
+
+#[test]
+fn a_crash_while_paused_recovers_exactly_the_active_time() {
+    let h = harness();
+    let session = block_on(h.service.start(StartOptions::titled("crash"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(400));
+    h.service.pause().unwrap();
+    // The pause goes on for much longer than the recording itself, then the process dies.
+    std::thread::sleep(Duration::from_millis(1_200));
+
+    // The files were padded up to the pause instant and made durable when it began.
+    let mut length_ms = 0;
+    for kind in [TrackKind::Microphone, TrackKind::System] {
+        let log = h.media.log(kind);
+        let log = log.lock().unwrap();
+        assert!(log.checkpoints >= 1, "{kind}: no checkpoint at the pause");
+        assert!(!log.finished);
+        let frames = log.sample_frames + log.silence_frames;
+        length_ms = length_ms.max(frames * 1_000 / 48_000);
+        h.media.on_disk.lock().unwrap().insert(
+            (session.id.to_string(), kind),
+            AudioFileInfo {
+                relative_path: format!("audio/{kind}.wav"),
+                sample_rate: 48_000,
+                channels: 1,
+                frames,
+            },
+        );
+    }
+
+    // A fresh process (a new service over the same database and files) settles it.
+    let restarted = RecordingService::new(
+        h.sessions.clone(),
+        h.frames.clone(),
+        Arc::new(MemSettings(AppSettings::default())),
+        RecordingPorts {
+            audio: h.audio.clone(),
+            screen: h.screen.clone(),
+            hasher: Arc::new(FakeHasher),
+            media: h.media.clone(),
+            ids: Arc::new(SequentialIds::default()),
+            clock: Arc::new(FixedClock),
+            events: h.events.clone(),
+        },
+    );
+    // The paused recording itself is left alone by its own service...
+    assert_eq!(block_on(h.service.recover_interrupted()).unwrap().len(), 0);
+    // ...and the new one finds it interrupted.
+    let recovered = block_on(restarted.recover_interrupted()).unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].tracks, 2);
+
+    let stored = h.sessions.get_now(session.id.as_str()).unwrap();
+    assert_eq!(stored.status(), SessionStatus::Recorded);
+    let recovered_ms = stored.duration_ms().unwrap();
+    assert_eq!(recovered_ms, length_ms);
+    assert!(
+        (350..700).contains(&recovered_ms),
+        "the 1200 ms pause must not count: {recovered_ms} ms"
+    );
+
+    // Release the original service's workers.
+    let _ = block_on(h.service.stop());
+}
+
+#[test]
+fn status_and_is_busy_answer_while_a_resume_waits_on_the_os() {
+    let h = Arc::new(harness());
+    block_on(h.service.start(StartOptions::titled("slow resume"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+    h.service.pause().unwrap();
+    let frozen = match h.service.status() {
+        RecordingStatus::Paused(a) => a.elapsed_ms,
+        other => panic!("expected paused, got {other:?}"),
+    };
+
+    h.audio.gate.store(true, Ordering::SeqCst);
+    let resuming = {
+        let h = h.clone();
+        std::thread::spawn(move || h.service.resume())
+    };
+    std::thread::sleep(Duration::from_millis(150));
+
+    // The OS call is still pending, yet the questions are answered at once: the sources are
+    // not capturing, so the recording still reads as paused with a standing clock.
+    let asked = Instant::now();
+    assert!(h.service.is_busy());
+    match h.service.status() {
+        RecordingStatus::Paused(a) => assert_eq!(a.elapsed_ms, frozen),
+        other => panic!("expected paused while the sources open, got {other:?}"),
+    }
+    assert!(
+        asked.elapsed() < Duration::from_millis(100),
+        "status waited for the OS"
+    );
+
+    // A stop requested meanwhile waits for the resume and then ends the recording.
+    let stopping = {
+        let h = h.clone();
+        std::thread::spawn(move || block_on(h.service.stop()))
+    };
+    std::thread::sleep(Duration::from_millis(100));
+    h.audio.gate.store(false, Ordering::SeqCst);
+    resuming.join().unwrap().unwrap();
+    let summary = stopping.join().unwrap().unwrap();
+    assert_eq!(summary.session.status(), SessionStatus::Recorded);
+    assert!(!h.service.is_busy());
+}
+
+#[test]
+fn a_slow_screen_does_not_hold_back_the_audio_or_the_resumed_state() {
+    let h = Arc::new(harness());
+    block_on(h.service.start(StartOptions::titled("slow screen"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+    h.service.pause().unwrap();
+
+    h.screen.gate.store(true, Ordering::SeqCst);
+    let resuming = {
+        let h = h.clone();
+        std::thread::spawn(move || h.service.resume())
+    };
+    // Both audio sources run while the screen is still opening.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while h.audio.live.load(Ordering::SeqCst) < 2 {
+        assert!(Instant::now() < deadline, "audio never reopened");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(matches!(h.service.status(), RecordingStatus::Recording(_)));
+    assert!(h
+        .events
+        .all()
+        .iter()
+        .any(|e| matches!(e, RecordingEvent::Resumed { .. })));
+    let mic = h.audio.sink(TrackKind::Microphone);
+    let before = h
+        .media
+        .log(TrackKind::Microphone)
+        .lock()
+        .unwrap()
+        .sample_frames;
+    feed_for(&[mic], Duration::from_millis(100));
+    std::thread::sleep(Duration::from_millis(50));
+    let after = h
+        .media
+        .log(TrackKind::Microphone)
+        .lock()
+        .unwrap()
+        .sample_frames;
+    assert!(after > before, "audio was lost while the screen opened");
+
+    h.screen.gate.store(false, Ordering::SeqCst);
+    resuming.join().unwrap().unwrap();
+    assert_eq!(h.screen.live.load(Ordering::SeqCst), 1);
+    block_on(h.service.stop()).unwrap();
+}
+
+#[test]
+fn racing_pauses_and_resumes_publish_events_in_state_order() {
+    let h = Arc::new(harness());
+    block_on(h.service.start(StartOptions::titled("race"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(50));
+
+    let workers: Vec<_> = (0..2)
+        .map(|_| {
+            let h = h.clone();
+            std::thread::spawn(move || {
+                for _ in 0..40 {
+                    // Losing a race is an ordinary typed error here.
+                    let _ = h.service.pause();
+                    let _ = h.service.resume();
+                }
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    // Leave it running so the last event is checked too.
+    let _ = h.service.resume();
+
+    let transitions: Vec<bool> = h
+        .events
+        .all()
+        .iter()
+        .filter_map(|e| match e {
+            RecordingEvent::Paused { .. } => Some(true),
+            RecordingEvent::Resumed { .. } => Some(false),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        transitions.len() > 4,
+        "the threads never overlapped usefully"
+    );
+    for pair in transitions.windows(2) {
+        assert_ne!(pair[0], pair[1], "events out of order: {transitions:?}");
+    }
+    assert!(transitions[0], "the first transition is a pause");
+    assert!(
+        !transitions[transitions.len() - 1],
+        "the last one is a resume"
+    );
+    assert!(matches!(h.service.status(), RecordingStatus::Recording(_)));
+    block_on(h.service.stop()).unwrap();
+}
+
+#[test]
+fn begin_stop_waits_for_a_resume_and_the_service_stays_busy_until_finish_stop() {
+    let h = Arc::new(harness());
+    block_on(h.service.start(StartOptions::titled("split stop"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+    h.service.pause().unwrap();
+
+    h.audio.gate.store(true, Ordering::SeqCst);
+    let resuming = {
+        let h = h.clone();
+        std::thread::spawn(move || h.service.resume())
+    };
+    std::thread::sleep(Duration::from_millis(100));
+    let taking = {
+        let h = h.clone();
+        std::thread::spawn(move || h.service.begin_stop())
+    };
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(!taking.is_finished(), "begin_stop must wait for the resume");
+
+    h.audio.gate.store(false, Ordering::SeqCst);
+    resuming.join().unwrap().unwrap();
+    let stopping = taking.join().unwrap().unwrap();
+
+    // Taken but not yet settled: still busy, nothing else can start.
+    assert!(h.service.is_busy());
+    assert!(matches!(h.service.status(), RecordingStatus::Idle));
+    assert!(matches!(
+        block_on(h.service.start(StartOptions::titled("too early"))).unwrap_err(),
+        RecordingError::AlreadyRecording
+    ));
+
+    let summary = block_on(h.service.finish_stop(stopping)).unwrap();
+    assert_eq!(summary.session.status(), SessionStatus::Recorded);
+    assert!(!h.service.is_busy());
+    assert!(matches!(
+        h.events.all().last(),
+        Some(RecordingEvent::Stopped { .. })
+    ));
+    // Nothing left to take.
+    assert!(matches!(
+        h.service.begin_stop().err(),
+        Some(RecordingError::NotRecording)
+    ));
 }

@@ -1,9 +1,12 @@
-//! Recording use cases: start, stop and crash recovery of a capture session (ADR-009).
+//! Recording use cases: start, pause, resume, stop and crash recovery of a capture session
+//! (ADR-009).
 //!
 //! The microphone and the system audio are captured as two separate tracks; the screen is
 //! sampled periodically and only visibly changed frames are stored
 //! ([`frame_selector`]). Everything shares one monotonic timeline whose origin is the moment
 //! recording started, so a frame timestamp and a transcript offset mean the same thing.
+//! Paused time is not part of that timeline: the clock stops while paused, the audio continues
+//! where the pause began and the session length is the active time only.
 
 pub mod frame_selector;
 mod service;
@@ -21,7 +24,7 @@ pub use frame_selector::{
     decide_frame, hamming_distance, FrameDecision, FrameSelector, FrameSelectorConfig, KeepReason,
     KeptFrame, DEFAULT_KEEP_ALIVE_MS,
 };
-pub use service::{RecordingPorts, RecordingService};
+pub use service::{RecordingPorts, RecordingService, StoppingRecording};
 
 /// Longest accepted session title, in characters.
 pub const MAX_TITLE_LEN: usize = 200;
@@ -65,7 +68,7 @@ pub struct ActiveRecordingStatus {
     pub title: String,
     /// When it started (wall clock).
     pub started_at: EpochMs,
-    /// Time since it started, in milliseconds.
+    /// Active recording time in milliseconds (paused time is not counted).
     pub elapsed_ms: u64,
     /// Microphone level (RMS, `0.0..=1.0`) over the last update interval.
     pub microphone_level: f32,
@@ -82,6 +85,8 @@ pub enum RecordingStatus {
     Idle,
     /// A recording is running.
     Recording(ActiveRecordingStatus),
+    /// A recording is paused: nothing is captured and `elapsed_ms` stands still.
+    Paused(ActiveRecordingStatus),
 }
 
 /// A periodic update while recording.
@@ -89,7 +94,7 @@ pub enum RecordingStatus {
 pub struct RecordingProgress {
     /// The session being recorded.
     pub session_id: SessionId,
-    /// Time since it started, in milliseconds.
+    /// Active recording time in milliseconds (paused time is not counted).
     pub elapsed_ms: u64,
     /// Microphone level (RMS, `0.0..=1.0`).
     pub microphone_level: f32,
@@ -109,8 +114,20 @@ pub enum RecordingEvent {
         /// Its title.
         title: String,
     },
-    /// Periodic progress (about four times a second).
+    /// Periodic progress (about four times a second, not while paused).
     Progress(RecordingProgress),
+    /// The recording was paused; nothing is captured until it resumes.
+    Paused {
+        /// The paused session.
+        session_id: SessionId,
+        /// Active recording time at the pause, in milliseconds.
+        elapsed_ms: u64,
+    },
+    /// A paused recording resumed.
+    Resumed {
+        /// The resumed session.
+        session_id: SessionId,
+    },
     /// A source had a problem but recording continues (a stream failed to start, an xrun,
     /// a write error...). The text is English and free of captured content.
     Warning {
@@ -202,6 +219,10 @@ pub enum RecordingError {
     AlreadyRecording,
     /// No recording is running.
     NotRecording,
+    /// The recording is already paused.
+    AlreadyPaused,
+    /// The recording is not paused, so there is nothing to resume.
+    NotPaused,
     /// The request was rejected.
     Invalid(String),
     /// No audio source could be started; carries the first backend error.
@@ -217,6 +238,8 @@ impl fmt::Display for RecordingError {
         match self {
             Self::AlreadyRecording => f.write_str("a recording is already in progress"),
             Self::NotRecording => f.write_str("no recording is in progress"),
+            Self::AlreadyPaused => f.write_str("the recording is already paused"),
+            Self::NotPaused => f.write_str("the recording is not paused"),
             Self::Invalid(why) => write!(f, "invalid recording request: {why}"),
             Self::Capture(e) => write!(f, "cannot capture audio: {e}"),
             // Details stay in `source()` for logs.

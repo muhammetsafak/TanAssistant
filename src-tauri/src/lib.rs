@@ -48,6 +48,8 @@ pub fn ipc_builder() -> Builder<tauri::Wry> {
             commands::settings::update_settings,
             commands::recording::start_recording,
             commands::recording::stop_recording,
+            commands::recording::pause_recording,
+            commands::recording::resume_recording,
             commands::recording::recording_status,
             commands::recording::recording_capabilities,
             commands::recording::list_audio_devices,

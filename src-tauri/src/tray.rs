@@ -1,5 +1,6 @@
-//! The system tray icon: shows whether a recording is running and offers start/stop, so a
-//! recording can be controlled (and survives) without the main window.
+//! The system tray icon: shows whether a recording is running or paused and offers
+//! start/stop and pause/resume, so a recording can be controlled (and survives) without the
+//! main window.
 
 use tan_domain::UiLanguage;
 use tauri::image::Image;
@@ -11,6 +12,7 @@ use crate::commands::recording;
 
 const TRAY_ID: &str = "tan-tray";
 const MENU_TOGGLE: &str = "toggle-recording";
+const MENU_PAUSE: &str = "pause-recording";
 const MENU_SHOW: &str = "show-window";
 const MENU_QUIT: &str = "quit";
 /// Label of the main window (`tauri.conf.json`).
@@ -20,10 +22,24 @@ pub const MAIN_WINDOW: &str = "main";
 struct TrayText {
     start: &'static str,
     stop: &'static str,
+    pause: &'static str,
+    resume: &'static str,
     show: &'static str,
     quit: &'static str,
     idle_tooltip: &'static str,
     recording_tooltip: &'static str,
+    paused_tooltip: &'static str,
+}
+
+/// What the tray shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayState {
+    /// No recording.
+    Idle,
+    /// A recording is running.
+    Recording,
+    /// A recording is paused.
+    Paused,
 }
 
 fn text_for(language: UiLanguage) -> TrayText {
@@ -31,42 +47,53 @@ fn text_for(language: UiLanguage) -> TrayText {
         UiLanguage::Tr => TrayText {
             start: "Kaydı başlat",
             stop: "Kaydı durdur",
+            pause: "Duraklat",
+            resume: "Devam et",
             show: "Pencereyi göster",
             quit: "Çık",
             idle_tooltip: "Tan",
             recording_tooltip: "Tan: kayıt sürüyor",
+            paused_tooltip: "Tan: kayıt duraklatıldı",
         },
         UiLanguage::En => TrayText {
             start: "Start recording",
             stop: "Stop recording",
+            pause: "Pause",
+            resume: "Resume",
             show: "Show window",
             quit: "Quit",
             idle_tooltip: "Tan",
             recording_tooltip: "Tan: recording",
+            paused_tooltip: "Tan: recording paused",
         },
     }
 }
 
-/// What the tray needs to flip between its two states. Managed by Tauri.
+/// What the tray needs to flip between its states. Managed by Tauri.
 pub struct TrayHandles {
     tray: TrayIcon<Wry>,
     toggle: MenuItem<Wry>,
+    pause: MenuItem<Wry>,
     text: TrayText,
     idle_icon: Image<'static>,
     recording_icon: Image<'static>,
+    paused_icon: Image<'static>,
 }
 
 /// Builds the tray icon and its menu. The texts follow the UI language at startup.
 pub fn init(app: &AppHandle, language: UiLanguage) -> tauri::Result<()> {
     let text = text_for(language);
     let toggle = MenuItem::with_id(app, MENU_TOGGLE, text.start, true, None::<&str>)?;
+    // Only meaningful while a recording exists.
+    let pause = MenuItem::with_id(app, MENU_PAUSE, text.pause, false, None::<&str>)?;
     let show = MenuItem::with_id(app, MENU_SHOW, text.show, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, text.quit, true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&toggle, &show, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&toggle, &pause, &show, &separator, &quit])?;
 
     let idle_icon = base_icon(app);
-    let recording_icon = with_recording_badge(&idle_icon);
+    let recording_icon = with_badge(&idle_icon, [220, 38, 38, 255]);
+    let paused_icon = with_badge(&idle_icon, [234, 179, 8, 255]);
 
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(idle_icon.clone())
@@ -89,32 +116,48 @@ pub fn init(app: &AppHandle, language: UiLanguage) -> tauri::Result<()> {
     app.manage(TrayHandles {
         tray,
         toggle,
+        pause,
         text,
         idle_icon,
         recording_icon,
+        paused_icon,
     });
     Ok(())
 }
 
-/// Switches the tray between "idle" and "recording" (icon badge, tooltip, menu label).
-/// A missing tray (failed to build) is not an error: recording does not depend on it.
-pub fn set_recording(app: &AppHandle, recording: bool) {
+/// Switches the tray between "idle", "recording" and "paused" (icon badge, tooltip, menu
+/// labels). A missing tray (failed to build) is not an error: recording does not depend on it.
+pub fn set_state(app: &AppHandle, state: TrayState) {
     let Some(handles) = app.try_state::<TrayHandles>() else {
         return;
     };
-    let (icon, tooltip, label) = if recording {
-        (
-            &handles.recording_icon,
-            handles.text.recording_tooltip,
-            handles.text.stop,
-        )
-    } else {
-        (
+    let text = &handles.text;
+    let (icon, tooltip, label, pause_label) = match state {
+        TrayState::Idle => (
             &handles.idle_icon,
-            handles.text.idle_tooltip,
-            handles.text.start,
-        )
+            text.idle_tooltip,
+            text.start,
+            text.pause,
+        ),
+        TrayState::Recording => (
+            &handles.recording_icon,
+            text.recording_tooltip,
+            text.stop,
+            text.pause,
+        ),
+        TrayState::Paused => (
+            &handles.paused_icon,
+            text.paused_tooltip,
+            text.stop,
+            text.resume,
+        ),
     };
+    if let Err(error) = handles.pause.set_text(pause_label) {
+        tracing::debug!(%error, "cannot update the tray pause label");
+    }
+    if let Err(error) = handles.pause.set_enabled(state != TrayState::Idle) {
+        tracing::debug!(%error, "cannot update the tray pause item");
+    }
     if let Err(error) = handles.tray.set_icon(Some(icon.clone())) {
         tracing::debug!(%error, "cannot update the tray icon");
     }
@@ -140,10 +183,24 @@ fn on_menu_event(app: &AppHandle, event: &MenuEvent) {
         MENU_TOGGLE => {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                let result = if recording::is_recording(&app) {
+                // A paused recording is stopped like a running one.
+                let result = if recording::is_recording(&app) || recording::is_paused(&app) {
                     recording::stop_running(&app).await
                 } else {
                     recording::start_with_defaults(&app).await
+                };
+                if let Err(error) = result {
+                    tracing::error!(code = ?error.code, "{}", error.message);
+                }
+            });
+        }
+        MENU_PAUSE => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let result = if recording::is_paused(&app) {
+                    recording::resume_current(&app).await
+                } else {
+                    recording::pause_current(&app).await
                 };
                 if let Err(error) = result {
                     tracing::error!(code = ?error.code, "{}", error.message);
@@ -172,8 +229,8 @@ fn base_icon(app: &AppHandle) -> Image<'static> {
     }
 }
 
-/// A copy of `icon` with a red dot in the bottom-right corner.
-fn with_recording_badge(icon: &Image<'static>) -> Image<'static> {
+/// A copy of `icon` with a dot of `color` in the bottom-right corner.
+fn with_badge(icon: &Image<'static>, color: [u8; 4]) -> Image<'static> {
     let (width, height) = (icon.width(), icon.height());
     let mut rgba = icon.rgba().to_vec();
     let radius = f64::from(width.min(height)) * 0.3;
@@ -187,7 +244,7 @@ fn with_recording_badge(icon: &Image<'static>) -> Image<'static> {
             let distance = dx.hypot(dy);
             let i = ((y * width + x) * 4) as usize;
             if distance <= radius - 1.0 {
-                rgba[i..i + 4].copy_from_slice(&[220, 38, 38, 255]);
+                rgba[i..i + 4].copy_from_slice(&color);
             } else if distance <= radius {
                 // One pixel white ring so the dot stands out on dark and light trays.
                 rgba[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);

@@ -16,8 +16,8 @@ use tan_application::ports::{
     ScreenUnavailableReason, ThumbnailOutcome, ThumbnailUnavailableReason,
 };
 use tan_application::recording::{
-    default_session_title, RecordingError, RecordingEvent, RecordingEvents, RecordingStatus,
-    RecordingSummary, StartOptions, TrackSummary,
+    default_session_title, ActiveRecordingStatus, RecordingError, RecordingEvent, RecordingEvents,
+    RecordingStatus, RecordingSummary, StartOptions, TrackSummary,
 };
 use tan_domain::{LanguageCode, LanguageSetting, SessionStatus};
 use tauri::{AppHandle, Manager, State};
@@ -40,6 +40,10 @@ pub enum RecordingErrorCode {
     AlreadyRecording,
     /// No recording is running.
     NotRecording,
+    /// The recording is already paused.
+    AlreadyPaused,
+    /// The recording is not paused, so it cannot be resumed.
+    NotPaused,
     /// The OS denied microphone or screen access; the message says which setting to change.
     PermissionDenied,
     /// A requested or default device does not exist.
@@ -88,6 +92,8 @@ impl From<RecordingError> for RecordingIpcError {
             RecordingError::Invalid(_) => RecordingErrorCode::Validation,
             RecordingError::AlreadyRecording => RecordingErrorCode::AlreadyRecording,
             RecordingError::NotRecording => RecordingErrorCode::NotRecording,
+            RecordingError::AlreadyPaused => RecordingErrorCode::AlreadyPaused,
+            RecordingError::NotPaused => RecordingErrorCode::NotPaused,
             RecordingError::Capture(capture) => match capture.kind {
                 CaptureErrorKind::PermissionDenied => RecordingErrorCode::PermissionDenied,
                 CaptureErrorKind::DeviceNotFound => RecordingErrorCode::DeviceNotFound,
@@ -262,7 +268,7 @@ pub struct ActiveRecordingDto {
     pub title: String,
     /// Start time, milliseconds since the Unix epoch.
     pub started_at: f64,
-    /// Time since it started, in milliseconds.
+    /// Active recording time in milliseconds: time spent paused is not counted.
     pub elapsed_ms: u32,
     /// Microphone level (RMS, `0..1`).
     pub microphone_level: f32,
@@ -272,13 +278,30 @@ pub struct ActiveRecordingDto {
     pub frame_count: u32,
 }
 
+impl From<ActiveRecordingStatus> for ActiveRecordingDto {
+    fn from(active: ActiveRecordingStatus) -> Self {
+        Self {
+            session_id: active.session_id.to_string(),
+            title: active.title,
+            // JS numbers are doubles and specta refuses 64-bit integers.
+            #[allow(clippy::cast_precision_loss)]
+            started_at: active.started_at.get() as f64,
+            elapsed_ms: saturating_u32(active.elapsed_ms),
+            microphone_level: active.microphone_level,
+            system_level: active.system_level,
+            frame_count: active.frame_count,
+        }
+    }
+}
+
 /// Whether a recording is running.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingStatusDto {
-    /// `idle` or `recording`.
+    /// `idle`, `recording` or `paused`.
     pub state: String,
-    /// The running recording, when `state` is `recording`.
+    /// The recording in progress, when `state` is `recording` or `paused`. While paused,
+    /// nothing is captured and `elapsedMs` stands still.
     pub active: Option<ActiveRecordingDto>,
 }
 
@@ -291,17 +314,11 @@ impl From<RecordingStatus> for RecordingStatusDto {
             },
             RecordingStatus::Recording(active) => Self {
                 state: "recording".to_owned(),
-                active: Some(ActiveRecordingDto {
-                    session_id: active.session_id.to_string(),
-                    title: active.title,
-                    // JS numbers are doubles and specta refuses 64-bit integers.
-                    #[allow(clippy::cast_precision_loss)]
-                    started_at: active.started_at.get() as f64,
-                    elapsed_ms: saturating_u32(active.elapsed_ms),
-                    microphone_level: active.microphone_level,
-                    system_level: active.system_level,
-                    frame_count: active.frame_count,
-                }),
+                active: Some(active.into()),
+            },
+            RecordingStatus::Paused(active) => Self {
+                state: "paused".to_owned(),
+                active: Some(active.into()),
             },
         }
     }
@@ -453,13 +470,13 @@ impl From<ThumbnailOutcome> for DisplayThumbnailDto {
 // Events
 // ---------------------------------------------------------------------------------------
 
-/// Emitted about four times a second while recording.
+/// Emitted about four times a second while recording (not while paused).
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingProgressEvent {
     /// The session being recorded.
     pub session_id: String,
-    /// Time since the recording started, in milliseconds.
+    /// Active recording time in milliseconds (paused time is not counted).
     pub elapsed_ms: u32,
     /// Microphone level (RMS, `0..1`).
     pub microphone_level: f32,
@@ -469,13 +486,14 @@ pub struct RecordingProgressEvent {
     pub frame_count: u32,
 }
 
-/// Emitted when a recording starts or ends, whoever started it (the window or the tray).
+/// Emitted when a recording starts, pauses, resumes or ends, whoever caused it (the window
+/// or the tray).
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingStateEvent {
-    /// `idle` or `recording`.
+    /// `recording` (started or resumed), `paused` or `idle` (ended).
     pub state: String,
-    /// The session that started or ended.
+    /// The session whose state changed.
     pub session_id: String,
 }
 
@@ -505,16 +523,24 @@ impl TauriRecordingEvents {
 impl RecordingEvents for TauriRecordingEvents {
     fn publish(&self, event: RecordingEvent) {
         let emitted = match event {
-            RecordingEvent::Started { session_id, .. } => {
-                tray::set_recording(&self.app, true);
+            RecordingEvent::Started { session_id, .. } | RecordingEvent::Resumed { session_id } => {
+                tray::set_state(&self.app, tray::TrayState::Recording);
                 RecordingStateEvent {
                     state: "recording".to_owned(),
                     session_id: session_id.to_string(),
                 }
                 .emit(&self.app)
             }
+            RecordingEvent::Paused { session_id, .. } => {
+                tray::set_state(&self.app, tray::TrayState::Paused);
+                RecordingStateEvent {
+                    state: "paused".to_owned(),
+                    session_id: session_id.to_string(),
+                }
+                .emit(&self.app)
+            }
             RecordingEvent::Stopped { session_id } => {
-                tray::set_recording(&self.app, false);
+                tray::set_state(&self.app, tray::TrayState::Idle);
                 RecordingStateEvent {
                     state: "idle".to_owned(),
                     session_id: session_id.to_string(),
@@ -576,7 +602,29 @@ pub async fn start_recording(
 pub async fn stop_recording(
     state: State<'_, AppState>,
 ) -> Result<RecordingSummaryDto, RecordingIpcError> {
-    Ok(state.recording.stop().await?.into())
+    Ok(stop_service(&state.recording).await?.into())
+}
+
+/// Pauses the running recording: nothing is captured (microphone, system audio and screen
+/// are released) and the recording clock stops until `resume_recording`. A paused recording
+/// can also be ended with `stop_recording`.
+#[tauri::command]
+#[specta::specta]
+#[tracing::instrument(skip_all)]
+pub async fn pause_recording(
+    state: State<'_, AppState>,
+) -> Result<RecordingStatusDto, RecordingIpcError> {
+    pause_running(&state.recording).await.map(Into::into)
+}
+
+/// Resumes a paused recording; it continues where the pause began.
+#[tauri::command]
+#[specta::specta]
+#[tracing::instrument(skip_all)]
+pub async fn resume_recording(
+    state: State<'_, AppState>,
+) -> Result<RecordingStatusDto, RecordingIpcError> {
+    resume_paused(&state.recording).await.map(Into::into)
 }
 
 /// Whether a recording is running, with its live numbers.
@@ -713,10 +761,55 @@ pub async fn start_with_defaults(app: &AppHandle) -> Result<(), RecordingIpcErro
     Ok(())
 }
 
-/// Stops the running recording (tray menu, quit).
+/// Stops the recording. Taking it waits for a pause or resume in progress (as long as the
+/// OS needs to open a stream), so that wait runs on the blocking pool, not on a runtime
+/// thread; the settling after it is the same as ever.
+async fn stop_service(
+    service: &Arc<crate::state::Recording>,
+) -> Result<RecordingSummary, RecordingIpcError> {
+    let taker = service.clone();
+    let stopping = run_blocking(move || taker.begin_stop()).await??;
+    Ok(service.finish_stop(stopping).await?)
+}
+
+/// Pauses the recording on the blocking pool (stopping the streams waits on the OS).
+async fn pause_running(
+    service: &Arc<crate::state::Recording>,
+) -> Result<RecordingStatus, RecordingIpcError> {
+    let service = service.clone();
+    run_blocking(move || service.pause().map(RecordingStatus::Paused))
+        .await?
+        .map_err(Into::into)
+}
+
+/// Resumes the recording on the blocking pool (opening the streams waits on the OS).
+async fn resume_paused(
+    service: &Arc<crate::state::Recording>,
+) -> Result<RecordingStatus, RecordingIpcError> {
+    let service = service.clone();
+    run_blocking(move || service.resume().map(RecordingStatus::Recording))
+        .await?
+        .map_err(Into::into)
+}
+
+/// Pauses the running recording (tray menu).
+pub async fn pause_current(app: &AppHandle) -> Result<(), RecordingIpcError> {
+    let state = app.state::<AppState>();
+    pause_running(&state.recording).await?;
+    Ok(())
+}
+
+/// Resumes the paused recording (tray menu).
+pub async fn resume_current(app: &AppHandle) -> Result<(), RecordingIpcError> {
+    let state = app.state::<AppState>();
+    resume_paused(&state.recording).await?;
+    Ok(())
+}
+
+/// Stops the running or paused recording (tray menu, quit).
 pub async fn stop_running(app: &AppHandle) -> Result<(), RecordingIpcError> {
     let state = app.state::<AppState>();
-    state.recording.stop().await?;
+    stop_service(&state.recording).await?;
     Ok(())
 }
 
@@ -732,7 +825,7 @@ const SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 pub async fn stop_and_settle(app: &AppHandle) {
     let deadline = std::time::Instant::now() + SETTLE_TIMEOUT;
     while is_busy(app) && std::time::Instant::now() < deadline {
-        if is_recording(app) {
+        if is_recording(app) || is_paused(app) {
             if let Err(error) = stop_running(app).await {
                 // Losing a race with another stop is fine; anything else is worth a log.
                 if error.code != RecordingErrorCode::NotRecording {
@@ -759,12 +852,21 @@ pub fn is_busy(app: &AppHandle) -> bool {
     app.state::<AppState>().recording.is_busy()
 }
 
-/// Whether a recording is running right now.
+/// Whether a recording is running right now (not paused).
 #[must_use]
 pub fn is_recording(app: &AppHandle) -> bool {
     matches!(
         app.state::<AppState>().recording.status(),
         RecordingStatus::Recording(_)
+    )
+}
+
+/// Whether a recording is paused right now.
+#[must_use]
+pub fn is_paused(app: &AppHandle) -> bool {
+    matches!(
+        app.state::<AppState>().recording.status(),
+        RecordingStatus::Paused(_)
     )
 }
 
@@ -890,6 +992,52 @@ mod tests {
             assert_eq!(error.code, RecordingErrorCode::Validation);
         }
         assert!(screen.asked.lock().unwrap().is_empty());
+    }
+
+    fn active_status(elapsed_ms: u64) -> ActiveRecordingStatus {
+        ActiveRecordingStatus {
+            session_id: tan_domain::SessionId::new("s1"),
+            title: "Standup".to_owned(),
+            started_at: tan_domain::EpochMs::new(1_700_000_000_000),
+            elapsed_ms,
+            microphone_level: 0.0,
+            system_level: 0.0,
+            frame_count: 3,
+        }
+    }
+
+    #[test]
+    fn the_status_names_the_paused_state_and_carries_the_frozen_clock() {
+        let idle = RecordingStatusDto::from(RecordingStatus::Idle);
+        assert_eq!(idle.state, "idle");
+        assert!(idle.active.is_none());
+
+        let recording = RecordingStatusDto::from(RecordingStatus::Recording(active_status(500)));
+        assert_eq!(recording.state, "recording");
+
+        let paused = RecordingStatusDto::from(RecordingStatus::Paused(active_status(12_345)));
+        assert_eq!(paused.state, "paused");
+        let active = paused.active.expect("a paused recording is still active");
+        assert_eq!(active.elapsed_ms, 12_345);
+        assert_eq!(active.session_id, "s1");
+        assert_eq!(active.frame_count, 3);
+    }
+
+    #[test]
+    fn invalid_pause_transitions_have_their_own_error_codes() {
+        for (error, code) in [
+            (
+                RecordingError::NotRecording,
+                RecordingErrorCode::NotRecording,
+            ),
+            (
+                RecordingError::AlreadyPaused,
+                RecordingErrorCode::AlreadyPaused,
+            ),
+            (RecordingError::NotPaused, RecordingErrorCode::NotPaused),
+        ] {
+            assert_eq!(RecordingIpcError::from(error).code, code);
+        }
     }
 
     #[test]

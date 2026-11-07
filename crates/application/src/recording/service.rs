@@ -12,6 +12,12 @@
 //! that places every block on the shared monotonic timeline and inserts silence for gaps, so
 //! both files start at the recording start and stay aligned.
 //!
+//! Pausing stops every stream (so the microphone indicator goes off and nothing is captured)
+//! and resuming opens them again onto the same queues and workers. The shared timeline is the
+//! *active* time: a [`PauseLedger`] removes the paused intervals from every timestamp, so audio
+//! continues where the pause began, frame timestamps stay monotonic on the same axis and the
+//! session length counts only active time.
+//!
 //! Crash safety: audio files are checkpointed every few seconds
 //! ([`CHECKPOINT_INTERVAL`]), frame rows are inserted as they are kept, and the session
 //! stays `Recording` in the database until `stop`. [`RecordingService::recover_interrupted`]
@@ -19,7 +25,7 @@
 
 use std::future::Future;
 use std::pin::pin;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll, Wake, Waker};
@@ -99,6 +105,91 @@ fn block_on<T>(future: impl Future<Output = T>) -> T {
 }
 
 // ---------------------------------------------------------------------------------------
+// Pause ledger
+// ---------------------------------------------------------------------------------------
+
+#[derive(Default)]
+struct LedgerIntervals {
+    /// Finished pauses, oldest first.
+    closed: Vec<(Instant, Instant)>,
+    /// Start of the pause in progress.
+    open_since: Option<Instant>,
+}
+
+/// The paused intervals of a recording, and the conversion from a monotonic instant to the
+/// recording's *active* time (time since the start minus everything paused before that
+/// instant).
+///
+/// Conversion by instant rather than a running total keeps late items right: an audio block
+/// or frame that is still queued when the pause begins (or resumes) is placed by when it was
+/// captured, not by when a worker gets to it.
+struct PauseLedger {
+    origin: Instant,
+    paused: AtomicBool,
+    intervals: Mutex<LedgerIntervals>,
+}
+
+impl PauseLedger {
+    fn new(origin: Instant) -> Self {
+        Self {
+            origin,
+            paused: AtomicBool::new(false),
+            intervals: Mutex::default(),
+        }
+    }
+
+    /// Whether capture is paused. Capture callbacks drop what arrives while this is set.
+    fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Acquire)
+    }
+
+    /// Starts a pause at `at`.
+    fn begin(&self, at: Instant) {
+        lock(&self.intervals).open_since.get_or_insert(at);
+        self.paused.store(true, Ordering::Release);
+    }
+
+    /// Ends the pause in progress at `at`.
+    fn end(&self, at: Instant) {
+        let mut intervals = lock(&self.intervals);
+        if let Some(start) = intervals.open_since.take() {
+            intervals.closed.push((start, at.max(start)));
+        }
+        drop(intervals);
+        self.paused.store(false, Ordering::Release);
+    }
+
+    /// Active time at `at`: the time since the origin without the paused intervals.
+    /// Non-decreasing in `at`.
+    fn active_offset(&self, at: Instant) -> Duration {
+        let total = at.saturating_duration_since(self.origin);
+        let intervals = lock(&self.intervals);
+        let overlap = |start: Instant, end: Instant| {
+            let start = start.max(self.origin);
+            end.min(at).saturating_duration_since(start)
+        };
+        let mut paused = intervals
+            .closed
+            .iter()
+            .map(|&(start, end)| overlap(start, end))
+            .sum::<Duration>();
+        if let Some(start) = intervals.open_since {
+            paused += overlap(start, at);
+        }
+        total.saturating_sub(paused)
+    }
+
+    /// Active time right now.
+    fn active_now(&self) -> Duration {
+        self.active_offset(Instant::now())
+    }
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+// ---------------------------------------------------------------------------------------
 // Timeline
 // ---------------------------------------------------------------------------------------
 
@@ -150,6 +241,12 @@ impl TrackTimeline {
     fn advance(&mut self, frames: u64) {
         self.written_frames += frames;
         self.started = true;
+    }
+
+    /// After a pause: the next block is aligned exactly again (it carries the start-up delay
+    /// of the reopened source), like the first one.
+    fn realign(&mut self) {
+        self.started = false;
     }
 
     fn frames_to_ms(&self, frames: u64) -> u64 {
@@ -239,6 +336,11 @@ fn load_level(bits: &AtomicU32) -> f32 {
 
 enum TrackMessage {
     Chunk(PcmChunk),
+    /// The recording was paused at `offset` (active time): pad the file up to it, make it
+    /// durable and align the next block exactly.
+    Pause {
+        offset: Duration,
+    },
     /// Finish the file, padding it with silence up to `stop_offset` from the origin.
     Finish {
         stop_offset: Duration,
@@ -250,10 +352,15 @@ struct TrackSink {
     queue: SyncSender<TrackMessage>,
     shared: Arc<TrackShared>,
     warnings: Arc<WarningLog>,
+    ledger: Arc<PauseLedger>,
 }
 
 impl AudioSink for TrackSink {
     fn on_chunk(&self, chunk: PcmChunk) {
+        // A block still in flight when the stream was stopped belongs to the pause.
+        if self.ledger.is_paused() {
+            return;
+        }
         match self.queue.try_send(TrackMessage::Chunk(chunk)) {
             Ok(()) | Err(TrySendError::Disconnected(_)) => {}
             Err(TrySendError::Full(_)) => {
@@ -280,7 +387,7 @@ struct TrackOutcome {
 struct TrackWorker {
     session_id: SessionId,
     kind: TrackKind,
-    origin: Instant,
+    ledger: Arc<PauseLedger>,
     media: Arc<dyn MediaStore>,
     shared: Arc<TrackShared>,
     writer: Option<Box<dyn crate::ports::AudioWriter>>,
@@ -298,6 +405,7 @@ impl TrackWorker {
         let stop_offset = loop {
             match queue.recv() {
                 Ok(TrackMessage::Chunk(chunk)) => self.on_chunk(&chunk),
+                Ok(TrackMessage::Pause { offset }) => self.on_pause(offset),
                 Ok(TrackMessage::Finish { stop_offset }) => break Some(stop_offset),
                 // Every sender is gone (the recording was dropped without `stop`).
                 Err(_) => break None,
@@ -351,9 +459,9 @@ impl TrackWorker {
         };
         let frames = chunk.frame_count();
         // `captured_at` is the end of the block; the audio covers the `duration` before it.
-        let block_start = chunk
-            .captured_at
-            .saturating_duration_since(self.origin)
+        let block_start = self
+            .ledger
+            .active_offset(chunk.captured_at)
             .saturating_sub(chunk.duration());
         self.first_chunk_offset.get_or_insert(block_start);
 
@@ -383,6 +491,34 @@ impl TrackWorker {
                 self.frames_since_checkpoint = 0;
                 result = writer.checkpoint();
             }
+        }
+        if let Err(e) = result {
+            self.fail("cannot write audio", &e);
+        }
+    }
+
+    /// Brings the file up to the pause instant and makes it durable, so a crash while paused
+    /// recovers exactly the active time.
+    fn on_pause(&mut self, offset: Duration) {
+        let (Some(timeline), Some(writer)) = (self.timeline.as_mut(), self.writer.as_mut()) else {
+            return;
+        };
+        if self.failure.is_some() {
+            return;
+        }
+        let tail = timeline.tail_silence(offset);
+        let mut result = Ok(());
+        if tail > 0 {
+            result = writer.write_silence(tail);
+            if result.is_ok() {
+                timeline.advance(tail);
+                self.silence_frames += tail;
+            }
+        }
+        timeline.realign();
+        self.frames_since_checkpoint = 0;
+        if result.is_ok() {
+            result = writer.checkpoint();
         }
         if let Err(e) = result {
             self.fail("cannot write audio", &e);
@@ -429,7 +565,12 @@ struct TrackHandle {
     queue: SyncSender<TrackMessage>,
     worker: JoinHandle<TrackOutcome>,
     shared: Arc<TrackShared>,
-    stream: Box<dyn AudioStream>,
+    /// Where the stream delivers to; reused when the recording resumes.
+    sink: Arc<dyn AudioSink>,
+    /// The microphone chosen at start (`None` = system default); reused on resume.
+    device_id: Option<String>,
+    /// `None` while paused (or when the source could not be reopened).
+    stream: Option<Box<dyn AudioStream>>,
 }
 
 // ---------------------------------------------------------------------------------------
@@ -445,10 +586,14 @@ struct ScreenSink {
     queue: SyncSender<FrameMessage>,
     shared: Arc<FrameShared>,
     warnings: Arc<WarningLog>,
+    ledger: Arc<PauseLedger>,
 }
 
 impl FrameSink for ScreenSink {
     fn on_frame(&self, frame: RawFrame) {
+        if self.ledger.is_paused() {
+            return;
+        }
         match self.queue.try_send(FrameMessage::Frame(frame)) {
             Ok(()) | Err(TrySendError::Disconnected(_)) => {}
             Err(TrySendError::Full(_)) => {
@@ -464,7 +609,7 @@ impl FrameSink for ScreenSink {
 
 struct FrameWorker<F> {
     session_id: SessionId,
-    origin: Instant,
+    ledger: Arc<PauseLedger>,
     selector: FrameSelector,
     hasher: Arc<dyn FrameHasher>,
     media: Arc<dyn MediaStore>,
@@ -482,13 +627,7 @@ impl<F: FrameRepository> FrameWorker<F> {
     }
 
     fn process(&mut self, frame: &RawFrame) {
-        let timestamp_ms = u64::try_from(
-            frame
-                .captured_at
-                .saturating_duration_since(self.origin)
-                .as_millis(),
-        )
-        .unwrap_or(u64::MAX);
+        let timestamp_ms = duration_ms(self.ledger.active_offset(frame.captured_at));
         let hash = self.hasher.hash(frame);
         if self.selector.decide(timestamp_ms, hash) == FrameDecision::Skip {
             return;
@@ -542,14 +681,18 @@ pub struct RecordingPorts {
 }
 
 struct ScreenHandle {
-    stream: Box<dyn ScreenStream>,
+    /// `None` while paused (or when the screen could not be reopened).
+    stream: Option<Box<dyn ScreenStream>>,
+    /// What the stream was started with; reused on resume.
+    request: ScreenStreamRequest,
+    sink: Arc<dyn FrameSink>,
     worker: JoinHandle<()>,
     queue: SyncSender<FrameMessage>,
 }
 
 struct ActiveRecording {
     session: Session,
-    origin: Instant,
+    ledger: Arc<PauseLedger>,
     tracks: Vec<TrackHandle>,
     screen: Option<ScreenHandle>,
     frame_shared: Arc<FrameShared>,
@@ -569,8 +712,55 @@ enum State {
     Idle,
     Starting,
     Recording(Box<ActiveRecording>),
+    /// Every stream is stopped; the workers and files stay open.
+    Paused(Box<ActiveRecording>),
+    /// A pause or resume is opening or closing streams. The state lock is not held meanwhile
+    /// (so `status` and `is_busy` never wait on the OS); the view answers `status` from the
+    /// pause flag: capturing or not, right now.
+    Switching(StatusView),
     Stopping,
 }
+
+/// Everything `status` needs, shareable without the recording itself.
+#[derive(Clone)]
+struct StatusView {
+    session_id: SessionId,
+    title: String,
+    started_at: EpochMs,
+    ledger: Arc<PauseLedger>,
+    levels: Arc<Levels>,
+    frame_shared: Arc<FrameShared>,
+}
+
+impl StatusView {
+    fn of(active: &ActiveRecording) -> Self {
+        Self {
+            session_id: active.session.id.clone(),
+            title: active.session.title.clone(),
+            started_at: active.session.started_at,
+            ledger: active.ledger.clone(),
+            levels: active.levels.clone(),
+            frame_shared: active.frame_shared.clone(),
+        }
+    }
+
+    fn status(&self) -> ActiveRecordingStatus {
+        ActiveRecordingStatus {
+            session_id: self.session_id.clone(),
+            title: self.title.clone(),
+            started_at: self.started_at,
+            elapsed_ms: duration_ms(self.ledger.active_now()),
+            microphone_level: load_level(&self.levels.microphone),
+            system_level: load_level(&self.levels.system),
+            frame_count: self.frame_shared.kept.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// A recording taken out of the service by [`RecordingService::begin_stop`], waiting for
+/// [`RecordingService::finish_stop`].
+#[must_use = "pass it to `finish_stop`; the service stays busy until then"]
+pub struct StoppingRecording(Box<ActiveRecording>);
 
 /// Starts, stops and recovers recordings. At most one recording runs at a time.
 pub struct RecordingService<S, F, P> {
@@ -585,6 +775,10 @@ pub struct RecordingService<S, F, P> {
     clock: Arc<dyn Clock>,
     events: Arc<dyn RecordingEvents>,
     state: Mutex<State>,
+    /// Serialises start/pause/resume (and the taking of the recording by `stop`) together
+    /// with the events they publish, so events reach subscribers in the order the state
+    /// changed. Always taken before `state`; `status` and `is_busy` never take it.
+    transition: Mutex<()>,
 }
 
 impl<S, F, P> RecordingService<S, F, P>
@@ -608,6 +802,7 @@ where
             clock: ports.clock,
             events: ports.events,
             state: Mutex::new(State::Idle),
+            transition: Mutex::new(()),
         }
     }
 
@@ -628,15 +823,12 @@ where
     #[must_use]
     pub fn status(&self) -> RecordingStatus {
         match &*lock(&self.state) {
-            State::Recording(active) => RecordingStatus::Recording(ActiveRecordingStatus {
-                session_id: active.session.id.clone(),
-                title: active.session.title.clone(),
-                started_at: active.session.started_at,
-                elapsed_ms: elapsed_ms(active.origin),
-                microphone_level: load_level(&active.levels.microphone),
-                system_level: load_level(&active.levels.system),
-                frame_count: active.frame_shared.kept.load(Ordering::Relaxed),
-            }),
+            State::Recording(active) => RecordingStatus::Recording(StatusView::of(active).status()),
+            State::Paused(active) => RecordingStatus::Paused(StatusView::of(active).status()),
+            State::Switching(view) if view.ledger.is_paused() => {
+                RecordingStatus::Paused(view.status())
+            }
+            State::Switching(view) => RecordingStatus::Recording(view.status()),
             State::Idle | State::Starting | State::Stopping => RecordingStatus::Idle,
         }
     }
@@ -671,6 +863,9 @@ where
         match self.start_inner(options, title).await {
             Ok(active) => {
                 let session = active.session.clone();
+                // Under the transition lock so a pause racing the start cannot publish
+                // `Paused` before `Started`.
+                let _transition = lock(&self.transition);
                 *lock(&self.state) = State::Recording(Box::new(active));
                 self.events.publish(RecordingEvent::Started {
                     session_id: session.id.clone(),
@@ -738,7 +933,7 @@ where
         selector: FrameSelectorConfig,
         interval: Duration,
     ) -> Result<ActiveRecording, RecordingError> {
-        let origin = Instant::now();
+        let ledger = Arc::new(PauseLedger::new(Instant::now()));
         let warnings = Arc::new(WarningLog {
             session_id: session.id.clone(),
             events: self.events.clone(),
@@ -751,7 +946,7 @@ where
             (TrackKind::Microphone, microphone_device_id),
             (TrackKind::System, None),
         ] {
-            match self.start_track(&session.id, kind, device_id, origin, &warnings) {
+            match self.start_track(&session.id, kind, device_id, &ledger, &warnings) {
                 Ok(track) => tracks.push(track),
                 Err(error) => {
                     warnings.push(format!("{kind} audio could not start: {error}"));
@@ -771,17 +966,17 @@ where
             display_id,
             selector,
             interval,
-            origin,
+            &ledger,
             &frame_shared,
             &warnings,
         );
 
         let levels = Arc::new(Levels::default());
-        let ticker = self.start_ticker(&session.id, origin, &tracks, &levels, &frame_shared);
+        let ticker = self.start_ticker(&session.id, &ledger, &tracks, &levels, &frame_shared);
 
         Ok(ActiveRecording {
             session,
-            origin,
+            ledger,
             tracks,
             screen,
             frame_shared,
@@ -796,29 +991,30 @@ where
         session_id: &SessionId,
         kind: TrackKind,
         device_id: Option<String>,
-        origin: Instant,
+        ledger: &Arc<PauseLedger>,
         warnings: &Arc<WarningLog>,
     ) -> Result<TrackHandle, CaptureError> {
         let shared = Arc::new(TrackShared::default());
         let (queue, receiver) = mpsc::sync_channel(TRACK_QUEUE_CAPACITY);
-        let sink = Arc::new(TrackSink {
+        let sink: Arc<dyn AudioSink> = Arc::new(TrackSink {
             kind,
             queue: queue.clone(),
             shared: shared.clone(),
             warnings: warnings.clone(),
+            ledger: ledger.clone(),
         });
         let stream = self.audio.start(
             &AudioStreamRequest {
                 source: kind,
-                device_id,
+                device_id: device_id.clone(),
             },
-            sink,
+            sink.clone(),
         )?;
 
         let worker = TrackWorker {
             session_id: session_id.clone(),
             kind,
-            origin,
+            ledger: ledger.clone(),
             media: self.media.clone(),
             shared: shared.clone(),
             writer: None,
@@ -839,7 +1035,9 @@ where
                 queue,
                 worker,
                 shared,
-                stream,
+                sink,
+                device_id,
+                stream: Some(stream),
             }),
             Err(e) => {
                 stream.stop();
@@ -857,7 +1055,7 @@ where
         display_id: Option<String>,
         selector: FrameSelectorConfig,
         interval: Duration,
-        origin: Instant,
+        ledger: &Arc<PauseLedger>,
         shared: &Arc<FrameShared>,
         warnings: &Arc<WarningLog>,
     ) -> Option<ScreenHandle> {
@@ -867,18 +1065,17 @@ where
             return None;
         }
         let (queue, receiver) = mpsc::sync_channel(FRAME_QUEUE_CAPACITY);
-        let sink = Arc::new(ScreenSink {
+        let sink: Arc<dyn FrameSink> = Arc::new(ScreenSink {
             queue: queue.clone(),
             shared: shared.clone(),
             warnings: warnings.clone(),
+            ledger: ledger.clone(),
         });
-        let stream = match self.screen.start(
-            &ScreenStreamRequest {
-                display_id,
-                interval,
-            },
-            sink,
-        ) {
+        let request = ScreenStreamRequest {
+            display_id,
+            interval,
+        };
+        let stream = match self.screen.start(&request, sink.clone()) {
             Ok(stream) => stream,
             Err(error) => {
                 warnings.push(format!("the screen could not be captured: {error}"));
@@ -888,7 +1085,7 @@ where
 
         let worker = FrameWorker {
             session_id: session_id.clone(),
-            origin,
+            ledger: ledger.clone(),
             selector: FrameSelector::new(selector),
             hasher: self.hasher.clone(),
             media: self.media.clone(),
@@ -902,7 +1099,9 @@ where
             .spawn(move || worker.run(&receiver))
         {
             Ok(worker) => Some(ScreenHandle {
-                stream,
+                stream: Some(stream),
+                request,
+                sink,
                 worker,
                 queue,
             }),
@@ -917,7 +1116,7 @@ where
     fn start_ticker(
         &self,
         session_id: &SessionId,
-        origin: Instant,
+        ledger: &Arc<PauseLedger>,
         tracks: &[TrackHandle],
         levels: &Arc<Levels>,
         frame_shared: &Arc<FrameShared>,
@@ -927,6 +1126,7 @@ where
         let events = self.events.clone();
         let levels = levels.clone();
         let frame_shared = frame_shared.clone();
+        let ledger = ledger.clone();
         let mic = shared_of(tracks, TrackKind::Microphone);
         let system = shared_of(tracks, TrackKind::System);
         // A ticker is cosmetic: if no thread can be had, recording still works.
@@ -941,9 +1141,12 @@ where
                     };
                     let microphone_level = measure(&mic, &levels.microphone);
                     let system_level = measure(&system, &levels.system);
+                    if ledger.is_paused() {
+                        continue;
+                    }
                     events.publish(RecordingEvent::Progress(RecordingProgress {
                         session_id: session_id.clone(),
-                        elapsed_ms: elapsed_ms(origin),
+                        elapsed_ms: duration_ms(ledger.active_now()),
                         microphone_level,
                         system_level,
                         frame_count: frame_shared.kept.load(Ordering::Relaxed),
@@ -954,24 +1157,195 @@ where
         (stop, handle)
     }
 
-    /// Stops the running recording and settles its session (`Recorded`, or `Failed` when
-    /// nothing at all was captured).
+    /// Pauses the running recording: every stream is stopped (no microphone, no system
+    /// audio, no screen capture while paused), the audio files are padded up to the pause
+    /// instant and made durable, and the clock of the recording stops.
     ///
-    /// Blocks the calling thread briefly while the streams stop and the files are closed.
-    /// If the database fails at the very end the recording is over regardless; the session
-    /// then stays `Recording` and [`Self::recover_interrupted`] settles it at next start.
-    pub async fn stop(&self) -> Result<RecordingSummary, RecordingError> {
-        let active = {
+    /// Returns the paused status. Fails with [`RecordingError::AlreadyPaused`] when the
+    /// recording is already paused and [`RecordingError::NotRecording`] when there is none.
+    /// Blocks the calling thread while the streams stop, but not the state: `status` and
+    /// `is_busy` answer meanwhile. Calls to `pause`, `resume` and `stop` queue up behind it.
+    /// `Paused` is published before the next transition can start, in the order of the
+    /// state changes; subscribers must not call `pause`/`resume` from `publish`.
+    pub fn pause(&self) -> Result<ActiveRecordingStatus, RecordingError> {
+        let _transition = lock(&self.transition);
+        let mut active = {
             let mut state = lock(&self.state);
-            match std::mem::replace(&mut *state, State::Stopping) {
-                State::Recording(active) => active,
+            match std::mem::replace(&mut *state, State::Idle) {
+                State::Recording(active) => {
+                    *state = State::Switching(StatusView::of(&active));
+                    active
+                }
                 other => {
+                    let error = if matches!(other, State::Paused(_)) {
+                        RecordingError::AlreadyPaused
+                    } else {
+                        RecordingError::NotRecording
+                    };
                     *state = other;
-                    return Err(RecordingError::NotRecording);
+                    return Err(error);
                 }
             }
         };
-        let result = self.settle(*active).await;
+
+        let at = Instant::now();
+        // From here on the capture callbacks drop what is still in flight.
+        active.ledger.begin(at);
+        for track in &mut active.tracks {
+            if let Some(stream) = track.stream.take() {
+                stream.stop();
+            }
+        }
+        if let Some(stream) = active.screen.as_mut().and_then(|s| s.stream.take()) {
+            stream.stop();
+        }
+        let offset = active.ledger.active_offset(at);
+        for track in &active.tracks {
+            let _ = track.queue.send(TrackMessage::Pause { offset });
+        }
+
+        let status = StatusView::of(&active).status();
+        let event = RecordingEvent::Paused {
+            session_id: active.session.id.clone(),
+            elapsed_ms: status.elapsed_ms,
+        };
+        *lock(&self.state) = State::Paused(active);
+        self.events.publish(event);
+        Ok(status)
+    }
+
+    /// Resumes a paused recording: the streams are opened again onto the same files, so the
+    /// audio continues where the pause began.
+    ///
+    /// The audio sources open first; the recording clock restarts and `Resumed` is published
+    /// once they run, then the screen opens (a slow screen, such as a portal dialog, does not
+    /// delay or lose audio). A source that cannot be reopened is a warning (the recording
+    /// goes on with the rest); if no audio source can be reopened the recording stays paused
+    /// and the first error is returned. Fails with [`RecordingError::NotPaused`] when the
+    /// recording is running and [`RecordingError::NotRecording`] when there is none.
+    /// Blocks like [`Self::pause`]; `status` answers meanwhile.
+    pub fn resume(&self) -> Result<ActiveRecordingStatus, RecordingError> {
+        let _transition = lock(&self.transition);
+        let mut active = {
+            let mut state = lock(&self.state);
+            match std::mem::replace(&mut *state, State::Idle) {
+                State::Paused(active) => {
+                    *state = State::Switching(StatusView::of(&active));
+                    active
+                }
+                other => {
+                    let error = if matches!(other, State::Recording(_)) {
+                        RecordingError::NotPaused
+                    } else {
+                        RecordingError::NotRecording
+                    };
+                    *state = other;
+                    return Err(error);
+                }
+            }
+        };
+
+        // Blocks that arrive while the sources open are still dropped: the pause lasts until
+        // they all run.
+        if let Err(error) = self.reopen_audio(&mut active) {
+            *lock(&self.state) = State::Paused(active);
+            return Err(error);
+        }
+        active.ledger.end(Instant::now());
+        self.events.publish(RecordingEvent::Resumed {
+            session_id: active.session.id.clone(),
+        });
+        self.reopen_screen(&mut active);
+
+        let status = StatusView::of(&active).status();
+        *lock(&self.state) = State::Recording(active);
+        Ok(status)
+    }
+
+    /// Opens the audio streams of a paused recording again. Fails when none could be opened.
+    fn reopen_audio(&self, active: &mut ActiveRecording) -> Result<(), RecordingError> {
+        let mut first_error: Option<CaptureError> = None;
+        let mut reopened = 0_usize;
+        for track in &mut active.tracks {
+            let request = AudioStreamRequest {
+                source: track.kind,
+                device_id: track.device_id.clone(),
+            };
+            match self.audio.start(&request, track.sink.clone()) {
+                Ok(stream) => {
+                    track.stream = Some(stream);
+                    reopened += 1;
+                }
+                Err(error) => {
+                    active
+                        .warnings
+                        .push(format!("{} audio could not resume: {error}", track.kind));
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        if reopened == 0 {
+            return Err(RecordingError::Capture(first_error.unwrap_or_else(|| {
+                CaptureError::failed("no audio source is available")
+            })));
+        }
+        Ok(())
+    }
+
+    /// Opens the screen stream of a resumed recording again (a failure is a warning).
+    fn reopen_screen(&self, active: &mut ActiveRecording) {
+        if let Some(screen) = &mut active.screen {
+            match self.screen.start(&screen.request, screen.sink.clone()) {
+                Ok(stream) => screen.stream = Some(stream),
+                Err(error) => active
+                    .warnings
+                    .push(format!("the screen could not resume: {error}")),
+            }
+        }
+    }
+
+    /// Stops the running (or paused) recording and settles its session (`Recorded`, or
+    /// `Failed` when nothing at all was captured). The session length is the active time.
+    ///
+    /// Blocks the calling thread while it waits for a pause or resume in progress and while
+    /// the streams stop and the files are closed. From an async runtime, prefer
+    /// [`Self::begin_stop`] on the blocking pool followed by [`Self::finish_stop`], which
+    /// keeps the possibly long wait off the runtime threads.
+    /// If the database fails at the very end the recording is over regardless; the session
+    /// then stays `Recording` and [`Self::recover_interrupted`] settles it at next start.
+    pub async fn stop(&self) -> Result<RecordingSummary, RecordingError> {
+        let stopping = self.begin_stop()?;
+        self.finish_stop(stopping).await
+    }
+
+    /// First half of [`Self::stop`]: takes the running or paused recording out of the
+    /// service. Waits (blocking the calling thread, so call it from the blocking pool when
+    /// on an async runtime) for a pause or resume in progress, which can take as long as the
+    /// OS needs to open a stream. Fails with [`RecordingError::NotRecording`] when there is
+    /// none.
+    ///
+    /// The service stays busy until the returned value is passed to [`Self::finish_stop`],
+    /// which must therefore always follow.
+    pub fn begin_stop(&self) -> Result<StoppingRecording, RecordingError> {
+        // Waits for a pause or resume in progress instead of failing against it.
+        let _transition = lock(&self.transition);
+        let mut state = lock(&self.state);
+        match std::mem::replace(&mut *state, State::Stopping) {
+            State::Recording(active) | State::Paused(active) => Ok(StoppingRecording(active)),
+            other => {
+                *state = other;
+                Err(RecordingError::NotRecording)
+            }
+        }
+    }
+
+    /// Second half of [`Self::stop`]: closes the streams and files of a recording taken by
+    /// [`Self::begin_stop`], settles the session and publishes `Stopped`.
+    pub async fn finish_stop(
+        &self,
+        stopping: StoppingRecording,
+    ) -> Result<RecordingSummary, RecordingError> {
+        let result = self.settle(*stopping.0).await;
         *lock(&self.state) = State::Idle;
         if let Ok(summary) = &result {
             self.events.publish(RecordingEvent::Stopped {
@@ -984,7 +1358,7 @@ where
     async fn settle(&self, active: ActiveRecording) -> Result<RecordingSummary, RecordingError> {
         let ActiveRecording {
             mut session,
-            origin,
+            ledger,
             tracks,
             screen,
             frame_shared,
@@ -993,8 +1367,9 @@ where
             warnings,
         } = active;
 
-        // One stop instant for every stream; tracks are padded up to it.
-        let stop_offset = origin.elapsed();
+        // One stop instant for every stream; tracks are padded up to it. It is active time:
+        // a recording stopped while paused ends where the pause began.
+        let stop_offset = ledger.active_now();
         let (ticker_stop, ticker_handle) = ticker;
         drop(ticker_stop);
         if let Some(handle) = ticker_handle {
@@ -1005,9 +1380,12 @@ where
             stream,
             worker,
             queue,
+            ..
         }) = screen
         {
-            stream.stop();
+            if let Some(stream) = stream {
+                stream.stop();
+            }
             let _ = queue.send(FrameMessage::Stop);
             if worker.join().is_err() {
                 warnings.push("the frame worker stopped unexpectedly".to_owned());
@@ -1132,8 +1510,11 @@ fn finish_tracks(
             worker,
             shared,
             stream,
+            ..
         } = track;
-        stream.stop();
+        if let Some(stream) = stream {
+            stream.stop();
+        }
         let _ = queue.send(TrackMessage::Finish { stop_offset });
         let Ok(outcome) = worker.join() else {
             warnings.push(format!("the {kind} writer stopped unexpectedly"));
@@ -1179,10 +1560,6 @@ fn shared_of(tracks: &[TrackHandle], kind: TrackKind) -> Option<Arc<TrackShared>
         .iter()
         .find(|t| t.kind == kind)
         .map(|t| t.shared.clone())
-}
-
-fn elapsed_ms(origin: Instant) -> u64 {
-    u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -1251,6 +1628,77 @@ mod tests {
         meter.add(&[0.5, -0.5, 0.5, -0.5]);
         assert!((meter.take_rms() - 0.5).abs() < 1e-6);
         assert!(meter.take_rms().abs() < f32::EPSILON, "reset after take");
+    }
+
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    #[test]
+    fn active_time_skips_the_paused_interval() {
+        // 10 s recording, 10 s paused, 10 s recording.
+        let t0 = Instant::now();
+        let ledger = PauseLedger::new(t0);
+        ledger.begin(t0 + secs(10));
+        assert!(ledger.is_paused());
+        ledger.end(t0 + secs(20));
+        assert!(!ledger.is_paused());
+
+        assert_eq!(ledger.active_offset(t0 + secs(5)), secs(5));
+        assert_eq!(ledger.active_offset(t0 + secs(10)), secs(10));
+        // Inside the pause the clock stands still.
+        assert_eq!(ledger.active_offset(t0 + secs(15)), secs(10));
+        assert_eq!(ledger.active_offset(t0 + secs(20)), secs(10));
+        assert_eq!(ledger.active_offset(t0 + secs(30)), secs(20));
+    }
+
+    #[test]
+    fn a_pause_in_progress_stops_the_clock_until_it_ends() {
+        let t0 = Instant::now();
+        let ledger = PauseLedger::new(t0);
+        ledger.begin(t0 + secs(10));
+        // Stopping while paused: the length is where the pause began.
+        assert_eq!(ledger.active_offset(t0 + secs(25)), secs(10));
+        // A second begin does not move the start of the pause.
+        ledger.begin(t0 + secs(12));
+        assert_eq!(ledger.active_offset(t0 + secs(25)), secs(10));
+    }
+
+    #[test]
+    fn several_pauses_add_up_and_the_offset_never_goes_backwards() {
+        let t0 = Instant::now();
+        let ledger = PauseLedger::new(t0);
+        ledger.begin(t0 + secs(2));
+        ledger.end(t0 + secs(5));
+        ledger.begin(t0 + secs(8));
+        ledger.end(t0 + secs(9));
+
+        let mut last = Duration::ZERO;
+        for ms in (0..12_000).step_by(100) {
+            let offset = ledger.active_offset(t0 + Duration::from_millis(ms));
+            assert!(offset >= last, "went backwards at {ms} ms");
+            last = offset;
+        }
+        // 12 s minus 3 s and 1 s of pause.
+        assert_eq!(ledger.active_offset(t0 + secs(12)), secs(8));
+    }
+
+    #[test]
+    fn instants_before_the_origin_have_no_active_time() {
+        let before = Instant::now();
+        let ledger = PauseLedger::new(before + secs(5));
+        assert_eq!(ledger.active_offset(before), Duration::ZERO);
+    }
+
+    #[test]
+    fn realigning_makes_the_next_block_exact_again() {
+        let mut t = timeline();
+        t.advance(u64::from(RATE));
+        // A 100 ms lag is jitter normally...
+        assert_eq!(t.silence_before(Duration::from_millis(1_100)), 0);
+        // ...but the first block after a pause carries the reopened source's start-up delay.
+        t.realign();
+        assert_eq!(t.silence_before(Duration::from_millis(1_100)), 4_800);
     }
 
     struct YieldOnce(bool);

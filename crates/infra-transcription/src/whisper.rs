@@ -105,7 +105,9 @@ pub fn detect_backend() -> Backend {
 }
 
 fn probe_backend() -> Backend {
-    #[allow(unused_mut)] // only the GPU features reassign it
+    // Only the GPU features reassign it, and a build with several of them overwrites the
+    // earlier result (Vulkan < CUDA < Metal), so the first value may never be read.
+    #[allow(unused_mut, unused_assignments)]
     let mut backend = Backend::cpu();
     #[cfg(feature = "vulkan")]
     {
