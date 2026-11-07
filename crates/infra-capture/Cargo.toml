@@ -7,6 +7,7 @@ publish.workspace = true
 [dependencies]
 tan-application.workspace = true
 tan-domain.workspace = true
+tracing.workspace = true
 
 # Microphone on every OS; system audio on Windows (WASAPI loopback) and Linux (PulseAudio
 # monitor source). The spike also uses these from `examples/`.

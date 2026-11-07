@@ -21,6 +21,7 @@ tan-application.workspace = true
 tan-infra-storage.workspace = true
 tan-infra-secrets.workspace = true
 tan-infra-ai.workspace = true
+base64.workspace = true
 tan-infra-capture.workspace = true
 tan-infra-transcription.workspace = true
 # `tray-icon`: the recording status icon and menu (Phase 08). `protocol-asset`: the webview

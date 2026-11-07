@@ -5095,6 +5095,7 @@ dependencies = [
 name = "tan-app"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "hound",
  "serde",
  "specta",
@@ -5163,6 +5164,7 @@ dependencies = [
  "tan-application",
  "tan-domain",
  "tempfile",
+ "tracing",
  "xcap",
 ]
 
