@@ -52,6 +52,7 @@ pub fn ipc_builder() -> Builder<tauri::Wry> {
             commands::recording::recording_capabilities,
             commands::recording::list_audio_devices,
             commands::recording::list_displays,
+            commands::recording::display_thumbnail,
             commands::transcription::list_whisper_models,
             commands::transcription::download_whisper_model,
             commands::transcription::select_whisper_model,

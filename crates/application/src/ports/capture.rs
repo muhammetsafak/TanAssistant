@@ -276,6 +276,63 @@ pub enum ScreenAvailability {
     Unavailable(ScreenUnavailableReason),
 }
 
+/// Longest edge, in pixels, of a display preview thumbnail ([`ScreenCapture::display_thumbnail`]).
+pub const THUMBNAIL_MAX_EDGE: u32 = 320;
+
+/// A small encoded preview image of one display.
+///
+/// The picture shows what is on the screen, so it is sensitive: it is never written to disk
+/// or logged ([`fmt::Debug`] hides the bytes).
+#[derive(Clone, PartialEq, Eq)]
+pub struct DisplayThumbnail {
+    /// Media type of `bytes` (e.g. `image/png`).
+    pub mime_type: &'static str,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// The encoded image.
+    pub bytes: Vec<u8>,
+}
+
+impl fmt::Debug for DisplayThumbnail {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Never print image data.
+        f.debug_struct("DisplayThumbnail")
+            .field("mime_type", &self.mime_type)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
+}
+
+/// Why no thumbnail could be produced. This is an expected outcome (the UI falls back to the
+/// display name), not an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThumbnailUnavailableReason {
+    /// The OS denied screen access (macOS "Screen & System Audio Recording").
+    PermissionDenied,
+    /// A Wayland session: a preview would need a portal dialog, which is never opened for a
+    /// thumbnail.
+    WaylandUnsupported,
+    /// The display id does not match any display (it may have been unplugged).
+    DisplayNotFound,
+    /// This platform or adapter has no thumbnail support.
+    Unsupported,
+    /// The capture or the encoding failed.
+    Failed,
+}
+
+/// Result of [`ScreenCapture::display_thumbnail`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThumbnailOutcome {
+    /// The preview image.
+    Image(DisplayThumbnail),
+    /// There is no preview, for the given reason.
+    Unavailable(ThumbnailUnavailableReason),
+}
+
 /// Screen capture port.
 pub trait ScreenCapture: Send + Sync {
     /// Whether periodic capture is usable in this session. Recording skips the screen
@@ -296,6 +353,21 @@ pub trait ScreenCapture: Send + Sync {
         request: &ScreenStreamRequest,
         sink: Arc<dyn FrameSink>,
     ) -> CaptureResult<Box<dyn ScreenStream>>;
+
+    /// Captures one frame of the display `display_id` and returns it scaled down to at most
+    /// [`THUMBNAIL_MAX_EDGE`] pixels on its longest edge.
+    ///
+    /// It works while a recording runs and must not disturb it. It never opens a dialog of its
+    /// own (no `ScreenCast` portal dialog): a missing permission or a Wayland session yields
+    /// [`ThumbnailOutcome::Unavailable`] instead. On macOS the OS may still show its one-time
+    /// "Screen & System Audio Recording" prompt if the permission was never decided, exactly
+    /// as it does for [`ScreenCapture::list_displays`]. The image is not stored anywhere.
+    ///
+    /// The default has no thumbnail support.
+    fn display_thumbnail(&self, display_id: &str) -> ThumbnailOutcome {
+        let _ = display_id;
+        ThumbnailOutcome::Unavailable(ThumbnailUnavailableReason::Unsupported)
+    }
 }
 
 /// Computes the 64-bit perceptual hash stored with each frame (`Frame::perceptual_hash`).

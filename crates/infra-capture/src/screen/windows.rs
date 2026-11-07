@@ -27,6 +27,13 @@ pub(super) fn capture_once(display_id: Option<&str>) -> CaptureResult<RawFrame> 
     xcap_backend::capture_once(display_id, map_error)
 }
 
+/// A frame of the given display for a preview. `xcap` cannot scale while capturing, so this
+/// is a full frame; the caller scales it down. `max_edge` is only used by backends that can
+/// capture at a reduced size.
+pub(super) fn capture_for_thumbnail(display_id: &str, _max_edge: u32) -> CaptureResult<RawFrame> {
+    xcap_backend::capture_once(Some(display_id), map_error)
+}
+
 pub(super) fn start(
     request: &ScreenStreamRequest,
     sink: Arc<dyn FrameSink>,

@@ -61,6 +61,19 @@ pub(super) fn list_displays() -> CaptureResult<Vec<DisplayInfo>> {
 /// A single frame: `ScreenCaptureKit` (macOS 13) has no screenshot call, so a stream is opened
 /// and closed around the first frame it delivers.
 pub(super) fn capture_once(display_id: Option<&str>) -> CaptureResult<RawFrame> {
+    first_frame(display_id, None)
+}
+
+/// A frame of the display for a preview, already scaled by `ScreenCaptureKit` (on the GPU) to
+/// at most `max_edge` pixels on the longest edge, so a Retina display is not copied at full
+/// size. It opens its own short-lived stream, which a running recording does not notice.
+pub(super) fn capture_for_thumbnail(display_id: &str, max_edge: u32) -> CaptureResult<RawFrame> {
+    first_frame(Some(display_id), Some(max_edge))
+}
+
+/// Opens a stream, waits for its first frame and closes it again. `max_edge` limits the size
+/// the stream delivers (`None` = the display's size).
+fn first_frame(display_id: Option<&str>, max_edge: Option<u32>) -> CaptureResult<RawFrame> {
     struct FirstFrame(Mutex<Option<mpsc::Sender<RawFrame>>>);
 
     impl FrameSink for FirstFrame {
@@ -80,7 +93,11 @@ pub(super) fn capture_once(display_id: Option<&str>) -> CaptureResult<RawFrame> 
         display_id: display_id.map(str::to_owned),
         interval: Duration::from_secs(1),
     };
-    let stream = start(&request, Arc::new(FirstFrame(Mutex::new(Some(sender)))))?;
+    let stream = start_limited(
+        &request,
+        Arc::new(FirstFrame(Mutex::new(Some(sender)))),
+        max_edge,
+    )?;
     let frame = receiver.recv_timeout(FIRST_FRAME_TIMEOUT);
     stream.stop();
     frame.map_err(|_| CaptureError::failed("the screen delivered no frame in time"))
@@ -89,6 +106,15 @@ pub(super) fn capture_once(display_id: Option<&str>) -> CaptureResult<RawFrame> 
 pub(super) fn start(
     request: &ScreenStreamRequest,
     sink: Arc<dyn FrameSink>,
+) -> CaptureResult<Box<dyn ScreenStream>> {
+    start_limited(request, sink, None)
+}
+
+/// [`start`] with the delivered size limited to `max_edge` on the longest edge.
+fn start_limited(
+    request: &ScreenStreamRequest,
+    sink: Arc<dyn FrameSink>,
+    max_edge: Option<u32>,
 ) -> CaptureResult<Box<dyn ScreenStream>> {
     let displays = shareable_content()?.displays();
     let display = match request.display_id.as_deref() {
@@ -112,10 +138,14 @@ pub(super) fn start(
         .build()
         .map_err(|e| CaptureError::failed(format!("cannot build the content filter: {e}")))?;
 
+    let (width, height) = match max_edge {
+        Some(max_edge) => super::thumbnail::fit_within(display.width(), display.height(), max_edge),
+        None => (display.width(), display.height()),
+    };
     let interval_ms = i64::try_from(request.interval.as_millis()).unwrap_or(i64::MAX);
     let config = SCStreamConfiguration::new()
-        .with_width(display.width())
-        .with_height(display.height())
+        .with_width(width)
+        .with_height(height)
         .with_pixel_format(PixelFormat::BGRA)
         // Mouse movement alone must not count as a screen change.
         .with_shows_cursor(false)

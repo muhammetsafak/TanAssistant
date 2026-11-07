@@ -16,8 +16,9 @@ pub use ai::{
 pub use capture::{
     AudioCapture, AudioDevice, AudioFileInfo, AudioFormat, AudioSink, AudioStream,
     AudioStreamRequest, AudioWriter, CaptureError, CaptureErrorKind, CaptureResult, DisplayInfo,
-    FrameHasher, FrameSink, MediaStore, PcmChunk, RawFrame, ScreenAvailability, ScreenCapture,
-    ScreenStream, ScreenStreamRequest, ScreenUnavailableReason,
+    DisplayThumbnail, FrameHasher, FrameSink, MediaStore, PcmChunk, RawFrame, ScreenAvailability,
+    ScreenCapture, ScreenStream, ScreenStreamRequest, ScreenUnavailableReason, ThumbnailOutcome,
+    ThumbnailUnavailableReason, THUMBNAIL_MAX_EDGE,
 };
 pub use repositories::{
     FrameRepository, NoteRepository, ProviderProfileRepository, SearchHit, SearchIndex,

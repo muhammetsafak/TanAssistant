@@ -15,8 +15,9 @@
 use std::sync::Arc;
 
 use tan_application::ports::{
-    CaptureResult, DisplayInfo, FrameSink, RawFrame, ScreenAvailability, ScreenCapture,
-    ScreenStream, ScreenStreamRequest, ScreenUnavailableReason,
+    CaptureErrorKind, CaptureResult, DisplayInfo, FrameSink, RawFrame, ScreenAvailability,
+    ScreenCapture, ScreenStream, ScreenStreamRequest, ScreenUnavailableReason, ThumbnailOutcome,
+    ThumbnailUnavailableReason, THUMBNAIL_MAX_EDGE,
 };
 
 // Pure helpers of the Wayland adapter (pixel conversion, restore token file, probe gate). They need no
@@ -33,6 +34,7 @@ mod macos;
 mod probe_gate;
 #[cfg(any(target_os = "linux", test))]
 mod restore_token;
+mod thumbnail;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -96,6 +98,54 @@ fn screencast_usable() -> bool {
     }
 }
 
+/// Why a display preview must not even be attempted in this session, if any.
+///
+/// A Wayland session on Linux is always refused, whether or not the `ScreenCast` portal could
+/// serve it: the only way to a frame there is the portal's source dialog, and a preview in a
+/// selection list must never open one. Pure so it can be tested on any OS.
+#[must_use]
+fn thumbnail_gate(
+    is_linux: bool,
+    session_type: Option<&str>,
+    wayland_display: Option<&str>,
+) -> Option<ThumbnailUnavailableReason> {
+    (is_linux && is_wayland_session(session_type, wayland_display))
+        .then_some(ThumbnailUnavailableReason::WaylandUnsupported)
+}
+
+/// Maps a failed capture to the reason the UI gets.
+fn thumbnail_reason(kind: CaptureErrorKind) -> ThumbnailUnavailableReason {
+    match kind {
+        CaptureErrorKind::PermissionDenied => ThumbnailUnavailableReason::PermissionDenied,
+        CaptureErrorKind::DeviceNotFound => ThumbnailUnavailableReason::DisplayNotFound,
+        CaptureErrorKind::Unsupported => ThumbnailUnavailableReason::Unsupported,
+        CaptureErrorKind::Failed => ThumbnailUnavailableReason::Failed,
+    }
+}
+
+/// Turns the outcome of the platform capture into the thumbnail result.
+fn thumbnail_outcome(captured: CaptureResult<RawFrame>, max_edge: u32) -> ThumbnailOutcome {
+    // Only error texts are logged; they never carry screen content.
+    match captured {
+        Ok(frame) => thumbnail::encode(frame, max_edge).map_or_else(
+            || {
+                tracing::warn!("a display preview could not be scaled or encoded");
+                ThumbnailOutcome::Unavailable(ThumbnailUnavailableReason::Failed)
+            },
+            ThumbnailOutcome::Image,
+        ),
+        Err(error) => {
+            if matches!(
+                error.kind,
+                CaptureErrorKind::Failed | CaptureErrorKind::Unsupported
+            ) {
+                tracing::warn!(kind = ?error.kind, message = %error.message, "display preview capture failed");
+            }
+            ThumbnailOutcome::Unavailable(thumbnail_reason(error.kind))
+        }
+    }
+}
+
 impl ScreenCapture for PlatformScreenCapture {
     fn availability(&self) -> ScreenAvailability {
         availability_for(
@@ -120,6 +170,20 @@ impl ScreenCapture for PlatformScreenCapture {
         sink: Arc<dyn FrameSink>,
     ) -> CaptureResult<Box<dyn ScreenStream>> {
         platform::start(request, sink)
+    }
+
+    fn display_thumbnail(&self, display_id: &str) -> ThumbnailOutcome {
+        if let Some(reason) = thumbnail_gate(
+            cfg!(target_os = "linux"),
+            std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+            std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+        ) {
+            return ThumbnailOutcome::Unavailable(reason);
+        }
+        thumbnail_outcome(
+            platform::capture_for_thumbnail(display_id, THUMBNAIL_MAX_EDGE),
+            THUMBNAIL_MAX_EDGE,
+        )
     }
 }
 
@@ -331,6 +395,10 @@ mod xcap_backend {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
+    use tan_application::ports::CaptureError;
+
     use super::*;
 
     const WAYLAND_OFF: ScreenAvailability =
@@ -395,6 +463,81 @@ mod tests {
         assert_eq!(
             availability_for(false, Some("wayland"), Some("wayland-0"), never),
             ScreenAvailability::Available
+        );
+    }
+
+    #[test]
+    fn thumbnails_are_refused_on_wayland_even_with_a_usable_portal() {
+        let denied = Some(ThumbnailUnavailableReason::WaylandUnsupported);
+        assert_eq!(thumbnail_gate(true, Some("wayland"), None), denied);
+        assert_eq!(thumbnail_gate(true, None, Some("wayland-0")), denied);
+    }
+
+    #[test]
+    fn thumbnails_are_attempted_on_x11_and_other_platforms() {
+        assert_eq!(thumbnail_gate(true, Some("x11"), None), None);
+        assert_eq!(thumbnail_gate(true, None, None), None);
+        assert_eq!(
+            thumbnail_gate(false, Some("wayland"), Some("wayland-0")),
+            None
+        );
+    }
+
+    #[test]
+    fn capture_failures_map_to_thumbnail_reasons() {
+        for (error, reason) in [
+            (
+                CaptureError::permission_denied("no access"),
+                ThumbnailUnavailableReason::PermissionDenied,
+            ),
+            (
+                CaptureError::device_not_found("gone"),
+                ThumbnailUnavailableReason::DisplayNotFound,
+            ),
+            (
+                CaptureError::unsupported("no"),
+                ThumbnailUnavailableReason::Unsupported,
+            ),
+            (
+                CaptureError::failed("boom"),
+                ThumbnailUnavailableReason::Failed,
+            ),
+        ] {
+            assert_eq!(
+                thumbnail_outcome(Err(error), 320),
+                ThumbnailOutcome::Unavailable(reason)
+            );
+        }
+    }
+
+    #[test]
+    fn a_captured_frame_becomes_a_scaled_image() {
+        let frame = RawFrame {
+            captured_at: Instant::now(),
+            width: 640,
+            height: 360,
+            rgba: vec![255; 640 * 360 * 4],
+        };
+        match thumbnail_outcome(Ok(frame), 320) {
+            ThumbnailOutcome::Image(image) => {
+                assert_eq!((image.width, image.height), (320, 180));
+                assert_eq!(image.mime_type, "image/png");
+            }
+            other @ ThumbnailOutcome::Unavailable(_) => panic!("expected an image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_malformed_frame_is_a_failure_not_a_panic() {
+        let frame = RawFrame {
+            captured_at: Instant::now(),
+            width: 640,
+            height: 360,
+            rgba: vec![0; 12],
+        };
+        assert_eq!(
+            thumbnail_outcome(Ok(frame), 320),
+            ThumbnailOutcome::Unavailable(ThumbnailUnavailableReason::Failed)
         );
     }
 }

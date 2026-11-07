@@ -67,6 +67,13 @@ export const commands = {
 	listAudioDevices: () => typedError<AudioDeviceDto[], RecordingIpcError>(__TAURI_INVOKE("list_audio_devices")),
 	/**  Lists the capturable displays. */
 	listDisplays: () => typedError<DisplayDto[], RecordingIpcError>(__TAURI_INVOKE("list_displays")),
+	/**
+	 *  A small preview image of one display, so the user can tell the screens apart in the picker.
+	 * 
+	 *  Works while a recording runs. When no image can be made (no screen permission, Wayland...)
+	 *  the result says so with `available: false`; the image is never written to disk or logged.
+	 */
+	displayThumbnail: (displayId: string) => typedError<DisplayThumbnailDto_Serialize, RecordingIpcError>(__TAURI_INVOKE("display_thumbnail", { displayId })),
 	/**  Lists the whisper models Tan can download, best choice first, with their state on disk. */
 	listWhisperModels: () => typedError<WhisperModelDto[], TranscriptionIpcError>(__TAURI_INVOKE("list_whisper_models")),
 	/**
@@ -371,6 +378,65 @@ export type DisplayDto = {
 	/**  Whether it is the primary display. */
 	isPrimary: boolean,
 };
+
+/**
+ *  The preview of one display. Not being able to make one is a normal result (`available`
+ *  is `false`, `unavailableReason` says why), never an error.
+ */
+export type DisplayThumbnailDto = DisplayThumbnailDto_Serialize | DisplayThumbnailDto_Deserialize;
+
+/**
+ *  The preview of one display. Not being able to make one is a normal result (`available`
+ *  is `false`, `unavailableReason` says why), never an error.
+ */
+export type DisplayThumbnailDto_Deserialize = {
+	/**  Whether `dataUrl` holds an image. */
+	available: boolean,
+	/**
+	 *  The image as a `data:` URL (base64), set when `available`. It shows the screen
+	 *  content: keep it in memory only.
+	 */
+	dataUrl?: string | null,
+	/**  Image width in pixels, set when `available`. */
+	width?: number | null,
+	/**  Image height in pixels, set when `available`. */
+	height?: number | null,
+	/**  Why there is no image, set when not `available`. */
+	unavailableReason?: DisplayThumbnailUnavailableReasonDto | null,
+};
+
+/**
+ *  The preview of one display. Not being able to make one is a normal result (`available`
+ *  is `false`, `unavailableReason` says why), never an error.
+ */
+export type DisplayThumbnailDto_Serialize = {
+	/**  Whether `dataUrl` holds an image. */
+	available: boolean,
+	/**
+	 *  The image as a `data:` URL (base64), set when `available`. It shows the screen
+	 *  content: keep it in memory only.
+	 */
+	dataUrl: string | null,
+	/**  Image width in pixels, set when `available`. */
+	width: number | null,
+	/**  Image height in pixels, set when `available`. */
+	height: number | null,
+	/**  Why there is no image, set when not `available`. */
+	unavailableReason: DisplayThumbnailUnavailableReasonDto | null,
+};
+
+/**  Why a display has no preview image. The UI falls back to the display name. */
+export type DisplayThumbnailUnavailableReasonDto = 
+/**  The OS denied screen access (macOS "Screen & System Audio Recording"). */
+"permission_denied" | 
+/**  A Linux Wayland session: a preview would need the portal dialog, which is not opened. */
+"wayland_unsupported" | 
+/**  The display is gone (unplugged since the list was loaded). */
+"display_not_found" | 
+/**  This platform has no previews. */
+"unsupported" | 
+/**  The capture failed. */
+"failed";
 
 /**  Machine-readable failure class, so the UI can react without parsing messages. */
 export type ErrorCode = 

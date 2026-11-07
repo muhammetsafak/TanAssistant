@@ -7,11 +7,13 @@
 use std::error::Error;
 use std::sync::Arc;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tan_application::ports::{
     AudioCapture, CaptureErrorKind, Clock, ScreenAvailability, ScreenCapture,
-    ScreenUnavailableReason,
+    ScreenUnavailableReason, ThumbnailOutcome, ThumbnailUnavailableReason,
 };
 use tan_application::recording::{
     default_session_title, RecordingError, RecordingEvent, RecordingEvents, RecordingStatus,
@@ -376,6 +378,77 @@ pub struct DisplayDto {
     pub is_primary: bool,
 }
 
+/// Why a display has no preview image. The UI falls back to the display name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayThumbnailUnavailableReasonDto {
+    /// The OS denied screen access (macOS "Screen & System Audio Recording").
+    PermissionDenied,
+    /// A Linux Wayland session: a preview would need the portal dialog, which is not opened.
+    WaylandUnsupported,
+    /// The display is gone (unplugged since the list was loaded).
+    DisplayNotFound,
+    /// This platform has no previews.
+    Unsupported,
+    /// The capture failed.
+    Failed,
+}
+
+impl From<ThumbnailUnavailableReason> for DisplayThumbnailUnavailableReasonDto {
+    fn from(reason: ThumbnailUnavailableReason) -> Self {
+        match reason {
+            ThumbnailUnavailableReason::PermissionDenied => Self::PermissionDenied,
+            ThumbnailUnavailableReason::WaylandUnsupported => Self::WaylandUnsupported,
+            ThumbnailUnavailableReason::DisplayNotFound => Self::DisplayNotFound,
+            ThumbnailUnavailableReason::Unsupported => Self::Unsupported,
+            ThumbnailUnavailableReason::Failed => Self::Failed,
+        }
+    }
+}
+
+/// The preview of one display. Not being able to make one is a normal result (`available`
+/// is `false`, `unavailableReason` says why), never an error.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayThumbnailDto {
+    /// Whether `dataUrl` holds an image.
+    pub available: bool,
+    /// The image as a `data:` URL (base64), set when `available`. It shows the screen
+    /// content: keep it in memory only.
+    pub data_url: Option<String>,
+    /// Image width in pixels, set when `available`.
+    pub width: Option<u32>,
+    /// Image height in pixels, set when `available`.
+    pub height: Option<u32>,
+    /// Why there is no image, set when not `available`.
+    pub unavailable_reason: Option<DisplayThumbnailUnavailableReasonDto>,
+}
+
+impl From<ThumbnailOutcome> for DisplayThumbnailDto {
+    fn from(outcome: ThumbnailOutcome) -> Self {
+        match outcome {
+            ThumbnailOutcome::Image(image) => Self {
+                available: true,
+                data_url: Some(format!(
+                    "data:{};base64,{}",
+                    image.mime_type,
+                    BASE64.encode(&image.bytes)
+                )),
+                width: Some(image.width),
+                height: Some(image.height),
+                unavailable_reason: None,
+            },
+            ThumbnailOutcome::Unavailable(reason) => Self {
+                available: false,
+                data_url: None,
+                width: None,
+                height: None,
+                unavailable_reason: Some(reason.into()),
+            },
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------------------
@@ -568,22 +641,64 @@ pub async fn list_displays(
         .collect())
 }
 
+/// Longest display id accepted (ids are short numbers or names; this only bounds the input).
+const MAX_DISPLAY_ID_LEN: usize = 128;
+
+/// A small preview image of one display, so the user can tell the screens apart in the picker.
+///
+/// Works while a recording runs. When no image can be made (no screen permission, Wayland...)
+/// the result says so with `available: false`; the image is never written to disk or logged.
+#[tauri::command]
+#[specta::specta]
+#[tracing::instrument(skip_all)]
+pub async fn display_thumbnail(
+    state: State<'_, AppState>,
+    display_id: String,
+) -> Result<DisplayThumbnailDto, RecordingIpcError> {
+    let screen: Arc<dyn ScreenCapture> = state.screen_capture.clone();
+    thumbnail_for(screen, display_id).await
+}
+
+/// Validates the id and runs the capture off the async executor.
+async fn thumbnail_for(
+    screen: Arc<dyn ScreenCapture>,
+    display_id: String,
+) -> Result<DisplayThumbnailDto, RecordingIpcError> {
+    let display_id = display_id.trim().to_owned();
+    if display_id.is_empty() || display_id.len() > MAX_DISPLAY_ID_LEN {
+        return Err(RecordingIpcError::validation("the display id is not valid"));
+    }
+    let outcome = run_blocking(move || screen.display_thumbnail(&display_id)).await?;
+    Ok(outcome.into())
+}
+
 /// Runs a blocking capture-backend call off the async executor.
 async fn blocking<T, F>(work: F) -> Result<T, RecordingIpcError>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, tan_application::ports::CaptureError> + Send + 'static,
 {
-    match tauri::async_runtime::spawn_blocking(work).await {
-        Ok(result) => result.map_err(|e| RecordingError::Capture(e).into()),
-        Err(join_error) => {
+    run_blocking(work)
+        .await?
+        .map_err(|e| RecordingError::Capture(e).into())
+}
+
+/// Runs `work` on the blocking pool; a worker that panicked or was cancelled is an
+/// `Internal` error.
+async fn run_blocking<T, F>(work: F) -> Result<T, RecordingIpcError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|join_error| {
             log_source("capture worker failed", &join_error);
-            Err(RecordingIpcError {
+            RecordingIpcError {
                 code: RecordingErrorCode::Internal,
                 message: "the capture worker failed".to_owned(),
-            })
-        }
-    }
+            }
+        })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -651,4 +766,139 @@ pub fn is_recording(app: &AppHandle) -> bool {
         app.state::<AppState>().recording.status(),
         RecordingStatus::Recording(_)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use tan_application::ports::{
+        CaptureResult, DisplayInfo, DisplayThumbnail, FrameSink, RawFrame, ScreenStream,
+        ScreenStreamRequest,
+    };
+
+    use super::*;
+
+    /// A screen that answers every preview request with a fixed outcome and remembers the id.
+    struct FakeScreen {
+        outcome: ThumbnailOutcome,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl FakeScreen {
+        fn new(outcome: ThumbnailOutcome) -> Arc<Self> {
+            Arc::new(Self {
+                outcome,
+                asked: Mutex::default(),
+            })
+        }
+    }
+
+    impl ScreenCapture for FakeScreen {
+        fn list_displays(&self) -> CaptureResult<Vec<DisplayInfo>> {
+            Ok(Vec::new())
+        }
+
+        fn capture_once(&self, _display_id: Option<&str>) -> CaptureResult<RawFrame> {
+            unreachable!("a preview must not use capture_once through the command")
+        }
+
+        fn start(
+            &self,
+            _request: &ScreenStreamRequest,
+            _sink: Arc<dyn FrameSink>,
+        ) -> CaptureResult<Box<dyn ScreenStream>> {
+            unreachable!("a preview must not start a stream")
+        }
+
+        fn display_thumbnail(&self, display_id: &str) -> ThumbnailOutcome {
+            self.asked.lock().unwrap().push(display_id.to_owned());
+            self.outcome.clone()
+        }
+    }
+
+    fn run<T>(future: impl std::future::Future<Output = T>) -> T {
+        tauri::async_runtime::block_on(future)
+    }
+
+    fn image_outcome() -> ThumbnailOutcome {
+        ThumbnailOutcome::Image(DisplayThumbnail {
+            mime_type: "image/png",
+            width: 320,
+            height: 180,
+            bytes: vec![0x89, b'P', b'N', b'G'],
+        })
+    }
+
+    #[test]
+    fn an_image_becomes_a_data_url() {
+        let screen = FakeScreen::new(image_outcome());
+        let dto = run(thumbnail_for(screen.clone(), " 69733698 ".to_owned())).unwrap();
+        assert!(dto.available);
+        assert_eq!(
+            dto.data_url.as_deref(),
+            Some("data:image/png;base64,iVBORw==")
+        );
+        assert_eq!((dto.width, dto.height), (Some(320), Some(180)));
+        assert_eq!(dto.unavailable_reason, None);
+        // The id reaches the port trimmed.
+        assert_eq!(*screen.asked.lock().unwrap(), vec!["69733698".to_owned()]);
+    }
+
+    #[test]
+    fn a_missing_preview_is_a_result_with_a_reason_not_an_error() {
+        for (reason, expected) in [
+            (
+                ThumbnailUnavailableReason::PermissionDenied,
+                DisplayThumbnailUnavailableReasonDto::PermissionDenied,
+            ),
+            (
+                ThumbnailUnavailableReason::WaylandUnsupported,
+                DisplayThumbnailUnavailableReasonDto::WaylandUnsupported,
+            ),
+            (
+                ThumbnailUnavailableReason::DisplayNotFound,
+                DisplayThumbnailUnavailableReasonDto::DisplayNotFound,
+            ),
+            (
+                ThumbnailUnavailableReason::Unsupported,
+                DisplayThumbnailUnavailableReasonDto::Unsupported,
+            ),
+            (
+                ThumbnailUnavailableReason::Failed,
+                DisplayThumbnailUnavailableReasonDto::Failed,
+            ),
+        ] {
+            let screen = FakeScreen::new(ThumbnailOutcome::Unavailable(reason));
+            let dto = run(thumbnail_for(screen, "1".to_owned())).unwrap();
+            assert!(!dto.available);
+            assert_eq!(dto.data_url, None);
+            assert_eq!((dto.width, dto.height), (None, None));
+            assert_eq!(dto.unavailable_reason, Some(expected));
+        }
+    }
+
+    #[test]
+    fn a_bad_display_id_is_rejected_before_the_port_is_asked() {
+        let screen = FakeScreen::new(image_outcome());
+        for bad in [
+            String::new(),
+            "   ".to_owned(),
+            "9".repeat(MAX_DISPLAY_ID_LEN + 1),
+        ] {
+            let error = run(thumbnail_for(screen.clone(), bad)).unwrap_err();
+            assert_eq!(error.code, RecordingErrorCode::Validation);
+        }
+        assert!(screen.asked.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_preview_debug_output_hides_the_pixels() {
+        let ThumbnailOutcome::Image(image) = image_outcome() else {
+            unreachable!()
+        };
+        let text = format!("{image:?}");
+        assert!(text.contains("bytes: 4"), "{text}");
+        assert!(!text.contains('['), "{text}");
+    }
 }

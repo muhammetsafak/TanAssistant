@@ -51,6 +51,13 @@ pub(super) fn capture_once(display_id: Option<&str>) -> CaptureResult<RawFrame> 
     xcap_backend::capture_once(display_id, map_error)
 }
 
+/// A frame of the given display for a preview (X11 only: `PlatformScreenCapture` refuses
+/// Wayland sessions before it gets here, because a frame there needs the portal dialog). `xcap` cannot scale while
+/// capturing, so this is a full frame and the caller scales it down.
+pub(super) fn capture_for_thumbnail(display_id: &str, _max_edge: u32) -> CaptureResult<RawFrame> {
+    xcap_backend::capture_once(Some(display_id), map_error)
+}
+
 pub(super) fn start(
     request: &ScreenStreamRequest,
     sink: Arc<dyn FrameSink>,
