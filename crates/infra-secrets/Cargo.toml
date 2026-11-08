@@ -3,6 +3,8 @@ name = "tan-infra-secrets"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 tan-application.workspace = true

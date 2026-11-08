@@ -3,6 +3,8 @@ name = "tan-app"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Tan desktop application (Tauri composition root)"
 
 [lib]
