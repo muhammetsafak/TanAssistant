@@ -1,18 +1,18 @@
-import { useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router';
 
 import { Button } from '../components/ui/Button';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { TanIllustration } from '../components/ui/TanIllustration';
 import { useToast } from '../components/ui/toast-context';
 import { SessionsCommandError, useCommandErrorHandler } from '../ipc/errors';
-import { ActionItems } from '../features/sessions/ActionItems';
 import { useDeleteSession, useSessionDetail, type SessionDetail } from '../features/sessions/api';
 import { ExportButton } from '../features/sessions/ExportButton';
 import { formatDateTime, formatDuration } from '../features/sessions/format';
 import { FrameGallery } from '../features/sessions/FrameGallery';
 import { NoteView } from '../features/sessions/NoteView';
-import { ProcessingProgress } from '../features/sessions/ProcessingProgress';
+import { ProcessingProgress, ReprocessButton } from '../features/sessions/ProcessingProgress';
 import { StatusBadge } from '../features/sessions/StatusBadge';
 import { TranscriptView } from '../features/sessions/TranscriptView';
 
@@ -20,23 +20,21 @@ import '../components/ui/ui.css';
 import '../features/sessions/sessions.css';
 import '../layout/layout.css';
 
-const TABS = ['note', 'actions', 'transcript', 'frames'] as const;
-type Tab = (typeof TABS)[number];
-
 export default function SessionDetailPage() {
   const { t } = useTranslation();
   const { sessionId = '' } = useParams();
   const detail = useSessionDetail(sessionId);
 
   return (
-    <section className="page">
+    <section className="page session-page">
       <Link to="/recordings" className="back-link">
         {t('sessions.detail.back')}
       </Link>
       {detail.isPending ? (
         <p role="status">{t('common.loading')}</p>
       ) : detail.isError ? (
-        <div className="alert" role="alert">
+        <div className="alert alert--with-tan" role="alert">
+          <TanIllustration pose="thinking" width={56} decorative />
           <span>
             {detail.error instanceof SessionsCommandError && detail.error.code === 'not_found'
               ? t('sessions.detail.notFound')
@@ -81,33 +79,52 @@ function SessionDetailView({ detail }: { detail: SessionDetail }) {
   return (
     <>
       <header className="detail-header">
-        <div className="detail-header__title">
-          <h1>{session.title || t('sessions.list.untitled')}</h1>
-          <StatusBadge status={session.status} />
-        </div>
-        <dl className="detail-meta">
-          <div>
-            <dt>{t('sessions.detail.startedAt')}</dt>
-            <dd>{formatDateTime(session.startedAt, i18n.language)}</dd>
+        <div className="detail-header__main">
+          <div className="detail-header__title">
+            <h1>{session.title || t('sessions.list.untitled')}</h1>
+            <StatusBadge status={session.status} />
           </div>
-          {session.durationMs !== null ? (
+          <dl className="detail-meta">
             <div>
-              <dt>{t('sessions.detail.duration')}</dt>
-              <dd>{formatDuration(session.durationMs, t)}</dd>
+              <dt className="sr-only">{t('sessions.detail.startedAt')}</dt>
+              <dd>{formatDateTime(session.startedAt, i18n.language)}</dd>
             </div>
-          ) : null}
-          <div>
-            <dt>{t('sessions.detail.speechLanguage')}</dt>
-            <dd>{t(`languageNames.${session.language}`, { defaultValue: session.language })}</dd>
-          </div>
-          <div>
-            <dt>{t('sessions.detail.noteLanguage')}</dt>
-            <dd>
-              {t(`languageNames.${session.noteLanguage}`, { defaultValue: session.noteLanguage })}
-            </dd>
-          </div>
-        </dl>
+            {session.durationMs !== null ? (
+              <div>
+                <dt className="sr-only">{t('sessions.detail.duration')}</dt>
+                <dd>{formatDuration(session.durationMs, t)}</dd>
+              </div>
+            ) : null}
+            <div>
+              <dt className="sr-only">{t('sessions.detail.frameCount')}</dt>
+              <dd>{t('sessions.detail.frameCountValue', { count: detail.frames.length })}</dd>
+            </div>
+            <div>
+              <dt className="sr-only">{t('sessions.detail.speechLanguage')}</dt>
+              <dd>
+                {t('sessions.detail.speechLanguageValue', {
+                  language: t(`languageNames.${session.language}`, {
+                    defaultValue: session.language,
+                  }),
+                })}
+              </dd>
+            </div>
+            <div>
+              <dt className="sr-only">{t('sessions.detail.noteLanguage')}</dt>
+              <dd>
+                {t('sessions.detail.noteLanguageValue', {
+                  language: t(`languageNames.${session.noteLanguage}`, {
+                    defaultValue: session.noteLanguage,
+                  }),
+                })}
+              </dd>
+            </div>
+          </dl>
+        </div>
         <div className="detail-header__actions">
+          {session.status === 'processed' ? (
+            <ReprocessButton sessionId={session.id} fallbackJob={detail.job} />
+          ) : null}
           <ExportButton sessionId={session.id} title={session.title} disabled={!exportable} />
           <Button variant="danger" onClick={() => setConfirmingDelete(true)} disabled={busy}>
             {t('sessions.detail.delete')}
@@ -118,7 +135,41 @@ function SessionDetailView({ detail }: { detail: SessionDetail }) {
 
       <ProcessingProgress detail={detail} />
 
-      <SessionTabs detail={detail} />
+      <div className="session-body">
+        <article className="session-body__main session-card">
+          {note ? (
+            <NoteView note={note} sessionId={session.id} />
+          ) : (
+            <p className="note__none">{t('sessions.note.none')}</p>
+          )}
+        </article>
+
+        <aside className="session-body__side" aria-label={t('sessions.detail.sideLabel')}>
+          <section className="session-card" aria-labelledby="frames-heading">
+            <div className="session-card__head">
+              <h2 id="frames-heading">{t('sessions.detail.frames')}</h2>
+              <span className="session-card__count">{detail.frames.length}</span>
+            </div>
+            <FrameGallery
+              sessionDir={detail.sessionDir}
+              frames={detail.frames}
+              keyFrameIds={note?.keyFrameIds ?? []}
+            />
+          </section>
+
+          <section className="session-card" aria-labelledby="transcript-heading">
+            <div className="session-card__head">
+              <h2 id="transcript-heading">{t('sessions.detail.transcript')}</h2>
+              <span className="session-card__count">{detail.transcript.length}</span>
+            </div>
+            <TranscriptView
+              sessionDir={detail.sessionDir}
+              lines={detail.transcript}
+              frames={detail.frames}
+            />
+          </section>
+        </aside>
+      </div>
 
       <ConfirmDialog
         open={confirmingDelete}
@@ -130,101 +181,5 @@ function SessionDetailView({ detail }: { detail: SessionDetail }) {
         onCancel={() => setConfirmingDelete(false)}
       />
     </>
-  );
-}
-
-function SessionTabs({ detail }: { detail: SessionDetail }) {
-  const { t } = useTranslation();
-  const baseId = useId();
-  const [tab, setTab] = useState<Tab>('note');
-  const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
-  const { note } = detail;
-
-  const counts: Record<Tab, number | null> = {
-    note: null,
-    actions: note ? note.actionItems.length : null,
-    transcript: detail.transcript.length,
-    frames: detail.frames.length,
-  };
-
-  function moveTo(next: Tab) {
-    setTab(next);
-    tabRefs.current[next]?.focus();
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const index = TABS.indexOf(tab);
-    let target: Tab | undefined;
-    if (event.key === 'ArrowRight') target = TABS[(index + 1) % TABS.length];
-    else if (event.key === 'ArrowLeft') target = TABS[(index - 1 + TABS.length) % TABS.length];
-    else if (event.key === 'Home') target = TABS[0];
-    else if (event.key === 'End') target = TABS[TABS.length - 1];
-    if (target) {
-      event.preventDefault();
-      moveTo(target);
-    }
-  }
-
-  return (
-    <div className="tabs">
-      <div
-        className="tabs__list"
-        role="tablist"
-        aria-label={t('sessions.detail.tabs.label')}
-        onKeyDown={handleKeyDown}
-      >
-        {TABS.map((entry) => {
-          const count = counts[entry];
-          return (
-            <button
-              key={entry}
-              ref={(element) => {
-                tabRefs.current[entry] = element;
-              }}
-              type="button"
-              role="tab"
-              id={`${baseId}-tab-${entry}`}
-              aria-selected={tab === entry}
-              aria-controls={tab === entry ? `${baseId}-panel-${entry}` : undefined}
-              tabIndex={tab === entry ? 0 : -1}
-              className="tabs__tab"
-              onClick={() => setTab(entry)}
-            >
-              {t(`sessions.detail.tabs.${entry}`)}
-              {count !== null ? <span className="tabs__count">{count}</span> : null}
-            </button>
-          );
-        })}
-      </div>
-      <div
-        className="tabs__panel"
-        role="tabpanel"
-        id={`${baseId}-panel-${tab}`}
-        aria-labelledby={`${baseId}-tab-${tab}`}
-        tabIndex={0}
-      >
-        {tab === 'note' ? (
-          note ? (
-            <NoteView note={note} sessionDir={detail.sessionDir} frames={detail.frames} />
-          ) : (
-            <p className="library__empty">{t('sessions.note.none')}</p>
-          )
-        ) : tab === 'actions' ? (
-          note ? (
-            <ActionItems sessionId={detail.session.id} items={note.actionItems} />
-          ) : (
-            <p className="library__empty">{t('sessions.note.none')}</p>
-          )
-        ) : tab === 'transcript' ? (
-          <TranscriptView
-            sessionDir={detail.sessionDir}
-            lines={detail.transcript}
-            frames={detail.frames}
-          />
-        ) : (
-          <FrameGallery sessionDir={detail.sessionDir} frames={detail.frames} />
-        )}
-      </div>
-    </div>
   );
 }

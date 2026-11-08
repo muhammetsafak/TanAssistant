@@ -68,7 +68,6 @@ describe('SessionDetailPage', () => {
       );
       renderDetail();
 
-      await user.click(await screen.findByRole('tab', { name: /Aksiyonlar/ }));
       const box = await screen.findByRole('checkbox', { name: 'Bütçeyi paylaş' });
       expect(box).not.toBeChecked();
 
@@ -88,7 +87,6 @@ describe('SessionDetailPage', () => {
       vi.mocked(commands.toggleActionItem).mockResolvedValue(fail('not_found') as never);
       renderDetail();
 
-      await user.click(await screen.findByRole('tab', { name: /Aksiyonlar/ }));
       await user.click(await screen.findByRole('checkbox', { name: 'Bütçeyi paylaş' }));
 
       expect(await screen.findByRole('alert')).toHaveTextContent('Kayıt bulunamadı.');
@@ -103,7 +101,7 @@ describe('SessionDetailPage', () => {
       const user = userEvent.setup();
       renderDetail();
 
-      await user.click(await screen.findByRole('tab', { name: /Transkript/ }));
+      await screen.findByRole('heading', { name: 'Transkript' });
       const preview = screen.getByRole('complementary', { name: /en yakın kare/ });
       expect(preview).toHaveTextContent('Bir satırın zamanına tıklayın');
 
@@ -120,13 +118,102 @@ describe('SessionDetailPage', () => {
     });
 
     it('labels the speakers of the two tracks', async () => {
-      const user = userEvent.setup();
       renderDetail();
 
-      await user.click(await screen.findByRole('tab', { name: /Transkript/ }));
+      await screen.findByRole('heading', { name: 'Transkript' });
       const lines = within(screen.getByRole('list', { name: 'Transkript satırları' }));
       expect(lines.getByText('Ben')).toBeInTheDocument();
       expect(lines.getByText('Diğerleri')).toBeInTheDocument();
+    });
+  });
+
+  describe('layout', () => {
+    it('shows the note, the frames and the transcript together, without tabs', async () => {
+      renderDetail();
+
+      expect(await screen.findByRole('heading', { name: 'Özet' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Kararlar' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Aksiyonlar' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Açık sorular' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Kareler' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Transkript' })).toBeInTheDocument();
+      expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+      // The frame the note refers to is marked in the gallery.
+      expect(screen.getAllByText('Notta')).toHaveLength(1);
+    });
+
+    it('links back to the library by that name', async () => {
+      renderDetail();
+      expect(await screen.findByRole('link', { name: '← Kütüphaneye dön' })).toHaveAttribute(
+        'href',
+        '/recordings',
+      );
+    });
+
+    it('shows Tan approving next to the summary when the note exists', async () => {
+      const { container } = renderDetail();
+      await screen.findByRole('heading', { name: 'Özet' });
+      expect(container.querySelector('img.note__tan')).not.toBeNull();
+    });
+
+    it('has no note, no approving Tan and a hint when the note is missing', async () => {
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(sessionDetail({ session: { ...session, status: 'recorded' }, note: null, job: null })),
+      );
+      const { container } = renderDetail();
+
+      expect(await screen.findByText('Bu kayıt için henüz not yok.')).toBeInTheDocument();
+      expect(container.querySelector('img.note__tan')).toBeNull();
+    });
+
+    it('colours the speakers by side', async () => {
+      renderDetail();
+      const lines = within(await screen.findByRole('list', { name: 'Transkript satırları' }));
+      expect(lines.getByText('Ben').closest('li')).toHaveClass('transcript-line--me');
+      expect(lines.getByText('Diğerleri').closest('li')).toHaveClass('transcript-line--others');
+    });
+
+    it('does not offer "Yeniden işle" next to "Tekrar dene" after a failed run', async () => {
+      vi.mocked(commands.processingStatus).mockResolvedValue(
+        ok({
+          running: false,
+          job: {
+            ...sessionDetail().job!,
+            steps: [
+              { step: 'transcribe', state: 'done', error: null },
+              { step: 'describe_frames', state: 'done', error: null },
+              { step: 'synthesize', state: 'failed', error: 'model said no' },
+            ],
+          },
+        }),
+      );
+      renderDetail();
+
+      expect(await screen.findByRole('button', { name: 'Tekrar dene' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Yeniden işle' })).not.toBeInTheDocument();
+    });
+
+    it('names a frame button with its description', async () => {
+      renderDetail();
+      expect(
+        await screen.findByRole('button', {
+          name: '01:05 anındaki kareyi büyüt: Slide: Q4 budget',
+        }),
+      ).toBeInTheDocument();
+    });
+
+    it('re-processes from the header after confirming', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.processSession).mockResolvedValue(new Promise(() => undefined) as never);
+      renderDetail();
+
+      await user.click(await screen.findByRole('button', { name: 'Yeniden işle' }));
+      expect(commands.processSession).not.toHaveBeenCalled();
+      await user.click(
+        within(screen.getByRole('dialog')).getByRole('button', { name: 'Yeniden işle' }),
+      );
+
+      expect(commands.processSession).toHaveBeenCalledWith('s1', null);
     });
   });
 
@@ -154,6 +241,8 @@ describe('SessionDetailPage', () => {
       renderDetail();
 
       expect(await screen.findByText('İşleme tamamlanamadı')).toBeInTheDocument();
+      // A failed run is told with a thinking Tan.
+      expect(screen.getByRole('region', { name: 'İşleme tamamlanamadı' })).toBeInTheDocument();
       expect(screen.getByText('model said no')).toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Tekrar dene' }));
 

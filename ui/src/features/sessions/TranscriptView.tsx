@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
@@ -15,6 +15,8 @@ interface RowProps {
   line: TranscriptLine;
   index: number;
   speaker: string;
+  /** Which side spoke: it picks the speaker's colour. Any other label has none. */
+  side: 'me' | 'others' | 'other';
   selected: boolean;
   /** Without frames the timestamp is plain text: there is nothing to select. */
   selectable: boolean;
@@ -25,6 +27,7 @@ const TranscriptRow = memo(function TranscriptRow({
   line,
   index,
   speaker,
+  side,
   selected,
   selectable,
   onSelect,
@@ -33,7 +36,7 @@ const TranscriptRow = memo(function TranscriptRow({
   const time = formatClock(line.startMs);
   return (
     <li
-      className={selected ? 'transcript-line transcript-line--selected' : 'transcript-line'}
+      className={`transcript-line transcript-line--${side}${selected ? ' transcript-line--selected' : ''}`}
       onClick={() => {
         // Dragging to copy some text also ends in a click; that must not move the selection.
         if (selectable && !window.getSelection()?.toString()) onSelect(index);
@@ -62,10 +65,15 @@ const TranscriptRow = memo(function TranscriptRow({
 });
 
 /** `me` and `others` are localised; any other label is shown as the transcript has it. */
-function speakerLabel(line: TranscriptLine, t: TFunction): string {
+function speakerOf(
+  line: TranscriptLine,
+  t: TFunction,
+): { label: string; side: 'me' | 'others' | 'other' } {
   const speaker = line.speaker ?? (line.track === 'system' ? 'others' : 'me');
-  if (speaker === 'me' || speaker === 'others') return t(`sessions.transcript.speaker.${speaker}`);
-  return speaker;
+  if (speaker === 'me' || speaker === 'others') {
+    return { label: t(`sessions.transcript.speaker.${speaker}`), side: speaker };
+  }
+  return { label: speaker, side: 'other' };
 }
 
 /**
@@ -85,9 +93,23 @@ export function TranscriptView({
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [viewing, setViewing] = useState<number | null>(null);
   const select = useCallback((index: number) => setSelectedIndex(index), []);
+  const linesRef = useRef<HTMLOListElement>(null);
+  const [scrollable, setScrollable] = useState(false);
+
+  // The box is a keyboard stop only while it really scrolls (a short transcript has nothing to scroll).
+  useEffect(() => {
+    const element = linesRef.current;
+    if (!element) return;
+    const measure = () => setScrollable(element.scrollHeight > element.clientHeight);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [lines.length]);
 
   if (lines.length === 0) {
-    return <p className="library__empty">{t('sessions.transcript.empty')}</p>;
+    return <p className="note__none">{t('sessions.transcript.empty')}</p>;
   }
 
   const selectedLine = selectedIndex === null ? undefined : lines[selectedIndex];
@@ -123,18 +145,28 @@ export function TranscriptView({
         </aside>
       ) : null}
 
-      <ol className="transcript__lines" aria-label={t('sessions.transcript.listLabel')}>
-        {lines.map((line, index) => (
-          <TranscriptRow
-            key={`${line.track}-${line.startMs}-${index}`}
-            line={line}
-            index={index}
-            speaker={speakerLabel(line, t)}
-            selected={index === selectedIndex}
-            selectable={hasFrames}
-            onSelect={select}
-          />
-        ))}
+      {/* A long meeting scrolls inside its own box; once it scrolls it is a keyboard stop so the keys can scroll it. */}
+      <ol
+        ref={linesRef}
+        className="transcript__lines"
+        aria-label={t('sessions.transcript.listLabel')}
+        tabIndex={scrollable ? 0 : undefined}
+      >
+        {lines.map((line, index) => {
+          const { label, side } = speakerOf(line, t);
+          return (
+            <TranscriptRow
+              key={`${line.track}-${line.startMs}-${index}`}
+              line={line}
+              index={index}
+              speaker={label}
+              side={side}
+              selected={index === selectedIndex}
+              selectable={hasFrames}
+              onSelect={select}
+            />
+          );
+        })}
       </ol>
 
       <FrameViewer

@@ -71,7 +71,7 @@ describe('App shell', () => {
     render(<App />);
 
     const nav = await screen.findByRole('navigation', { name: 'Ana gezinme' });
-    expect(nav).toHaveTextContent('Kayıtlar');
+    expect(nav).toHaveTextContent('Kütüphane');
     expect(nav).toHaveTextContent('AI Sağlayıcıları');
     expect(nav).toHaveTextContent('Credentials');
     expect(nav).toHaveTextContent('Ayarlar');

@@ -55,13 +55,13 @@ describe('language switching', () => {
         <TopBar />
       </>,
     );
-    expect(screen.getByRole('link', { name: 'Kayıtlar' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Kütüphane' })).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText('Dil'), 'en');
 
-    expect(await screen.findByRole('link', { name: 'Recordings' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Library' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Kayıtlar' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Kütüphane' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Language')).toHaveValue('en');
     await waitFor(() => expect(commands.updateSettings).toHaveBeenCalledWith({ uiLanguage: 'en' }));
     expect(document.documentElement.lang).toBe('en');
@@ -85,7 +85,7 @@ describe('language switching', () => {
   it('marks the current page, shows the Tan mark and the disk usage card', async () => {
     renderWithProviders(<Sidebar />, '/recordings');
 
-    const current = await screen.findByRole('link', { name: 'Kayıtlar' });
+    const current = await screen.findByRole('link', { name: 'Kütüphane' });
     expect(current).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Ayarlar' })).not.toHaveAttribute('aria-current');
     // The logo is decorative: the word "Tan" next to it names the brand.
@@ -100,7 +100,7 @@ describe('language switching', () => {
     );
     renderWithProviders(<Sidebar />);
 
-    await screen.findByRole('link', { name: 'Kayıtlar' });
+    await screen.findByRole('link', { name: 'Kütüphane' });
     await vi.waitFor(() => expect(commands.getStorageUsage).toHaveBeenCalled());
     expect(screen.queryByTestId('sidebar-disk')).not.toBeInTheDocument();
   });

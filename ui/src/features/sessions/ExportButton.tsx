@@ -94,6 +94,7 @@ export function ExportButton({
   return (
     <div className="export">
       <Button
+        variant="primary"
         onClick={() => void startExport()}
         disabled={disabled || choosing || exportSession.isPending}
       >

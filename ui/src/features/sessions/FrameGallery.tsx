@@ -12,15 +12,18 @@ import './sessions.css';
 export function FrameGallery({
   sessionDir,
   frames,
+  keyFrameIds = [],
 }: {
   sessionDir: string;
   frames: readonly Frame[];
+  /** Frames the note refers to; they are marked, since the export carries only those. */
+  keyFrameIds?: readonly string[];
 }) {
   const { t } = useTranslation();
   const [viewing, setViewing] = useState<number | null>(null);
 
   if (frames.length === 0) {
-    return <p className="library__empty">{t('sessions.frames.empty')}</p>;
+    return <p className="note__none">{t('sessions.frames.empty')}</p>;
   }
 
   return (
@@ -32,14 +35,22 @@ export function FrameGallery({
               type="button"
               className="frame-card__open"
               onClick={() => setViewing(index)}
-              aria-label={t('sessions.frames.enlarge', { time: formatClock(frame.timestampMs) })}
+              title={frame.description ?? undefined}
+              aria-label={
+                frame.description
+                  ? t('sessions.frames.enlargeWithDescription', {
+                      time: formatClock(frame.timestampMs),
+                      description: frame.description,
+                    })
+                  : t('sessions.frames.enlarge', { time: formatClock(frame.timestampMs) })
+              }
             >
               <FrameImage sessionDir={sessionDir} frame={frame} />
             </button>
             <div className="frame-card__caption">
               <span className="frame-card__time">{formatClock(frame.timestampMs)}</span>
-              {frame.description ? (
-                <span className="frame-card__text">{frame.description}</span>
+              {keyFrameIds.includes(frame.id) ? (
+                <span className="frame-card__key">{t('sessions.frames.inNote')}</span>
               ) : null}
             </div>
           </li>
