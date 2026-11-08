@@ -18,6 +18,31 @@ const MENU_QUIT: &str = "quit";
 /// Label of the main window (`tauri.conf.json`).
 pub const MAIN_WINDOW: &str = "main";
 
+// The tray PNGs are generated from `assets/brand/` by `scripts/gen-icons.sh` (44 px; the OS
+// scales them down) and decoded at compile time by `include_image!`, so a broken file fails
+// the build instead of the tray. macOS recolours template images to match the menu bar, so
+// idle and paused use the black silhouettes there; Windows and Linux do not, so they get
+// coloured ones. The recording silhouette is amber everywhere and is never a template.
+#[cfg(target_os = "macos")]
+fn idle_image() -> Image<'static> {
+    tauri::include_image!("icons/tray/idle-template@2x.png")
+}
+#[cfg(not(target_os = "macos"))]
+fn idle_image() -> Image<'static> {
+    tauri::include_image!("icons/tray/idle-color@2x.png")
+}
+fn recording_image() -> Image<'static> {
+    tauri::include_image!("icons/tray/recording@2x.png")
+}
+#[cfg(target_os = "macos")]
+fn paused_image() -> Image<'static> {
+    tauri::include_image!("icons/tray/paused-template@2x.png")
+}
+#[cfg(not(target_os = "macos"))]
+fn paused_image() -> Image<'static> {
+    tauri::include_image!("icons/tray/paused-color@2x.png")
+}
+
 /// The tray's texts in one language.
 struct TrayText {
     start: &'static str,
@@ -69,15 +94,22 @@ fn text_for(language: UiLanguage) -> TrayText {
     }
 }
 
+/// One tray image and whether macOS should treat it as a template (recolour it to the menu
+/// bar). `template` is ignored on Windows and Linux.
+struct TrayImage {
+    image: Image<'static>,
+    template: bool,
+}
+
 /// What the tray needs to flip between its states. Managed by Tauri.
 pub struct TrayHandles {
     tray: TrayIcon<Wry>,
     toggle: MenuItem<Wry>,
     pause: MenuItem<Wry>,
     text: TrayText,
-    idle_icon: Image<'static>,
-    recording_icon: Image<'static>,
-    paused_icon: Image<'static>,
+    idle_icon: TrayImage,
+    recording_icon: TrayImage,
+    paused_icon: TrayImage,
 }
 
 /// Builds the tray icon and its menu. The texts follow the UI language at startup.
@@ -91,12 +123,22 @@ pub fn init(app: &AppHandle, language: UiLanguage) -> tauri::Result<()> {
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&toggle, &pause, &show, &separator, &quit])?;
 
-    let idle_icon = base_icon(app);
-    let recording_icon = with_badge(&idle_icon, [220, 38, 38, 255]);
-    let paused_icon = with_badge(&idle_icon, [234, 179, 8, 255]);
+    let idle_icon = TrayImage {
+        image: idle_image(),
+        template: true,
+    };
+    let recording_icon = TrayImage {
+        image: recording_image(),
+        template: false,
+    };
+    let paused_icon = TrayImage {
+        image: paused_image(),
+        template: true,
+    };
 
     let tray = TrayIconBuilder::with_id(TRAY_ID)
-        .icon(idle_icon.clone())
+        .icon(idle_icon.image.clone())
+        .icon_as_template(idle_icon.template)
         .tooltip(text.idle_tooltip)
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -125,7 +167,7 @@ pub fn init(app: &AppHandle, language: UiLanguage) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Switches the tray between "idle", "recording" and "paused" (icon badge, tooltip, menu
+/// Switches the tray between "idle", "recording" and "paused" (icon, tooltip, menu
 /// labels). A missing tray (failed to build) is not an error: recording does not depend on it.
 pub fn set_state(app: &AppHandle, state: TrayState) {
     let Some(handles) = app.try_state::<TrayHandles>() else {
@@ -158,7 +200,11 @@ pub fn set_state(app: &AppHandle, state: TrayState) {
     if let Err(error) = handles.pause.set_enabled(state != TrayState::Idle) {
         tracing::debug!(%error, "cannot update the tray pause item");
     }
-    if let Err(error) = handles.tray.set_icon(Some(icon.clone())) {
+    // Sets the image and its template flag together, so macOS does not flicker in between.
+    if let Err(error) = handles
+        .tray
+        .set_icon_with_as_template(Some(icon.image.clone()), icon.template)
+    {
         tracing::debug!(%error, "cannot update the tray icon");
     }
     if let Err(error) = handles.tray.set_tooltip(Some(tooltip)) {
@@ -219,37 +265,4 @@ fn on_menu_event(app: &AppHandle, event: &MenuEvent) {
         }
         _ => {}
     }
-}
-
-/// The application icon (the default window icon), or a flat grey square if there is none.
-fn base_icon(app: &AppHandle) -> Image<'static> {
-    match app.default_window_icon() {
-        Some(icon) => Image::new_owned(icon.rgba().to_vec(), icon.width(), icon.height()),
-        None => Image::new_owned(vec![128; 32 * 32 * 4], 32, 32),
-    }
-}
-
-/// A copy of `icon` with a dot of `color` in the bottom-right corner.
-fn with_badge(icon: &Image<'static>, color: [u8; 4]) -> Image<'static> {
-    let (width, height) = (icon.width(), icon.height());
-    let mut rgba = icon.rgba().to_vec();
-    let radius = f64::from(width.min(height)) * 0.3;
-    let (cx, cy) = (
-        f64::from(width) - radius - 1.0,
-        f64::from(height) - radius - 1.0,
-    );
-    for y in 0..height {
-        for x in 0..width {
-            let (dx, dy) = (f64::from(x) + 0.5 - cx, f64::from(y) + 0.5 - cy);
-            let distance = dx.hypot(dy);
-            let i = ((y * width + x) * 4) as usize;
-            if distance <= radius - 1.0 {
-                rgba[i..i + 4].copy_from_slice(&color);
-            } else if distance <= radius {
-                // One pixel white ring so the dot stands out on dark and light trays.
-                rgba[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
-            }
-        }
-    }
-    Image::new_owned(rgba, width, height)
 }

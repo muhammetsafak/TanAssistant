@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Tan app icon, 1024 px master. Source: design Main.dc.html (Tan ikonu). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Tan uygulama ikonu, 1024 piksel">
+  <defs>
+    <clipPath id="sq1"><rect x="0" y="0" width="1024" height="1024" rx="228" /></clipPath>
+  </defs>
+  <g clip-path="url(#sq1)">
+    <rect x="0" y="0" width="1024" height="1024" fill="#1d1757" />
+    <circle cx="512" cy="1130" r="560" fill="#473b9c" />
+    <circle cx="512" cy="1130" r="470" fill="#fec356" />
+    <circle cx="512" cy="1130" r="430" fill="#fed59f" />
+    <circle cx="318" cy="300" r="78" fill="#675ade" stroke="#1d1757" stroke-width="20" />
+    <circle cx="318" cy="300" r="40" fill="#b577b1" />
+    <circle cx="706" cy="300" r="78" fill="#675ade" stroke="#1d1757" stroke-width="20" />
+    <circle cx="706" cy="300" r="40" fill="#b577b1" />
+    <path d="M512 248 C 700 248 790 380 790 540 C 790 720 670 830 512 830 C 354 830 234 720 234 540 C 234 380 324 248 512 248 Z" fill="#675ade" stroke="#1d1757" stroke-width="20" />
+    <path d="M700 300 C 770 360 800 450 792 560" fill="none" stroke="#fec356" stroke-width="18" stroke-linecap="round" />
+    <path d="M470 232 C 480 200 500 186 512 182 C 512 205 530 220 548 232" fill="#675ade" stroke="#1d1757" stroke-width="16" stroke-linejoin="round" />
+    <ellipse cx="512" cy="660" rx="170" ry="130" fill="#fed59f" />
+    <path d="M372 446 Q 410 420 448 438" fill="none" stroke="#1c1656" stroke-width="16" stroke-linecap="round" />
+    <path d="M576 438 Q 614 420 652 446" fill="none" stroke="#1c1656" stroke-width="16" stroke-linecap="round" />
+    <circle cx="420" cy="508" r="40" fill="#5a3413" stroke="#1d1757" stroke-width="10" />
+    <circle cx="420" cy="512" r="22" fill="#241101" />
+    <circle cx="432" cy="496" r="10" fill="#fefae3" />
+    <circle cx="604" cy="508" r="40" fill="#5a3413" stroke="#1d1757" stroke-width="10" />
+    <circle cx="604" cy="512" r="22" fill="#241101" />
+    <circle cx="616" cy="496" r="10" fill="#fefae3" />
+    <path d="M470 584 Q 512 566 554 584 Q 548 624 512 632 Q 476 624 470 584 Z" fill="#2b2274" />
+    <path d="M442 650 Q 512 700 582 650" fill="none" stroke="#1d1757" stroke-width="12" stroke-linecap="round" />
+    <rect x="474" y="672" width="36" height="64" rx="10" fill="#fefae3" stroke="#1d1757" stroke-width="9" />
+    <rect x="514" y="672" width="36" height="64" rx="10" fill="#fefae3" stroke="#1d1757" stroke-width="9" />
+  </g>
+</svg>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Tan menu bar icon, idle. Black on transparent: used as a macOS template image. Source: design Main.dc.html (tray). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" role="img" aria-label="Tan menu bar icon, idle" style="color:#000">
+  <defs>
+    <mask id="silhouette" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+      <rect width="24" height="24" fill="#fff" />
+      <rect x="10.2" y="15" width="3.6" height="4" rx="0.8" fill="#000" />
+    </mask>
+  </defs>
+  <g mask="url(#silhouette)" fill="currentColor">
+    <circle cx="6" cy="6" r="3" />
+    <circle cx="18" cy="6" r="3" />
+    <path d="M12 4 C 18 4 20 9 20 13 C 20 18 16.5 21 12 21 C 7.5 21 4 18 4 13 C 4 9 6 4 12 4 Z" />
+  </g>
+</svg>
