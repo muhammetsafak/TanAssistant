@@ -1249,13 +1249,6 @@ fn one_source_that_cannot_reopen_is_only_a_warning() {
 
 #[test]
 fn pause_and_resume_are_published_and_progress_stops_while_paused() {
-    let h = harness();
-    block_on(h.service.start(StartOptions::titled("events"))).unwrap();
-    feed_for(&both_sinks(&h), Duration::from_millis(300));
-    h.service.pause().unwrap();
-    // Let a tick that was already due go out.
-    std::thread::sleep(Duration::from_millis(400));
-
     let progress = |h: &Harness| {
         h.events
             .all()
@@ -1263,8 +1256,21 @@ fn pause_and_resume_are_published_and_progress_stops_while_paused() {
             .filter(|e| matches!(e, RecordingEvent::Progress(_)))
             .count()
     };
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("events"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(300));
+    // Wait for the first progress tick instead of assuming it fits into a fixed delay: a slow
+    // CI runner may not have published one yet.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while progress(&h) == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    h.service.pause().unwrap();
+    // Let a tick that was already due go out.
+    std::thread::sleep(Duration::from_millis(400));
+
     let before = progress(&h);
-    assert!(before > 0);
+    assert!(before > 0, "a progress tick was published before the pause");
     let elapsed_at_pause = match h.service.status() {
         RecordingStatus::Paused(a) => a.elapsed_ms,
         other => panic!("expected paused, got {other:?}"),
