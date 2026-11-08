@@ -15,7 +15,7 @@
   },
   "nav": {
     "label": "Ana gezinme",
-    "recordings": "Kayıtlar",
+    "recordings": "Kütüphane",
     "providers": "AI Sağlayıcıları",
     "credentials": "Credentials",
     "settings": "Ayarlar"
@@ -33,12 +33,13 @@
   },
   "consent": {
     "title": "Kayıt hakkında bilgilendirme",
+    "greeting": "Merhaba, ben Tan.",
     "body": "Tan, toplantı ve görüşmelerin sesini ve ekran görüntülerini kaydeder. Kayda başlamadan önce görüşmedeki diğer kişilere kaydın yapıldığını bildirmeniz gerekir; kişisel verilerin korunmasına ilişkin (KVKK) yükümlülükler size aittir.",
     "acknowledge": "Anladım"
   },
   "pages": {
     "recordings": {
-      "title": "Kayıtlar",
+      "title": "Kütüphane",
       "intro": "Ses iki kanaldan ayrı alınır, ekran yalnız değiştiğinde kare olarak saklanır."
     },
     "providers": {
@@ -384,9 +385,8 @@
       "failed": "Başarısız"
     },
     "list": {
-      "title": "Kayıtlar",
+      "title": "Kütüphane",
       "statusFilter": "Durum",
-      "allStatuses": "Tüm durumlar",
       "listLabel": "Kayıt listesi",
       "empty": "Henüz kayıt yok. Yukarıdan bir kayıt başlatın.",
       "emptyFiltered": "Bu duruma uyan kayıt yok.",
@@ -396,7 +396,8 @@
       "pagination": "Sayfalama",
       "previous": "Önceki",
       "next": "Sonraki",
-      "range": "{{from}}–{{to}} / {{total}}"
+      "range": "{{from}}–{{to}} / {{total}}",
+      "filterAll": "Tümü"
     },
     "search": {
       "label": "Ara",
@@ -414,7 +415,7 @@
       }
     },
     "detail": {
-      "back": "← Kayıtlara dön",
+      "back": "← Kütüphaneye dön",
       "loadFailed": "Kayıt yüklenemedi.",
       "notFound": "Kayıt bulunamadı; silinmiş olabilir.",
       "startedAt": "Başlangıç",
@@ -426,13 +427,14 @@
       "deleteTitle": "Kayıt silinsin mi?",
       "deleteMessage": "“{{name}}” kaydı; sesi, kareleri, transkripti, notu ve aksiyonlarıyla kalıcı olarak silinecek. Bu işlem geri alınamaz.",
       "deleted": "Kayıt silindi.",
-      "tabs": {
-        "label": "Kayıt bölümleri",
-        "note": "Not",
-        "actions": "Aksiyonlar",
-        "transcript": "Transkript",
-        "frames": "Kareler"
-      }
+      "frameCount": "Kare sayısı",
+      "frameCountValue_one": "{{count}} kare",
+      "frameCountValue_other": "{{count}} kare",
+      "speechLanguageValue": "Konuşma: {{language}}",
+      "noteLanguageValue": "Not: {{language}}",
+      "sideLabel": "Kareler ve transkript",
+      "frames": "Kareler",
+      "transcript": "Transkript"
     },
     "note": {
       "none": "Bu kayıt için henüz not yok.",
@@ -443,16 +445,15 @@
       "decisions": "Kararlar",
       "noDecisions": "Karar kaydedilmedi.",
       "openQuestions": "Açık sorular",
-      "noOpenQuestions": "Açık soru yok.",
-      "keyFrames": "Önemli kareler",
-      "noKeyFrames": "Nota eklenmiş kare yok."
+      "noOpenQuestions": "Açık soru yok."
     },
     "actions": {
       "empty": "Bu notta aksiyon maddesi yok.",
       "progress": "{{done}}/{{total}} tamamlandı",
       "listLabel": "Aksiyon maddeleri",
       "owner": "Sorumlu: {{owner}}",
-      "due": "Tarih: {{date}}"
+      "due": "Tarih: {{date}}",
+      "title": "Aksiyonlar"
     },
     "transcript": {
       "empty": "Bu kayıt için transkript yok.",
@@ -478,7 +479,9 @@
       "previous": "Önceki",
       "next": "Sonraki",
       "position": "{{current}} / {{total}}",
-      "noDescription": "Bu kare için görsel açıklama yok."
+      "noDescription": "Bu kare için görsel açıklama yok.",
+      "inNote": "Notta",
+      "enlargeWithDescription": "{{time}} anındaki kareyi büyüt: {{description}}"
     },
     "export": {
       "button": "Markdown olarak dışa aktar",

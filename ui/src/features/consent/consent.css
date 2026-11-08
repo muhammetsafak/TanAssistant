@@ -1,0 +1,103 @@
+/* First-run notice: the card stands on a night horizon (two arcs), as in the "İlk açılış" design. */
+.consent {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--space-4);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* The arcs are decoration only: a wide ellipse whose top edge shows above the bottom of the screen. */
+.consent__horizon {
+  position: fixed;
+  left: 50%;
+  border-radius: 50%;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.consent__horizon--back {
+  bottom: -51%;
+  width: min(120vw, 94rem);
+  height: 80%;
+  background: var(--color-surface-muted);
+}
+
+.consent__horizon--front {
+  bottom: -68%;
+  width: min(96vw, 75rem);
+  height: 80%;
+  background: var(--color-border);
+}
+
+.consent__card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  width: min(100%, 40rem);
+  margin: auto;
+  padding: var(--space-6) clamp(var(--space-4), 5vw, 2.75rem);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-raised);
+}
+
+.consent__card:focus {
+  outline: none;
+}
+
+.consent__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4) var(--space-5);
+}
+
+.consent__heading {
+  display: flex;
+  flex: 1 1 14rem;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.consent__greeting {
+  color: var(--color-live-text);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.consent__title {
+  font-size: clamp(var(--font-size-xl), 5vw, 1.875rem);
+  font-weight: 800;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.consent__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  color: var(--color-text-muted);
+  line-height: 1.55;
+}
+
+.consent__item-icon {
+  flex: none;
+  margin-top: 0.1rem;
+  color: var(--color-link);
+}
+
+.consent__footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding-top: var(--space-1);
+}

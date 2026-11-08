@@ -1,5 +1,7 @@
 import { useId, type SelectHTMLAttributes } from 'react';
 
+import { WarningIcon } from '../../components/ui/Icons';
+
 import '../../components/ui/ui.css';
 
 export interface SelectFieldProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, 'id'> {
@@ -36,6 +38,7 @@ export function SelectField({ label, hint, error, children, ...selectProps }: Se
       ) : null}
       {error ? (
         <p className="field__error" id={errorId}>
+          <WarningIcon className="field__error-icon" />
           {error}
         </p>
       ) : null}

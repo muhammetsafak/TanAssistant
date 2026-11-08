@@ -5,6 +5,7 @@ import { Link } from 'react-router';
 
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
+import { WarningIcon } from '../../components/ui/Icons';
 import { TextField } from '../../components/ui/TextField';
 import { useToast } from '../../components/ui/toast-context';
 import { ipc } from '../../ipc/client';
@@ -284,7 +285,7 @@ function FormBody({
                   <Button
                     key={suggestion}
                     size="sm"
-                    className="chip"
+                    className="model-chip"
                     onClick={() => setModel(suggestion)}
                     aria-pressed={model === suggestion}
                     title={tasks.map((task) => t(`providers.capabilities.${task}`)).join(', ')}
@@ -353,6 +354,7 @@ function FormBody({
             </SelectField>
             {secretMissing ? (
               <p className="field__error" role="alert">
+                <WarningIcon className="field__error-icon" />
                 {t('providers.form.secretGoneWarning')}
               </p>
             ) : null}

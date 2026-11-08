@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { CheckIcon } from '../../components/ui/Icons';
 import { useToast } from '../../components/ui/toast-context';
 import { useCommandErrorHandler } from '../../ipc/errors';
 import { formatBytes } from '../sessions/format';
@@ -18,6 +19,7 @@ import {
 } from './api';
 
 import '../../components/ui/ui.css';
+import '../../components/badge.css';
 import './settings.css';
 
 /** The local whisper models: download with progress, choose the one in use, delete. */
@@ -149,7 +151,10 @@ function ModelRow({
           ) : null}
           {model.installed ? <li className="badge">{t('settings.whisper.installed')}</li> : null}
           {model.selected ? (
-            <li className="badge badge--active">{t('settings.whisper.inUse')}</li>
+            <li className="badge badge--active">
+              <CheckIcon className="badge__icon" />
+              {t('settings.whisper.inUse')}
+            </li>
           ) : null}
         </ul>
         {!model.installed && !downloading && model.partialBytes > 0 ? (

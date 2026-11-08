@@ -1,10 +1,12 @@
+/* Settings sections are surface cards (28 px corners) like the recording panels; rows inside them sit one step lighter. */
 .settings-section {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding: var(--space-5);
+  min-width: 0;
+  padding: var(--space-6);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-xl);
   background: var(--color-surface);
 }
 
@@ -55,19 +57,24 @@
 .settings-check {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  min-height: var(--control-height-sm);
   font-size: var(--font-size-sm);
   font-weight: 600;
 }
 
 .settings-check input {
-  margin-top: 0.2rem;
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0.15rem 0 0;
+  accent-color: var(--color-primary);
 }
 
 .settings-empty {
-  padding: var(--space-4);
-  border: 1px dashed var(--color-border);
-  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
   color: var(--color-text-muted);
   text-align: center;
 }
@@ -86,10 +93,19 @@
 }
 
 .disk-usage__list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3) var(--space-5);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: var(--space-3);
   margin: 0;
+}
+
+.disk-usage__list > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
 }
 
 .disk-usage__list dt {
@@ -99,14 +115,16 @@
 
 .disk-usage__list dd {
   margin: 0;
-  font-weight: 600;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
 }
 
 /* Whisper models */
 .model-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -118,9 +136,10 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4) var(--space-5);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-muted);
 }
 
 .model-row__info {
@@ -132,7 +151,8 @@
 }
 
 .model-row__name {
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-weight: 700;
   overflow-wrap: anywhere;
 }
 
@@ -147,6 +167,12 @@
   gap: var(--space-1);
 }
 
+.model-row__progress progress {
+  width: 100%;
+  height: 0.5rem;
+  accent-color: var(--color-primary);
+}
+
 .model-row__actions {
   display: flex;
   flex-wrap: wrap;
@@ -156,24 +182,18 @@
 .badge-row {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
-  margin: 0;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
   padding: 0;
   list-style: none;
 }
 
-.badge-row .badge {
-  padding: 0 var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
-}
+@media (max-width: 720px) {
+  .settings-section {
+    padding: var(--space-5) var(--space-4);
+  }
 
-.badge-row .badge--active {
-  border-color: var(--color-success-text);
-  background: var(--color-success-surface);
-  color: var(--color-success-text);
-  font-weight: 600;
+  .model-row {
+    padding: var(--space-4);
+  }
 }

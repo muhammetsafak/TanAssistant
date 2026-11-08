@@ -1,0 +1,28 @@
+/* The small pill used for capabilities and model states (providers list, whisper models). */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 1.5rem;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--chip-paused-bg);
+  color: var(--chip-paused-fg);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* The model in use: the "ready" tone plus a check mark, never colour alone. */
+.badge--active {
+  border-color: var(--color-accent);
+  background: var(--chip-ready-bg);
+  color: var(--chip-ready-fg);
+}
+
+.badge__icon {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+}

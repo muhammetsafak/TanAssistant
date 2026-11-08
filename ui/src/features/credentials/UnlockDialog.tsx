@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
+import { WarningIcon } from '../../components/ui/Icons';
 import { TextField } from '../../components/ui/TextField';
 import { describeError } from '../../ipc/client';
 import { useSetMasterPassword, useUnlockVault } from './api';
@@ -87,6 +88,7 @@ function PasswordForm({ mode, onClose }: { mode: VaultDialogMode; onClose: () =>
         ) : null}
         {failure ? (
           <p className="field__error" role="alert">
+            <WarningIcon className="field__error-icon" />
             {failure}
           </p>
         ) : null}

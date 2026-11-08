@@ -15,7 +15,7 @@
   },
   "nav": {
     "label": "Main navigation",
-    "recordings": "Recordings",
+    "recordings": "Library",
     "providers": "AI Providers",
     "credentials": "Credentials",
     "settings": "Settings"
@@ -33,12 +33,13 @@
   },
   "consent": {
     "title": "Recording notice",
+    "greeting": "Hello, I'm Tan.",
     "body": "Tan records the audio and screen captures of meetings and conversations. Before you start recording, you must let the other people in the conversation know that it is being recorded; the obligations under personal data protection law (KVKK) are yours.",
     "acknowledge": "I understand"
   },
   "pages": {
     "recordings": {
-      "title": "Recordings",
+      "title": "Library",
       "intro": "Audio is taken from two separate channels; the screen is stored as frames only when it changes."
     },
     "providers": {
@@ -384,9 +385,8 @@
       "failed": "Failed"
     },
     "list": {
-      "title": "Recordings",
+      "title": "Library",
       "statusFilter": "Status",
-      "allStatuses": "All statuses",
       "listLabel": "Recordings",
       "empty": "No recordings yet. Start one above.",
       "emptyFiltered": "No recording has this status.",
@@ -396,7 +396,8 @@
       "pagination": "Pagination",
       "previous": "Previous",
       "next": "Next",
-      "range": "{{from}}–{{to}} of {{total}}"
+      "range": "{{from}}–{{to}} of {{total}}",
+      "filterAll": "All"
     },
     "search": {
       "label": "Search",
@@ -414,7 +415,7 @@
       }
     },
     "detail": {
-      "back": "← Back to recordings",
+      "back": "← Back to library",
       "loadFailed": "The recording could not be loaded.",
       "notFound": "Recording not found; it may have been deleted.",
       "startedAt": "Started",
@@ -426,13 +427,14 @@
       "deleteTitle": "Delete this recording?",
       "deleteMessage": "“{{name}}” will be deleted for good, with its audio, frames, transcript, note and action items. This cannot be undone.",
       "deleted": "Recording deleted.",
-      "tabs": {
-        "label": "Recording sections",
-        "note": "Note",
-        "actions": "Action items",
-        "transcript": "Transcript",
-        "frames": "Frames"
-      }
+      "frameCount": "Number of frames",
+      "frameCountValue_one": "{{count}} frame",
+      "frameCountValue_other": "{{count}} frames",
+      "speechLanguageValue": "Speech: {{language}}",
+      "noteLanguageValue": "Note: {{language}}",
+      "sideLabel": "Frames and transcript",
+      "frames": "Frames",
+      "transcript": "Transcript"
     },
     "note": {
       "none": "There is no note for this recording yet.",
@@ -443,16 +445,15 @@
       "decisions": "Decisions",
       "noDecisions": "No decisions were recorded.",
       "openQuestions": "Open questions",
-      "noOpenQuestions": "No open questions.",
-      "keyFrames": "Key frames",
-      "noKeyFrames": "No frames were added to the note."
+      "noOpenQuestions": "No open questions."
     },
     "actions": {
       "empty": "This note has no action items.",
       "progress": "{{done}}/{{total}} done",
       "listLabel": "Action items",
       "owner": "Owner: {{owner}}",
-      "due": "Due: {{date}}"
+      "due": "Due: {{date}}",
+      "title": "Action items"
     },
     "transcript": {
       "empty": "There is no transcript for this recording.",
@@ -478,7 +479,9 @@
       "previous": "Previous",
       "next": "Next",
       "position": "{{current}} / {{total}}",
-      "noDescription": "This frame has no visual description."
+      "noDescription": "This frame has no visual description.",
+      "inNote": "In the note",
+      "enlargeWithDescription": "Enlarge the frame at {{time}}: {{description}}"
     },
     "export": {
       "button": "Export as Markdown",

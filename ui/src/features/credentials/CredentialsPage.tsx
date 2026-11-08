@@ -28,7 +28,7 @@ export default function CredentialsPage() {
   return (
     <section className="page">
       <header className="page__header">
-        <h1>{t('credentials.title')}</h1>
+        <h1 className="page__title">{t('credentials.title')}</h1>
         <p className="page__intro">{t('credentials.intro')}</p>
       </header>
 

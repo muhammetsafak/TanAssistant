@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 
+import { WarningIcon } from '../../components/ui/Icons';
 import { useProviderKinds, type ProviderKind, type ProviderKindInfo } from './api';
 import { deprecationFor, useDeprecationText, type DeprecationNotice } from './deprecation';
 
@@ -10,6 +11,7 @@ function DeprecationMessage({ notice }: { notice: DeprecationNotice }) {
   const text = useDeprecationText(notice);
   return (
     <p className="deprecation-badge">
+      <WarningIcon className="deprecation-badge__icon" />
       <span className="deprecation-badge__text">{text}</span>
       {notice.replacement ? (
         <span className="deprecation-badge__replacement">

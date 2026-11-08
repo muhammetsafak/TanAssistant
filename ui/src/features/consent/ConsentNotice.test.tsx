@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -39,6 +39,24 @@ describe('ConsentNotice', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Kayıt hakkında bilgilendirme' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(screen.getByRole('button', { name: 'Anladım' })).toBeInTheDocument();
+  });
+
+  it('shows the existing notice text and keeps focus on the acknowledge button', async () => {
+    const user = userEvent.setup();
+    vi.mocked(commands.getSettings).mockResolvedValue(ok(settings(false)));
+
+    renderWithProviders(<ConsentNotice />);
+
+    const dialog = await screen.findByRole('dialog');
+    expect(screen.getByText('Merhaba, ben Tan.')).toBeInTheDocument();
+    expect(dialog).toHaveAccessibleDescription(expect.stringContaining('KVKK'));
+    expect(within(dialog).queryByRole('listitem')).not.toBeInTheDocument();
+    const button = screen.getByRole('button', { name: 'Anladım' });
+    expect(button).toHaveFocus();
+
+    // The only focusable control: Tab stays on it instead of leaving the notice.
+    await user.tab();
+    expect(button).toHaveFocus();
   });
 
   it('cannot be dismissed with Escape', async () => {

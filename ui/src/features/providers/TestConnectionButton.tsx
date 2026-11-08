@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../components/ui/Button';
+import { CheckIcon, WarningIcon } from '../../components/ui/Icons';
 import { describeAiError, useTestProvider, type ProviderProfile } from './api';
 
 import '../../components/ui/ui.css';
@@ -50,7 +51,10 @@ function TestOutcome({
     const { message, detail } = describeAiError(test.error, t);
     return (
       <p className="test-result test-result--error" role="alert">
-        <strong>{t('providers.test.failed')}</strong> {message}
+        <WarningIcon className="test-result__icon" />
+        <span>
+          <strong>{t('providers.test.failed')}</strong> {message}
+        </span>
         {detail ? <span className="test-result__detail">{detail}</span> : null}
       </p>
     );
@@ -64,10 +68,17 @@ function TestOutcome({
         className={`test-result ${modelMissing ? 'test-result--error' : 'test-result--ok'}`}
         role={modelMissing ? 'alert' : 'status'}
       >
-        <strong>
-          {modelMissing ? t('providers.test.modelMissingTitle') : t('providers.test.success')}
-        </strong>{' '}
-        {t('providers.test.latency', { ms: report.latencyMs })}
+        {modelMissing ? (
+          <WarningIcon className="test-result__icon" />
+        ) : (
+          <CheckIcon className="test-result__icon" />
+        )}
+        <span>
+          <strong>
+            {modelMissing ? t('providers.test.modelMissingTitle') : t('providers.test.success')}
+          </strong>{' '}
+          {t('providers.test.latency', { ms: report.latencyMs })}
+        </span>
         {modelMissing ? (
           <span className="test-result__detail">
             {t('providers.test.modelMissing', { model: profile.model })}

@@ -10,7 +10,7 @@ export default function ProvidersPage() {
   return (
     <section className="page">
       <header className="page__header">
-        <h1>{t('pages.providers.title')}</h1>
+        <h1 className="page__title">{t('pages.providers.title')}</h1>
         <p className="page__intro">{t('providers.intro')}</p>
       </header>
       <ProfilesList />

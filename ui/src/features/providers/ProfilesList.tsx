@@ -17,6 +17,7 @@ import { ProfileForm, type ProfileTarget } from './ProfileForm';
 import { TestConnectionButton } from './TestConnectionButton';
 
 import '../../components/ui/ui.css';
+import '../../components/badge.css';
 import './providers.css';
 
 const CAPABILITIES = ['chat', 'vision', 'transcription'] as const;
