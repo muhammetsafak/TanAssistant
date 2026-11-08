@@ -150,6 +150,46 @@ describe('RecordingControl', () => {
     );
   });
 
+  it('shows the idle clock, the dimmed levels and Tan while waiting for a recording', async () => {
+    renderControl();
+
+    expect(await screen.findByText('Toplantı başlayınca kaydı başlat')).toBeInTheDocument();
+    expect(screen.getByText('Ben')).toBeInTheDocument();
+    expect(screen.getByText('Karşı taraf')).toBeInTheDocument();
+    // Nothing is measured yet: the preview bars are decorative and there is no clock role.
+    expect(screen.queryByRole('meter')).not.toBeInTheDocument();
+    expect(screen.queryByRole('timer')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('img', { name: 'Masasında oturan Tan, kaydı bekliyor' }),
+    ).toBeInTheDocument();
+  });
+
+  it('names the microphone that will record in the idle level preview', async () => {
+    const user = userEvent.setup();
+    const { container } = renderControl();
+
+    await waitFor(() =>
+      expect(container.querySelector('.level--me .level__source')).toHaveTextContent(
+        'Built-in mic',
+      ),
+    );
+    await user.selectOptions(await screen.findByLabelText('Mikrofon'), 'mic2');
+    expect(container.querySelector('.level--me .level__source')).toHaveTextContent('USB headset');
+    expect(container.querySelector('.level--them .level__source')).toHaveTextContent('Sistem sesi');
+  });
+
+  it('marks a running recording with the "Kayıtta" chip and lights the bars by level', async () => {
+    vi.mocked(commands.recordingStatus).mockResolvedValue(ok({ state: 'recording', active }));
+    const { container } = renderControl();
+
+    expect(await screen.findByText('Kayıtta')).toBeInTheDocument();
+    expect(screen.getByText('Süre işliyor')).toBeInTheDocument();
+    // Microphone 0.04 -> sqrt = 0.2 -> 3 of 16 bars lit; the system channel has no signal.
+    expect(container.querySelectorAll('.level--me .level__bar--on')).toHaveLength(3);
+    expect(container.querySelectorAll('.level--them .level__bar--on')).toHaveLength(0);
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  });
+
   it('shows the live numbers of a running recording and follows the progress events', async () => {
     vi.mocked(commands.recordingStatus).mockResolvedValue(ok({ state: 'recording', active }));
     renderControl();
@@ -225,6 +265,8 @@ describe('RecordingControl', () => {
       expect(screen.getByRole('timer')).toHaveTextContent('00:42');
       expect(screen.getByRole('button', { name: 'Kaydı devam ettir' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Kaydı durdur' })).toBeEnabled();
+      expect(screen.getByText('Duraklama süreye eklenmez')).toBeInTheDocument();
+      expect(screen.queryByText('Kayıtta')).not.toBeInTheDocument();
       expect(screen.getAllByText('duraklatıldı')).toHaveLength(2);
       for (const meter of screen.getAllByRole('meter')) {
         expect(meter).toHaveAttribute('value', '0');

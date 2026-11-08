@@ -22,6 +22,7 @@ vi.mock('./ipc/bindings', async () => {
       listAudioDevices: vi.fn(),
       listDisplays: vi.fn(),
       listSessions: vi.fn(),
+      getStorageUsage: vi.fn(),
     },
     events: stubEvents(),
   };
@@ -52,6 +53,9 @@ describe('App shell', () => {
     vi.mocked(commands.listSessions).mockResolvedValue(
       ok({ items: [], total: 0, offset: 0, limit: 20 }),
     );
+    vi.mocked(commands.getStorageUsage).mockResolvedValue(
+      ok({ totalBytes: 1_073_741_824, audioBytes: 1, frameBytes: 1, modelBytes: 1 }),
+    );
     vi.mocked(commands.getSettings).mockResolvedValue(ok(settings));
     vi.mocked(commands.listVariables).mockResolvedValue(ok([]));
     vi.mocked(commands.listSecrets).mockResolvedValue(ok([]));
@@ -72,6 +76,7 @@ describe('App shell', () => {
     expect(nav).toHaveTextContent('Credentials');
     expect(nav).toHaveTextContent('Ayarlar');
     expect(await screen.findByText('Sürüm 1.2.3')).toBeInTheDocument();
+    expect(await screen.findByTestId('sidebar-disk')).toHaveTextContent('1 GB');
   });
 
   it('navigates to the credentials page from the sidebar', async () => {

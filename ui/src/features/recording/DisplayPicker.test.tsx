@@ -59,6 +59,20 @@ describe('DisplayPicker', () => {
     expect(commands.displayThumbnail).not.toHaveBeenCalled();
   });
 
+  it('says how often the previews refresh and that they are never stored, only while open', async () => {
+    const user = userEvent.setup();
+    vi.mocked(commands.displayThumbnail).mockResolvedValue(image('data:image/png;base64,AAA'));
+    renderWithProviders(<Harness />);
+
+    expect(screen.queryByText(/yenilenir/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Ekran/ }));
+
+    expect(screen.getByText("3 sn'de bir yenilenir")).toBeInTheDocument();
+    expect(
+      screen.getByText('Küçük resimler yalnız bu listede gösterilir; diske yazılmaz.'),
+    ).toBeInTheDocument();
+  });
+
   it('shows a placeholder while loading, then the preview with the display name as alt text', async () => {
     let resolveFirst: (value: ReturnType<typeof image>) => void = () => undefined;
     vi.mocked(commands.displayThumbnail).mockImplementation((id) =>

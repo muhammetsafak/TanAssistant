@@ -41,6 +41,8 @@
   --color-live: #fec356;
   --color-live-hover: #ffd27e;
   --color-on-live: #1d1757;
+  /* Amber as TEXT (the recording clock): amber on the dark surface, a dark amber on the light one. */
+  --color-live-text: #fec356;
   --color-accent: #fed59f;
   --color-outline: #1d1757;
 
@@ -135,6 +137,7 @@
     --color-live: #fec356;
     --color-live-hover: #ffd27e;
     --color-on-live: #1d1757;
+    --color-live-text: #6b4410;
     --color-accent: #fed59f;
     --color-outline: #1d1757;
 
@@ -189,6 +192,7 @@
   --color-live: #fec356;
   --color-live-hover: #ffd27e;
   --color-on-live: #1d1757;
+  --color-live-text: #6b4410;
   --color-accent: #fed59f;
   --color-outline: #1d1757;
 

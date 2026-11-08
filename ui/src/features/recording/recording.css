@@ -1,29 +1,124 @@
-.recording-card {
+/* The recording screen: a main panel (clock, levels, form, actions) and, before a recording, a side panel with the screens. */
+.recording-layout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-5);
+}
+
+.recording-panel {
+  flex: 1 1 26rem;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-5);
+  gap: var(--space-5);
+  min-width: 0;
+  padding: var(--space-6);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-xl);
   background: var(--color-surface);
 }
 
-.recording-card__title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--font-size-lg);
+.recording-panel--side {
+  flex-basis: 20rem;
+  gap: var(--space-4);
+  padding: var(--space-5);
 }
 
-.recording-form {
+/* A live recording: the panel border turns amber. Paused is neutral again. */
+.recording-panel--live {
+  border-color: color-mix(in srgb, var(--color-live) 45%, transparent);
+}
+
+.recording-screen > .recording-panel {
+  max-width: 40rem;
+}
+
+.recording-panel__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
+.recording-panel__tan {
+  margin-left: auto;
+}
+
+.recording-panel__aside {
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.recording-clock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.recording-clock dl {
+  margin: 0;
+}
+
+.recording-clock__label,
+.recording-clock__hint {
+  color: var(--color-text-faint);
+  font-size: var(--font-size-xs);
+}
+
+.recording-timer {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: clamp(2.5rem, 8vw, 3.5rem);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.recording-timer--live {
+  color: var(--color-live-text);
+}
+
+.recording-timer--paused {
+  color: var(--color-text-muted);
+}
+
+.recording-frames {
+  display: flex;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--color-text-faint);
+  font-size: var(--font-size-xs);
+}
+
+.recording-frames dd {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.recording-active__name {
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.recording-failure {
+  display: flex;
+  align-items: center;
   gap: var(--space-4);
+}
+
+.recording-failure .alert {
+  flex: 1;
+  min-width: 0;
 }
 
 .recording-form__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
   gap: var(--space-4);
 }
 
@@ -31,6 +126,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
+}
+
+/* Pause sits on a raised surface; stop is the outlined secondary button as it is. */
+.recording-pause {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-muted);
 }
 
 .recording-note {
@@ -42,29 +143,13 @@
   font-size: var(--font-size-sm);
 }
 
-.recording-active {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.recording-active__header {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.recording-active__name {
-  color: var(--color-text-muted);
-  overflow-wrap: anywhere;
-}
-
+/* The dot of the top-bar indicator. It takes the colour of the text next to it. */
 .recording-dot {
   flex: none;
   width: 0.75rem;
   height: 0.75rem;
   border-radius: 50%;
-  background: var(--color-danger);
+  background: currentcolor;
   animation: recording-pulse 1.4s ease-in-out infinite;
 }
 
@@ -80,73 +165,98 @@
   }
 }
 
-.recording-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-5);
-  margin: 0;
-}
-
-.recording-stats dt {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-}
-
-.recording-stats dd {
-  margin: 0;
-  font-size: var(--font-size-lg);
-  font-weight: 600;
-}
-
-.recording-timer {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
+/* Level meters: two channels side by side, 16 bars each. */
 .recording-meters {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  max-width: 28rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
 }
 
 .level {
-  display: grid;
-  grid-template-columns: 7rem minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-3);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
   font-size: var(--font-size-sm);
 }
 
-.level__meter {
-  width: 100%;
-  height: 0.75rem;
-  appearance: none;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
+.level__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-2);
 }
 
-.level__meter::-webkit-meter-bar {
-  height: 100%;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
+.level__name {
+  font-weight: 600;
 }
 
-.level__meter::-webkit-meter-optimum-value,
-.level__meter::-webkit-meter-suboptimal-value,
-.level__meter::-webkit-meter-even-less-good-value {
-  border-radius: var(--radius-sm);
-  background: var(--color-primary);
+.level__source {
+  color: var(--color-text-faint);
+  overflow-wrap: anywhere;
 }
 
-.level__meter::-moz-meter-bar {
-  background: var(--color-primary);
+.level__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 2.25rem;
+}
+
+.level__bar {
+  flex: 1;
+  height: 14%;
+  border-radius: 2px;
+  background: var(--color-border);
+}
+
+/* A lit bar takes its height from the channel's profile and its colour from who is speaking. */
+.level__bar--on {
+  height: var(--bar-height, 60%);
+}
+
+.level--me .level__bar--on {
+  background: var(--color-me);
+}
+
+.level--them .level__bar--on {
+  background: var(--color-them);
+}
+
+.level--me .level__bar:nth-child(5n + 1),
+.level--them .level__bar:nth-child(5n + 3) {
+  --bar-height: 40%;
+}
+
+.level--me .level__bar:nth-child(5n + 2),
+.level--them .level__bar:nth-child(5n + 4) {
+  --bar-height: 70%;
+}
+
+.level--me .level__bar:nth-child(5n + 3),
+.level--them .level__bar:nth-child(5n + 5) {
+  --bar-height: 100%;
+}
+
+.level--me .level__bar:nth-child(5n + 4),
+.level--them .level__bar:nth-child(5n + 1) {
+  --bar-height: 55%;
+}
+
+.level--me .level__bar:nth-child(5n + 5),
+.level--them .level__bar:nth-child(5n + 2) {
+  --bar-height: 85%;
+}
+
+/* Before a recording: a dimmed preview of the bars (the names stay fully readable). */
+.level--idle .level__bars {
+  opacity: 0.5;
 }
 
 .level__idle {
-  color: var(--color-text-muted);
+  color: var(--color-text-faint);
+  font-size: var(--font-size-xs);
 }
 
 .recording-warnings ul {
@@ -158,19 +268,24 @@
   font-weight: 600;
 }
 
+/* The top-bar indicator: a recording in progress (amber chip colours) or paused (neutral). */
 .recording-indicator {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   margin-right: auto;
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--color-danger);
-  border-radius: var(--radius-md);
-  background: var(--color-danger-surface);
-  color: var(--color-text);
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--chip-live-bg);
+  color: var(--chip-live-fg);
   font-size: var(--font-size-sm);
   font-weight: 600;
   text-decoration: none;
+}
+
+.recording-indicator--paused {
+  background: var(--chip-paused-bg);
+  color: var(--chip-paused-fg);
 }
 
 .recording-indicator__time {
@@ -178,35 +293,29 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Paused: the state is told by the glyph and the words; the neutral tone only backs it up. */
-.recording-active--paused .recording-timer {
-  color: var(--color-text-muted);
-}
-
 .pause-glyph {
   flex: none;
   fill: currentcolor;
 }
 
-.recording-badge {
-  padding: 0 var(--space-2);
-  border: 1px solid var(--color-primary);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
-  color: var(--color-text);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  white-space: nowrap;
+/* Display picker: the screens, each a card with a preview. */
+.display-picker__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
 }
 
-.recording-indicator--paused {
-  border-color: var(--color-primary);
-  background: var(--color-surface-muted);
+.display-picker__title {
+  font-family: var(--font-display);
+  font-size: var(--font-size-lg);
+  font-weight: 700;
 }
 
-/* Display picker: open, it takes the whole row so the previews have room. */
-.display-picker--open {
-  grid-column: 1 / -1;
+.display-picker__refresh {
+  color: var(--color-text-faint);
+  font-size: var(--font-size-xs);
 }
 
 .display-picker__toggle {
@@ -224,46 +333,53 @@
 }
 
 .display-picker__list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
   margin-top: var(--space-2);
 }
 
 .display-card {
   display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
+  align-items: center;
+  gap: var(--space-3);
   min-width: 0;
-  padding: var(--space-2);
-  border: 1px solid var(--color-border);
+  padding: var(--space-3);
+  border: 2px solid transparent;
   border-radius: var(--radius-md);
-  background: var(--color-surface);
+  background: var(--color-surface-raised);
   cursor: pointer;
 }
 
+/* The chosen screen: a lavender border and the muted surface. */
 .display-card:has(input:checked) {
-  border-color: var(--color-primary);
+  border-color: var(--color-link);
   background: var(--color-surface-muted);
-  box-shadow: inset 0 0 0 1px var(--color-primary);
 }
 
 .display-card:focus-within {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--color-focus);
+  outline-offset: var(--focus-ring-offset);
 }
 
 .display-card input {
   flex: none;
-  margin-top: var(--space-1);
+  accent-color: var(--color-link);
 }
 
+/* The preview on the left, the name and the size beside it. */
 .display-card__body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: var(--space-3);
   min-width: 0;
   flex: 1;
+}
+
+.display-card__body > :first-child {
+  grid-row: 1 / span 2;
 }
 
 .display-card__image,
@@ -293,14 +409,17 @@
 }
 
 .display-card__name {
+  align-self: end;
   font-size: var(--font-size-sm);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 .display-card__meta {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+  align-self: start;
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -310,12 +429,27 @@
 }
 
 @media (max-width: 720px) {
-  .level {
-    grid-template-columns: 6rem minmax(0, 1fr);
+  .recording-panel {
+    padding: var(--space-5) var(--space-4);
   }
 
-  .level__idle {
-    grid-column: 2;
+  /* Narrow: the preview sits above the name, so its text has the whole card to wrap in. */
+  .display-card__body {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--space-1);
+  }
+
+  .display-card__body > :first-child {
+    grid-row: auto;
+  }
+
+  .display-card__name,
+  .display-card__meta {
+    align-self: auto;
+  }
+
+  .recording-meters {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .recording-indicator {

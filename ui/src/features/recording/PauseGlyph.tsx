@@ -1,6 +1,6 @@
 import './recording.css';
 
-/** Two bars in the current text colour: marks a paused recording next to the pulsing red dot. */
+/** Two bars in the current text colour: marks a paused recording in place of the pulsing dot. */
 export function PauseGlyph() {
   return (
     <svg className="pause-glyph" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">

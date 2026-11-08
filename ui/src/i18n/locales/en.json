@@ -38,7 +38,8 @@
   },
   "pages": {
     "recordings": {
-      "title": "Recordings"
+      "title": "Recordings",
+      "intro": "Audio is taken from two separate channels; the screen is stored as frames only when it changes."
     },
     "providers": {
       "title": "AI Providers"
@@ -323,7 +324,9 @@
         "unsupported": "No previews on this platform",
         "failed": "Preview unavailable",
         "generic": "Preview unavailable"
-      }
+      },
+      "refresh": "Refreshed every {{seconds}} s",
+      "privacy": "Previews are shown in this list only; they are never written to disk."
     },
     "start": "Start recording",
     "starting": "Starting…",
@@ -364,7 +367,13 @@
       "capture_unsupported": "This platform cannot capture that source.",
       "capture_failed": "Capture could not start or was interrupted.",
       "internal": "An unexpected error occurred."
-    }
+    },
+    "live": "Recording",
+    "hintIdle": "Start the recording when the meeting begins",
+    "hintLive": "The clock is running",
+    "hintPaused": "The pause is not added to the time",
+    "meterMe": "Me",
+    "meterThem": "Other side"
   },
   "sessions": {
     "status": {
@@ -661,6 +670,19 @@
       "audio": "Audio",
       "frames": "Frames",
       "models": "Models"
+    }
+  },
+  "sidebar": {
+    "disk": "Disk usage"
+  },
+  "tan": {
+    "alt": {
+      "waving": "Tan waving",
+      "sitting-desk": "Tan sitting at the desk, waiting for the recording",
+      "focused": "Tan concentrating, preparing the note",
+      "approving": "Tan giving a thumbs up",
+      "thinking": "Tan thinking",
+      "happy": "Tan standing with a happy face"
     }
   }
 }

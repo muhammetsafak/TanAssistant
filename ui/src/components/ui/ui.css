@@ -365,3 +365,12 @@
   font-weight: 600;
   white-space: nowrap;
 }
+
+/* Tan: the picture keeps its ratio and never overflows a narrow container. */
+.tan-illustration {
+  display: block;
+  flex: none;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+}

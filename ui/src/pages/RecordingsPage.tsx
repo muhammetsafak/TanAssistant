@@ -9,7 +9,10 @@ export default function RecordingsPage() {
   const { t } = useTranslation();
   return (
     <section className="page">
-      <h1>{t('pages.recordings.title')}</h1>
+      <header className="page__header">
+        <h1 className="page__title">{t('pages.recordings.title')}</h1>
+        <p className="page__intro">{t('pages.recordings.intro')}</p>
+      </header>
       <RecordingControl />
       <SessionList />
     </section>

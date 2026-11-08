@@ -1,7 +1,7 @@
 import { useId, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { useDisplayThumbnail, type Display } from './api';
+import { THUMBNAIL_REFRESH_MS, useDisplayThumbnail, type Display } from './api';
 
 import './recording.css';
 
@@ -41,13 +41,17 @@ export function DisplayPicker({ displays, value, onChange, loading, failed }: Di
   const selectedName = selected ? selected.name : t('recording.displayDefault');
 
   return (
-    <div
-      className={open ? 'field display-picker display-picker--open' : 'field display-picker'}
-      onKeyDown={closeOnEscape}
-    >
-      <span className="field__label" id={labelId}>
-        {t('recording.display')}
-      </span>
+    <div className="field display-picker" onKeyDown={closeOnEscape}>
+      <div className="display-picker__head">
+        <span className="field__label display-picker__title" id={labelId}>
+          {t('recording.display')}
+        </span>
+        {open ? (
+          <span className="display-picker__refresh">
+            {t('recording.thumbnail.refresh', { seconds: THUMBNAIL_REFRESH_MS / 1000 })}
+          </span>
+        ) : null}
+      </div>
       <button
         ref={toggleRef}
         type="button"
@@ -86,6 +90,7 @@ export function DisplayPicker({ displays, value, onChange, loading, failed }: Di
           ))}
         </div>
       ) : null}
+      {open ? <p className="field__hint">{t('recording.thumbnail.privacy')}</p> : null}
     </div>
   );
 }

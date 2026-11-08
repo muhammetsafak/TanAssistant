@@ -38,7 +38,8 @@
   },
   "pages": {
     "recordings": {
-      "title": "Kayıtlar"
+      "title": "Kayıtlar",
+      "intro": "Ses iki kanaldan ayrı alınır, ekran yalnız değiştiğinde kare olarak saklanır."
     },
     "providers": {
       "title": "AI Sağlayıcıları"
@@ -323,7 +324,9 @@
         "unsupported": "Bu platformda önizleme yok",
         "failed": "Önizleme alınamadı",
         "generic": "Önizleme alınamadı"
-      }
+      },
+      "refresh": "{{seconds}} sn'de bir yenilenir",
+      "privacy": "Küçük resimler yalnız bu listede gösterilir; diske yazılmaz."
     },
     "start": "Kaydı başlat",
     "starting": "Başlatılıyor…",
@@ -364,7 +367,13 @@
       "capture_unsupported": "Bu platform bu kaynağı yakalayamıyor.",
       "capture_failed": "Yakalama başlatılamadı ya da kesildi.",
       "internal": "Beklenmeyen bir hata oluştu."
-    }
+    },
+    "live": "Kayıtta",
+    "hintIdle": "Toplantı başlayınca kaydı başlat",
+    "hintLive": "Süre işliyor",
+    "hintPaused": "Duraklama süreye eklenmez",
+    "meterMe": "Ben",
+    "meterThem": "Karşı taraf"
   },
   "sessions": {
     "status": {
@@ -661,6 +670,19 @@
       "audio": "Ses",
       "frames": "Kareler",
       "models": "Modeller"
+    }
+  },
+  "sidebar": {
+    "disk": "Disk kullanımı"
+  },
+  "tan": {
+    "alt": {
+      "waving": "El sallayan Tan",
+      "sitting-desk": "Masasında oturan Tan, kaydı bekliyor",
+      "focused": "Odaklanmış Tan, notu hazırlıyor",
+      "approving": "Başparmağıyla onaylayan Tan",
+      "thinking": "Düşünen Tan",
+      "happy": "Mutlu ifadeyle duran Tan"
     }
   }
 }
