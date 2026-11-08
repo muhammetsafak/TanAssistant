@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { describeError } from '../../ipc/client';
 import { Button } from './Button';
+import { CheckIcon, WarningIcon } from './Icons';
 import { ToastContext, type ToastApi } from './toast-context';
 
 import './ui.css';
@@ -36,11 +37,21 @@ function ToastItem({ toast, onDismiss }: { toast: ToastEntry; onDismiss: (id: nu
       className={`toast toast--${toast.kind}`}
       role={toast.kind === 'error' ? 'alert' : 'status'}
     >
+      {toast.kind === 'error' ? (
+        <WarningIcon className="toast__icon" />
+      ) : (
+        <CheckIcon className="toast__icon" />
+      )}
       <p className="toast__text">
         {toast.message}
         {toast.detail ? <span className="toast__detail">{toast.detail}</span> : null}
       </p>
-      <Button size="sm" onClick={() => onDismiss(toast.id)} aria-label={t('toast.dismiss')}>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => onDismiss(toast.id)}
+        aria-label={t('toast.dismiss')}
+      >
         {t('common.close')}
       </Button>
     </div>

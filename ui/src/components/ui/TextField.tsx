@@ -1,5 +1,7 @@
 import { useId, type InputHTMLAttributes } from 'react';
 
+import { WarningIcon } from './Icons';
+
 import './ui.css';
 
 export interface TextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'id'> {
@@ -34,6 +36,7 @@ export function TextField({ label, hint, error, ...inputProps }: TextFieldProps)
       ) : null}
       {error ? (
         <p className="field__error" id={errorId}>
+          <WarningIcon className="field__error-icon" />
           {error}
         </p>
       ) : null}
