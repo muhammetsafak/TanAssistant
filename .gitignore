@@ -19,3 +19,7 @@ Thumbs.db
 # Local env
 .env
 .env.*
+!.env.example
+
+# Local planning notes
+/.ssot/
