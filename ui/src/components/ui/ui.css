@@ -180,9 +180,32 @@
   margin-top: 0.15em;
 }
 
+/* WebKit draws a native <select> as a fixed-height pop-up button that ignores min-height and
+   vertical padding, so it came out shorter than the text inputs. Drop the native look, pin the
+   height to the input's and draw the chevron with two theme-aware gradients (no image, no CSP
+   change). */
+select.field__input,
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  height: var(--control-height-sm);
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-right: calc(var(--space-4) + 1.25rem);
+  line-height: normal;
+  cursor: pointer;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--color-text-muted) 50%),
+    linear-gradient(135deg, var(--color-text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 1.25rem) 50%,
+    calc(100% - 0.9375rem) 50%;
+  background-size: 0.3125rem 0.3125rem;
+  background-repeat: no-repeat;
+}
+
 .select {
   width: auto;
-  padding-right: var(--space-3);
 }
 
 /* Inline alert: plum on a tinted surface. The icon is drawn by CSS text so screens need no markup. */
