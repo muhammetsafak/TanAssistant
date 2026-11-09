@@ -10,6 +10,7 @@ const EVENT_NAMES = [
   'recordingStateEvent',
   'recordingWarningEvent',
   'transcriptionProgressEvent',
+  'updateDownloadProgress',
   'whisperModelDownloadEvent',
 ] as const;
 

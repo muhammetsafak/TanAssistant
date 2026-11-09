@@ -12,6 +12,7 @@ vi.mock('./ipc/bindings', async () => {
   return {
     commands: {
       appVersion: vi.fn(),
+      checkForUpdate: vi.fn(),
       getSettings: vi.fn(),
       updateSettings: vi.fn(),
       listVariables: vi.fn(),
@@ -45,6 +46,17 @@ describe('App shell', () => {
     await i18n.changeLanguage('tr');
     window.location.hash = '#/';
     vi.mocked(commands.appVersion).mockResolvedValue('1.2.3');
+    vi.mocked(commands.checkForUpdate).mockResolvedValue(
+      ok({
+        available: false,
+        currentVersion: '1.2.3',
+        version: null,
+        notes: null,
+        pubDate: null,
+        canSelfUpdate: true,
+        releaseUrl: 'https://example.test/releases',
+      }),
+    );
     vi.mocked(commands.recordingStatus).mockResolvedValue(ok({ state: 'idle', active: null }));
     vi.mocked(commands.recordingCapabilities).mockResolvedValue(
       ok({ screenCaptureAvailable: true, screenUnavailableReason: null }),

@@ -268,7 +268,12 @@
     "internal": "Beklenmeyen bir hata oluştu.",
     "unknown": "İşlem tamamlanamadı.",
     "clipboard": "Panoya kopyalanamadı.",
-    "settingsLoad": "Ayarlar yüklenemedi."
+    "settingsLoad": "Ayarlar yüklenemedi.",
+    "update_blocked": "Kayıt ya da işleme sürerken güncelleme kurulamaz. Bittikten sonra tekrar dene.",
+    "update_restart_pending": "Güncelleme kuruldu; kayıt ya da işleme bitince yeniden başlat.",
+    "update_not_found": "İndirilecek ya da kurulacak bir güncelleme yok. Önce güncellemeleri denetle.",
+    "update_unsupported": "Bu kurulum kendini güncelleyemez. Yeni sürümü release sayfasından indir.",
+    "update_failed": "Güncelleme denetlenemedi, indirilemedi ya da kurulamadı. Bağlantını kontrol edip tekrar dene."
   },
   "toast": {
     "dismiss": "Bildirimi kapat"
@@ -367,7 +372,8 @@
       "device_not_found": "Seçilen cihaz bulunamadı.",
       "capture_unsupported": "Bu platform bu kaynağı yakalayamıyor.",
       "capture_failed": "Yakalama başlatılamadı ya da kesildi.",
-      "internal": "Beklenmeyen bir hata oluştu."
+      "internal": "Beklenmeyen bir hata oluştu.",
+      "update_in_progress": "Güncelleme kurulurken yeni kayıt başlatılamaz. Uygulama yeniden başlayınca tekrar dene."
     },
     "live": "Kayıtta",
     "hintIdle": "Toplantı başlayınca kaydı başlat",
@@ -619,7 +625,8 @@
       "provider_network": "Sağlayıcıya ulaşılamadı. İnternet bağlantınızı ve base URL’yi kontrol edin.",
       "provider_error": "Sağlayıcı beklenmeyen bir hata döndürdü.",
       "secret_unavailable": "API anahtarı kasadan okunamadı. Kasa kilitli ya da secret silinmiş olabilir.",
-      "internal": "Beklenmeyen bir hata oluştu."
+      "internal": "Beklenmeyen bir hata oluştu.",
+      "update_in_progress": "Güncelleme kurulurken işleme başlatılamaz. Uygulama yeniden başlayınca tekrar dene."
     }
   },
   "transcription": {
@@ -725,5 +732,34 @@
       "thinking": "Düşünen Tan",
       "happy": "Mutlu ifadeyle duran Tan"
     }
+  },
+  "updates": {
+    "title": "Güncellemeler",
+    "hint": "Tan'ın yeni sürümünü denetle, indir ve kur.",
+    "currentVersion": "Mevcut sürüm: {{version}}",
+    "autoCheck": "Güncellemeleri otomatik denetle",
+    "autoCheckHint": "Uygulama açılırken ve açık kaldığı sürece günde bir kez yeni sürüm aranır.",
+    "checkNow": "Güncellemeleri denetle",
+    "checking": "Denetleniyor…",
+    "status": {
+      "checking": "Güncellemeler denetleniyor…",
+      "upToDate": "Tan güncel; sürüm {{current}} en yeni sürüm.",
+      "available": "Yeni sürüm {{version}} hazır.",
+      "availableManual": "Yeni sürüm {{version}} hazır. Bu kurulum kendini güncelleyemez; sürümü release sayfasından indir.",
+      "downloading": "Güncelleme indiriliyor…",
+      "ready": "Güncelleme indirildi ve kuruluma hazır. Yeniden başlatınca kurulur.",
+      "installing": "Güncelleme kuruluyor…",
+      "restartPending": "Güncelleme kuruldu. Kayıt ya da işleme bitince yeniden başlat."
+    },
+    "download": "İndir ve kur",
+    "restart": "Yeniden başlat",
+    "restartBlocked": "Bir kayıt ya da işleme sürerken yeniden başlatılamaz. Bitince buradan yeniden başlatabilirsin.",
+    "openRelease": "Release sayfasını aç",
+    "dismiss": "Kapat",
+    "bannerLabel": "Güncelleme bildirimi",
+    "bannerTitle": "Yeni sürüm {{version}}",
+    "progressLabel": "Güncelleme indirme durumu",
+    "progressPercent": "%{{percent}}",
+    "progressStarting": "İndirme başlıyor…"
   }
 }

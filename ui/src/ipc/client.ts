@@ -9,6 +9,7 @@ import {
   type SecretDto,
   type SecretStoreStatusDto,
   type SettingsPatchDto_Deserialize,
+  type UpdateInfo_Serialize,
   type UpdateSecretDto_Deserialize,
   type UpsertVariableDto_Deserialize,
   type VariableDto,
@@ -19,6 +20,7 @@ export type SettingsPatch = SettingsPatchDto_Deserialize;
 export type NewSecret = CreateSecretDto;
 export type SecretChanges = UpdateSecretDto_Deserialize;
 export type VariableInput = UpsertVariableDto_Deserialize;
+export type UpdateInfo = UpdateInfo_Serialize;
 export type { ErrorCode, SecretDto, SecretStoreStatusDto, VariableDto };
 
 /** A failure reported by the backend. Carries the machine-readable code; never a secret value. */
@@ -66,6 +68,11 @@ export const ipc = {
 
   getSettings: () => unwrap(commands.getSettings()),
   updateSettings: (patch: SettingsPatch) => unwrap(commands.updateSettings(patch)),
+
+  checkForUpdate: () => unwrap(commands.checkForUpdate()),
+  downloadUpdate: () => unwrap(commands.downloadUpdate()),
+  installUpdateAndRestart: () => unwrap(commands.installUpdateAndRestart()),
+  openReleasePage: () => unwrap(commands.openReleasePage()),
 };
 
 export interface DescribedError {

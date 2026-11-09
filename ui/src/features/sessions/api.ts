@@ -228,6 +228,11 @@ export function useIsProcessingRunPending(sessionId: string): boolean {
   return pending.includes(sessionId);
 }
 
+/** Whether any processing run started from this window is going on right now. */
+export function useIsAnyProcessingRunPending(): boolean {
+  return useMutationState({ filters: { mutationKey: RUN_KEY, status: 'pending' } }).length > 0;
+}
+
 /**
  * The error of the latest run of `sessionId` still in the cache, when that run failed (it survives
  * a remount). A later run that succeeded or is still going on clears it.

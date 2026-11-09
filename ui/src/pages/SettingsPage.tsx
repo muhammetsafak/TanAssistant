@@ -4,6 +4,7 @@ import { CaptureSettings } from '../features/settings/CaptureSettings';
 import { LanguageSettings } from '../features/settings/LanguageSettings';
 import { StorageSettings } from '../features/settings/StorageSettings';
 import { WhisperModels } from '../features/settings/WhisperModels';
+import { UpdateSettings } from '../features/updates/UpdateSettings';
 
 import '../layout/layout.css';
 
@@ -19,6 +20,7 @@ export default function SettingsPage() {
       <CaptureSettings />
       <WhisperModels />
       <StorageSettings />
+      <UpdateSettings />
     </section>
   );
 }

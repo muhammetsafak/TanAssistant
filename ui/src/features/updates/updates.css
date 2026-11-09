@@ -1,0 +1,81 @@
+/* The update flow: a status line, a download bar and the buttons the phase calls for. */
+.update-flow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.update-flow__status {
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-sm);
+}
+
+.update-flow__meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.update-flow__note {
+  flex: 1 1 100%;
+}
+
+.update-flow__progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.update-flow__progress progress {
+  width: 100%;
+  height: 0.5rem;
+  accent-color: var(--color-primary);
+}
+
+.update-flow__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.update-settings__version {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+/* The notification floats over the bottom-left of the content; toasts (z-index 60) stay above it. */
+.update-banner {
+  position: fixed;
+  bottom: var(--space-4);
+  left: calc(var(--sidebar-width) + var(--space-4));
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  box-sizing: border-box;
+  width: min(26rem, calc(100vw - var(--sidebar-width) - 2 * var(--space-4)));
+  max-height: calc(100vh - 2 * var(--space-4));
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+}
+
+.update-banner__title {
+  font-size: var(--font-size-md);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .update-banner {
+    right: var(--space-3);
+    bottom: var(--space-3);
+    left: var(--space-3);
+    width: auto;
+    padding: var(--space-4);
+  }
+}

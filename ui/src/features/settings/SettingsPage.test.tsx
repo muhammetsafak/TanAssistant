@@ -12,6 +12,9 @@ vi.mock('../../ipc/bindings', async () => {
   const { stubEvents } = await import('../../test-events');
   return {
     commands: {
+      appVersion: vi.fn(),
+      checkForUpdate: vi.fn(),
+      recordingStatus: vi.fn(),
       getSettings: vi.fn(),
       updateSettings: vi.fn(),
       listWhisperModels: vi.fn(),
@@ -64,6 +67,19 @@ const models = [
 describe('SettingsPage', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('tr');
+    vi.mocked(commands.appVersion).mockResolvedValue('1.2.3');
+    vi.mocked(commands.recordingStatus).mockResolvedValue(ok({ state: 'idle', active: null }));
+    vi.mocked(commands.checkForUpdate).mockResolvedValue(
+      ok({
+        available: false,
+        currentVersion: '1.2.3',
+        version: null,
+        notes: null,
+        pubDate: null,
+        canSelfUpdate: true,
+        releaseUrl: 'https://example.test/releases',
+      }),
+    );
     vi.mocked(commands.getSettings).mockResolvedValue(ok(settings));
     vi.mocked(commands.updateSettings).mockImplementation((patch) =>
       Promise.resolve(

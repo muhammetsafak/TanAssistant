@@ -3,6 +3,7 @@ import { Outlet } from 'react-router';
 import { ConsentNotice } from '../features/consent/ConsentNotice';
 import { useAutoProcess } from '../features/sessions/useAutoProcess';
 import { useSyncUiLanguage } from '../features/settings/useSettings';
+import { UpdateNotifier } from '../features/updates/UpdateNotifier';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 
@@ -20,6 +21,7 @@ export function AppLayout() {
         <Outlet />
       </main>
       <ConsentNotice />
+      <UpdateNotifier />
     </div>
   );
 }

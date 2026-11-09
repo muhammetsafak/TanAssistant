@@ -268,7 +268,12 @@
     "internal": "An unexpected error occurred.",
     "unknown": "The operation could not be completed.",
     "clipboard": "Could not copy to the clipboard.",
-    "settingsLoad": "Could not load settings."
+    "settingsLoad": "Could not load settings.",
+    "update_blocked": "The update cannot be installed while a recording or processing is running. Try again once it has finished.",
+    "update_restart_pending": "The update is installed; restart the app once the recording or processing has finished.",
+    "update_not_found": "There is no update to download or install. Check for updates first.",
+    "update_unsupported": "This installation cannot update itself. Download the new version from the release page.",
+    "update_failed": "The update could not be checked, downloaded or installed. Check your connection and try again."
   },
   "toast": {
     "dismiss": "Dismiss notification"
@@ -367,7 +372,8 @@
       "device_not_found": "The selected device was not found.",
       "capture_unsupported": "This platform cannot capture that source.",
       "capture_failed": "Capture could not start or was interrupted.",
-      "internal": "An unexpected error occurred."
+      "internal": "An unexpected error occurred.",
+      "update_in_progress": "A new recording cannot start while an update is being installed. Try again after the app restarts."
     },
     "live": "Recording",
     "hintIdle": "Start the recording when the meeting begins",
@@ -619,7 +625,8 @@
       "provider_network": "The provider could not be reached. Check your connection and the base URL.",
       "provider_error": "The provider returned an unexpected error.",
       "secret_unavailable": "The API key could not be read from the vault. It may be locked or the secret may have been deleted.",
-      "internal": "An unexpected error occurred."
+      "internal": "An unexpected error occurred.",
+      "update_in_progress": "Processing cannot start while an update is being installed. Try again after the app restarts."
     }
   },
   "transcription": {
@@ -725,5 +732,34 @@
       "thinking": "Tan thinking",
       "happy": "Tan standing with a happy face"
     }
+  },
+  "updates": {
+    "title": "Updates",
+    "hint": "Check for a new version of Tan, then download and install it.",
+    "currentVersion": "Current version: {{version}}",
+    "autoCheck": "Check for updates automatically",
+    "autoCheckHint": "Looks for a new version when the app opens and then once a day while it stays open.",
+    "checkNow": "Check for updates",
+    "checking": "Checking…",
+    "status": {
+      "checking": "Checking for updates…",
+      "upToDate": "Tan is up to date; version {{current}} is the newest.",
+      "available": "Version {{version}} is available.",
+      "availableManual": "Version {{version}} is available. This installation cannot update itself; download it from the release page.",
+      "downloading": "Downloading the update…",
+      "ready": "The update is downloaded and ready. It installs when you restart.",
+      "installing": "Installing the update…",
+      "restartPending": "The update is installed. Restart once the recording or processing has finished."
+    },
+    "download": "Download and install",
+    "restart": "Restart",
+    "restartBlocked": "The app cannot restart while a recording or processing is running. You can restart from here when it has finished.",
+    "openRelease": "Open the release page",
+    "dismiss": "Dismiss",
+    "bannerLabel": "Update notification",
+    "bannerTitle": "New version {{version}}",
+    "progressLabel": "Update download progress",
+    "progressPercent": "{{percent}}%",
+    "progressStarting": "Starting the download…"
   }
 }
