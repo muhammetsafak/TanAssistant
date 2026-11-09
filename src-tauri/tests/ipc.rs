@@ -76,4 +76,26 @@ fn export_refusals_carry_a_typed_problem_code() {
     let other = SessionsIpcError::from(SessionsError::NotFound("session"));
     assert_eq!(other.code, SessionsErrorCode::NotFound);
     assert_eq!(other.export_problem, None);
+
+    // A session without audio is a validation error the UI tells apart by its own problem code.
+    let no_audio = SessionsIpcError::from(SessionsError::NoAudio);
+    assert_eq!(no_audio.code, SessionsErrorCode::Validation);
+    assert_eq!(no_audio.export_problem, Some(ExportProblemCode::NoAudio));
+
+    // So is a session that is still being recorded (not `busy`): the UI sees
+    // `session_recording`, whichever layer raised it.
+    let recording = SessionsIpcError::from(SessionsError::Recording);
+    assert_eq!(recording.code, SessionsErrorCode::Validation);
+    assert_eq!(
+        recording.export_problem,
+        Some(ExportProblemCode::SessionRecording)
+    );
+
+    // The audio export's own extension reason reaches the UI as `invalid_extension`.
+    let wrong = SessionsIpcError::from(Problem::InvalidAudioExtension);
+    assert_eq!(
+        wrong.export_problem,
+        Some(ExportProblemCode::InvalidExtension)
+    );
+    assert!(wrong.message.contains(".wav"), "{}", wrong.message);
 }

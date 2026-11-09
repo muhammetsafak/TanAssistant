@@ -71,6 +71,7 @@ pub fn ipc_builder() -> Builder<tauri::Wry> {
             commands::sessions::get_session_detail,
             commands::sessions::toggle_action_item,
             commands::sessions::export_session_markdown,
+            commands::sessions::export_session_audio,
             commands::sessions::get_storage_usage,
             commands::sessions::delete_session,
         ])

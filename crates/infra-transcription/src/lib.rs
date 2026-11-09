@@ -3,6 +3,7 @@
 //! - [`WhisperTranscriber`] implements the `TranscriptionModel` and `LocalTranscriber` ports.
 //! - [`ModelManager`] lists, downloads (checksum-verified, resumable) and deletes models.
 //! - [`audio_prep`] reads WAV files, resamples to 16 kHz mono and cuts long recordings.
+//! - [`mixer`] mixes the tracks of a session into one mono WAV for export.
 //! - [`vad`] finds the speech so silence never reaches whisper (ADR-011).
 //!
 //! GPU backends are features: `vulkan` (Windows, Linux), `metal` (macOS) and `cuda`. A build
@@ -11,12 +12,14 @@
 
 pub mod audio_prep;
 pub mod catalog;
+pub mod mixer;
 pub mod models;
 pub mod vad;
 pub mod whisper;
 
 pub use audio_prep::{SessionFiles, WavAudioChunker};
 pub use catalog::{ModelSpec, BUILTIN_MODELS, RECOMMENDED_MODEL_ID};
+pub use mixer::WavMixer;
 pub use models::{DownloadProgress, InstalledModel, ModelError, ModelInfo, ModelManager};
 pub use whisper::{detect_backend, Backend, WhisperTranscriber};
 

@@ -162,6 +162,22 @@ export const commands = {
 	 *  `already_exists`). Without it the file goes into the session folder (frame links relative to it).
 	 */
 	exportSessionMarkdown: (sessionId: string, destination: string | null) => typedError<string, SessionsIpcError_Serialize>(__TAURI_INVOKE("export_session_markdown", { sessionId, destination })),
+	/**
+	 *  Mixes the session's audio tracks (microphone and system sound) into one mono WAV file and
+	 *  returns the file's absolute path.
+	 * 
+	 *  `destination` is the absolute `.wav` path the user picked in the save dialog, sent back
+	 *  unchanged; the rules are those of `export_session_markdown`'s `destination` (absolute, local
+	 *  drive, outside Tan's data folder, exactly what the dialog returned; a path without an
+	 *  extension gets `.wav` and a file already having that name is not replaced; any other
+	 *  extension is refused), and a refusal is the same `validation` error with the reason in
+	 *  `exportProblem`. Also `validation`: `exportProblem: no_audio` when the session has no audio
+	 *  left to export (none recorded, deleted by the retention policy, files gone) and
+	 *  `exportProblem: session_recording` while the session is still being recorded. Tracks of a
+	 *  different sample rate are brought to the higher one and the shorter is completed with
+	 *  silence. A file already at `destination` is replaced; a failure leaves no partial file.
+	 */
+	exportSessionAudio: (sessionId: string, destination: string) => typedError<string, SessionsIpcError_Serialize>(__TAURI_INVOKE("export_session_audio", { sessionId, destination })),
 	/**  How much disk Tan's data uses: total, audio, frames and whisper models. */
 	getStorageUsage: () => typedError<StorageUsageDto, SessionsIpcError_Serialize>(__TAURI_INVOKE("get_storage_usage")),
 	/**
@@ -467,7 +483,10 @@ export type ErrorCode =
 /**  Anything else; details are in the log. */
 "internal";
 
-/**  Why `export_session_markdown` refused its `destination` (set with `code: validation`). */
+/**
+ *  Why an export command refused (set with `code: validation`): the `destination` of
+ *  `export_session_markdown` / `export_session_audio`, or, for the audio export, the session.
+ */
 export type ExportProblemCode = 
 /**  The path is not absolute. */
 "not_absolute" | 
@@ -477,7 +496,10 @@ export type ExportProblemCode =
 "network_path" | 
 /**  The path has no file name. */
 "missing_name" | 
-/**  The file has an extension other than `.md`. */
+/**
+ *  The file has an extension other than the one the export writes (`.md` for the note,
+ *  `.wav` for the audio).
+ */
 "invalid_extension" | 
 /**  The path is not the one the user picked in the save dialog. */
 "not_dialog_selected" | 
@@ -485,8 +507,15 @@ export type ExportProblemCode =
 "inside_data_dir" | 
 /**  The folder the file should go into does not exist. */
 "folder_missing" | 
-/**  `.md` was appended to the picked name and that file already exists. */
-"already_exists";
+/**  The export's extension was appended to the picked name and that file already exists. */
+"already_exists" | 
+/**
+ *  `export_session_audio` only: the session has no audio to export (none recorded, deleted
+ *  by the retention policy, or the files are gone).
+ */
+"no_audio" | 
+/**  `export_session_audio` only: the session is still being recorded. */
+"session_recording";
 
 /**  A stored screen frame. */
 export type FrameDto = FrameDto_Serialize | FrameDto_Deserialize;
@@ -1361,7 +1390,8 @@ export type SessionsIpcError_Deserialize = {
 	/**  Human-readable description (English; the UI localises by `code`). */
 	message: string,
 	/**
-	 *  Set by `export_session_markdown` when the destination was refused: the exact reason,
+	 *  Set by the export commands when they were refused for a typed reason (a bad destination,
+	 *  or for the audio export a session without audio or still recording): the exact reason,
 	 *  so the UI never parses `message`. `None` for every other failure.
 	 */
 	exportProblem?: ExportProblemCode | null,
@@ -1374,7 +1404,8 @@ export type SessionsIpcError_Serialize = {
 	/**  Human-readable description (English; the UI localises by `code`). */
 	message: string,
 	/**
-	 *  Set by `export_session_markdown` when the destination was refused: the exact reason,
+	 *  Set by the export commands when they were refused for a typed reason (a bad destination,
+	 *  or for the audio export a session without audio or still recording): the exact reason,
 	 *  so the UI never parses `message`. `None` for every other failure.
 	 */
 	exportProblem: ExportProblemCode | null,

@@ -2,6 +2,7 @@
 
 pub mod ai;
 pub mod capture;
+pub mod media;
 pub mod repositories;
 pub mod secrets;
 
@@ -20,6 +21,7 @@ pub use capture::{
     ScreenCapture, ScreenStream, ScreenStreamRequest, ScreenUnavailableReason, ThumbnailOutcome,
     ThumbnailUnavailableReason, THUMBNAIL_MAX_EDGE,
 };
+pub use media::{AudioMixError, AudioMixer};
 pub use repositories::{
     FrameRepository, NoteRepository, ProviderProfileRepository, SearchHit, SearchIndex,
     SearchSource, SecretMetadataRepository, SessionRepository, SettingsRepository,

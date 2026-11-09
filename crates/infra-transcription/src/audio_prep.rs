@@ -16,7 +16,7 @@ use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
-use rubato::{Fft, FixedSync, Resampler};
+use rubato::{Fft, FixedSync, Indexing, Resampler};
 use tan_application::transcription::{
     AudioChunker, AudioPrepError, AudioSpan, EncodedAudio, SessionAudioFiles, SpeechMap,
     UploadFormat,
@@ -118,7 +118,7 @@ impl WavFile {
 
     /// Reads up to `frames` frames from the current position, mixed down to mono `f32` in
     /// `-1.0..=1.0`. Returns fewer at the end of the file.
-    fn read_mono(&mut self, frames: usize) -> Result<Vec<f32>, AudioPrepError> {
+    pub(crate) fn read_mono(&mut self, frames: usize) -> Result<Vec<f32>, AudioPrepError> {
         let spec = self.reader.spec();
         let channels = usize::from(spec.channels);
         let wanted = frames.saturating_mul(channels);
@@ -211,23 +211,154 @@ fn rms(window: &[f32]) -> f32 {
 
 /// Resamples mono audio to 16 kHz. Audio already at 16 kHz is returned as is.
 pub fn resample_to_16k(mono: Vec<f32>, from_rate: u32) -> Result<Vec<f32>, AudioPrepError> {
-    if from_rate == WHISPER_SAMPLE_RATE || mono.is_empty() {
-        return Ok(mono);
-    }
-    let frames = mono.len();
-    let mut resampler = Fft::<f32>::new(
+    resample_to_rate(mono, from_rate, WHISPER_SAMPLE_RATE)
+}
+
+/// The FFT resampler every conversion here uses (fixed input and output chunk sizes).
+fn new_resampler(from_rate: u32, to_rate: u32) -> Result<Fft<f32>, AudioPrepError> {
+    Fft::<f32>::new(
         from_rate as usize,
-        WHISPER_SAMPLE_RATE as usize,
+        to_rate as usize,
         1_024,
         1,
         FixedSync::Both,
     )
-    .map_err(|e| prep_error(format!("cannot resample from {from_rate} Hz: {e}")))?;
+    .map_err(|e| {
+        prep_error(format!(
+            "cannot resample from {from_rate} Hz to {to_rate} Hz: {e}"
+        ))
+    })
+}
+
+/// Resamples mono audio to `to_rate`. Audio already at that rate is returned as is.
+pub fn resample_to_rate(
+    mono: Vec<f32>,
+    from_rate: u32,
+    to_rate: u32,
+) -> Result<Vec<f32>, AudioPrepError> {
+    if from_rate == to_rate || mono.is_empty() {
+        return Ok(mono);
+    }
+    let frames = mono.len();
+    let mut resampler = new_resampler(from_rate, to_rate)?;
     let input = InterleavedSlice::new(&mono, 1, frames).map_err(prep_error)?;
     let output = resampler
         .process_all(&input, frames, None)
         .map_err(|e| prep_error(format!("resampling failed: {e}")))?;
     Ok(output.take_data())
+}
+
+/// A mono resampler fed piece by piece, so a long recording never has to be in memory whole.
+/// The filter state carries over between pieces; the result is what [`resample_to_rate`] would
+/// give for the pieces joined (same length, startup delay trimmed).
+pub(crate) struct StreamResampler {
+    /// `None` when the rates are equal: samples pass through.
+    fft: Option<Fft<f32>>,
+    ratio: f64,
+    /// Input not yet handed to the filter (less than one chunk).
+    pending: Vec<f32>,
+    scratch: Vec<f32>,
+    /// Frames of startup delay still to drop from the output.
+    to_trim: usize,
+    frames_in: u64,
+    frames_out: u64,
+}
+
+impl StreamResampler {
+    pub(crate) fn new(from_rate: u32, to_rate: u32) -> Result<Self, AudioPrepError> {
+        let fft = if from_rate == to_rate {
+            None
+        } else {
+            Some(new_resampler(from_rate, to_rate)?)
+        };
+        let (scratch, to_trim) = fft.as_ref().map_or((Vec::new(), 0), |fft| {
+            (vec![0.0; fft.output_frames_max()], fft.output_delay())
+        });
+        Ok(Self {
+            fft,
+            ratio: f64::from(to_rate) / f64::from(from_rate),
+            pending: Vec::new(),
+            scratch,
+            to_trim,
+            frames_in: 0,
+            frames_out: 0,
+        })
+    }
+
+    /// Feeds `input` and returns the output that became available.
+    pub(crate) fn push(&mut self, input: &[f32]) -> Result<Vec<f32>, AudioPrepError> {
+        self.frames_in += input.len() as u64;
+        let Some(fft) = self.fft.as_mut() else {
+            self.frames_out += input.len() as u64;
+            return Ok(input.to_vec());
+        };
+        self.pending.extend_from_slice(input);
+        let mut out = Vec::new();
+        loop {
+            let chunk = fft.input_frames_next();
+            if self.pending.len() < chunk {
+                break;
+            }
+            let wanted = fft.output_frames_next();
+            let source = InterleavedSlice::new(&self.pending, 1, chunk).map_err(prep_error)?;
+            let mut sink =
+                InterleavedSlice::new_mut(&mut self.scratch, 1, wanted).map_err(prep_error)?;
+            let (_, produced) = fft
+                .process_into_buffer(&source, &mut sink, None)
+                .map_err(|e| prep_error(format!("resampling failed: {e}")))?;
+            self.pending.drain(..chunk);
+            Self::take_output(&self.scratch[..produced], &mut self.to_trim, &mut out);
+        }
+        self.frames_out += out.len() as u64;
+        Ok(out)
+    }
+
+    /// Ends the stream: flushes what the filter still holds. The pieces pushed in total give
+    /// exactly `ceil(ratio * frames)` output frames.
+    pub(crate) fn finish(&mut self) -> Result<Vec<f32>, AudioPrepError> {
+        let Some(fft) = self.fft.as_mut() else {
+            return Ok(Vec::new());
+        };
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let expected = (self.ratio * self.frames_in as f64).ceil() as u64;
+        let mut out = Vec::new();
+        let mut partial = Some(self.pending.len());
+        // Hand over the last partial piece, then silence, until the delay is paid off and the
+        // whole signal has come out.
+        while self.frames_out + (out.len() as u64) < expected {
+            let wanted = fft.output_frames_next();
+            let given = partial.take().unwrap_or(0);
+            let indexing = Indexing {
+                input_offset: 0,
+                output_offset: 0,
+                active_channels_mask: None,
+                partial_len: Some(given),
+            };
+            let source = InterleavedSlice::new(&self.pending, 1, given).map_err(prep_error)?;
+            let mut sink =
+                InterleavedSlice::new_mut(&mut self.scratch, 1, wanted).map_err(prep_error)?;
+            let (_, produced) = fft
+                .process_into_buffer(&source, &mut sink, Some(&indexing))
+                .map_err(|e| prep_error(format!("resampling failed: {e}")))?;
+            self.pending.clear();
+            Self::take_output(&self.scratch[..produced], &mut self.to_trim, &mut out);
+        }
+        let room = usize::try_from(expected.saturating_sub(self.frames_out)).unwrap_or(usize::MAX);
+        out.truncate(room);
+        self.frames_out += out.len() as u64;
+        Ok(out)
+    }
+
+    /// Appends `produced` to `out`, dropping the startup delay from its front first.
+    fn take_output(produced: &[f32], to_trim: &mut usize, out: &mut Vec<f32>) {
+        let skip = (*to_trim).min(produced.len());
+        *to_trim -= skip;
+        out.extend_from_slice(&produced[skip..]);
+    }
 }
 
 /// What [`UploadFormat::Compressed`] means: the one place to change the codec uploads use.
@@ -628,6 +759,39 @@ mod tests {
                 samples[800]
             );
         }
+    }
+
+    #[test]
+    fn a_stream_resampler_gives_what_the_one_shot_resampler_gives() {
+        for (from, to) in [(44_100, 48_000), (48_000, 16_000), (16_000, 48_000)] {
+            let signal: Vec<f32> = (0..from as usize * 3 + 77)
+                .map(|n| (2.0 * std::f32::consts::PI * 440.0 * n as f32 / from as f32).sin() * 0.5)
+                .collect();
+            let whole = resample_to_rate(signal.clone(), from, to).unwrap();
+
+            let mut stream = StreamResampler::new(from, to).unwrap();
+            let mut streamed = Vec::new();
+            // Pieces of an awkward size, so chunk boundaries fall everywhere.
+            for piece in signal.chunks(3_001) {
+                streamed.extend(stream.push(piece).unwrap());
+            }
+            streamed.extend(stream.finish().unwrap());
+
+            assert_eq!(streamed.len(), whole.len(), "{from} -> {to}");
+            let worst = streamed
+                .iter()
+                .zip(&whole)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f32, f32::max);
+            assert!(worst < 1e-3, "{from} -> {to}: worst difference {worst}");
+        }
+    }
+
+    #[test]
+    fn a_stream_resampler_at_equal_rates_passes_samples_through() {
+        let mut stream = StreamResampler::new(16_000, 16_000).unwrap();
+        assert_eq!(stream.push(&[0.1, 0.2]).unwrap(), vec![0.1, 0.2]);
+        assert_eq!(stream.finish().unwrap(), Vec::<f32>::new());
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //!
 //! Every error type here is safe to show to the user.
 
+mod audio_export;
 mod export;
 mod queries;
 mod retention;
@@ -18,9 +19,11 @@ use tan_domain::{ActionItemId, EpochMs, SessionId, SessionStatus, TrackKind};
 use crate::error::RepositoryError;
 use crate::ports::{NoteRepository, SessionRepository};
 
+pub use audio_export::ExportSessionAudio;
 pub use export::{
-    render_markdown, resolve_export_destination, ExportDestination, ExportDestinationProblem,
-    ExportSessionMarkdown, EXPORT_FILE_NAME, FRAMES_DIR_SUFFIX,
+    render_markdown, resolve_export_destination, resolve_export_destination_as, ExportDestination,
+    ExportDestinationProblem, ExportExtension, ExportSessionMarkdown, EXPORT_FILE_NAME,
+    FRAMES_DIR_SUFFIX,
 };
 pub use queries::{
     AudioTrackState, GetSessionDetail, ListSessions, NoteWithItems, Page, SearchSessions,
@@ -109,6 +112,11 @@ pub enum SessionsError {
     ExportDestination(ExportDestinationProblem),
     /// The session is in a state that does not allow the operation.
     Busy(SessionStatus),
+    /// The session has no audio that can be exported (none recorded, deleted by the retention
+    /// policy, or the files are gone).
+    NoAudio,
+    /// The session is still being recorded, so its audio is not complete yet.
+    Recording,
     /// A file operation failed.
     Files(io::Error),
     /// The database failed.
@@ -124,6 +132,8 @@ impl fmt::Display for SessionsError {
                 write!(f, "invalid input: export destination: {problem}")
             }
             Self::Busy(status) => write!(f, "the session cannot be changed while it is {status}"),
+            Self::NoAudio => f.write_str("invalid input: the session has no audio to export"),
+            Self::Recording => f.write_str("invalid input: the session is still being recorded"),
             // Details stay in `source()` for logs; the user-facing text is generic.
             Self::Files(_) => f.write_str("a file operation failed"),
             Self::Storage(_) => f.write_str("the database operation failed"),

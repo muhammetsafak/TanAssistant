@@ -1,5 +1,5 @@
-//! IPC commands for browsing sessions: list, search, detail, action items, Markdown export,
-//! disk usage and deletion.
+//! IPC commands for browsing sessions: list, search, detail, action items, Markdown and audio
+//! export, disk usage and deletion.
 //!
 //! Thin adapters over the session use cases; the DTOs carry only what the UI shows.
 
@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tan_application::ports::{SearchHit, SearchSource};
 use tan_application::sessions::{
-    resolve_export_destination, AudioTrackState, ExportDestinationProblem, NoteWithItems, Page,
-    SessionDetail, SessionFilter, SessionListItem, SessionPage, SessionSearchResult, SessionsError,
-    StorageUsage,
+    resolve_export_destination_as, AudioTrackState, ExportDestination, ExportDestinationProblem,
+    ExportExtension, NoteWithItems, Page, SessionDetail, SessionFilter, SessionListItem,
+    SessionPage, SessionSearchResult, SessionsError, StorageUsage,
 };
 use tan_domain::{
     ActionItem, ActionItemId, EpochMs, Frame, Session, SessionId, SessionStatus, TranscriptSegment,
@@ -37,7 +37,8 @@ pub enum SessionsErrorCode {
     Internal,
 }
 
-/// Why `export_session_markdown` refused its `destination` (set with `code: validation`).
+/// Why an export command refused (set with `code: validation`): the `destination` of
+/// `export_session_markdown` / `export_session_audio`, or, for the audio export, the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ExportProblemCode {
@@ -49,7 +50,8 @@ pub enum ExportProblemCode {
     NetworkPath,
     /// The path has no file name.
     MissingName,
-    /// The file has an extension other than `.md`.
+    /// The file has an extension other than the one the export writes (`.md` for the note,
+    /// `.wav` for the audio).
     InvalidExtension,
     /// The path is not the one the user picked in the save dialog.
     NotDialogSelected,
@@ -57,8 +59,13 @@ pub enum ExportProblemCode {
     InsideDataDir,
     /// The folder the file should go into does not exist.
     FolderMissing,
-    /// `.md` was appended to the picked name and that file already exists.
+    /// The export's extension was appended to the picked name and that file already exists.
     AlreadyExists,
+    /// `export_session_audio` only: the session has no audio to export (none recorded, deleted
+    /// by the retention policy, or the files are gone).
+    NoAudio,
+    /// `export_session_audio` only: the session is still being recorded.
+    SessionRecording,
 }
 
 impl From<ExportDestinationProblem> for ExportProblemCode {
@@ -68,7 +75,8 @@ impl From<ExportDestinationProblem> for ExportProblemCode {
             ExportDestinationProblem::ParentReference => Self::ParentReference,
             ExportDestinationProblem::NetworkPath => Self::NetworkPath,
             ExportDestinationProblem::MissingName => Self::MissingName,
-            ExportDestinationProblem::InvalidExtension => Self::InvalidExtension,
+            ExportDestinationProblem::InvalidExtension
+            | ExportDestinationProblem::InvalidAudioExtension => Self::InvalidExtension,
             ExportDestinationProblem::NotDialogSelected => Self::NotDialogSelected,
             ExportDestinationProblem::InsideDataDir => Self::InsideDataDir,
             ExportDestinationProblem::FolderMissing => Self::FolderMissing,
@@ -85,7 +93,8 @@ pub struct SessionsIpcError {
     pub code: SessionsErrorCode,
     /// Human-readable description (English; the UI localises by `code`).
     pub message: String,
-    /// Set by `export_session_markdown` when the destination was refused: the exact reason,
+    /// Set by the export commands when they were refused for a typed reason (a bad destination,
+    /// or for the audio export a session without audio or still recording): the exact reason,
     /// so the UI never parses `message`. `None` for every other failure.
     pub export_problem: Option<ExportProblemCode>,
 }
@@ -115,13 +124,16 @@ impl From<SessionsError> for SessionsIpcError {
     fn from(error: SessionsError) -> Self {
         let export_problem = match &error {
             SessionsError::ExportDestination(problem) => Some((*problem).into()),
+            SessionsError::NoAudio => Some(ExportProblemCode::NoAudio),
+            SessionsError::Recording => Some(ExportProblemCode::SessionRecording),
             _ => None,
         };
         let code = match &error {
             SessionsError::NotFound(_) => SessionsErrorCode::NotFound,
-            SessionsError::Invalid(_) | SessionsError::ExportDestination(_) => {
-                SessionsErrorCode::Validation
-            }
+            SessionsError::Invalid(_)
+            | SessionsError::ExportDestination(_)
+            | SessionsError::NoAudio
+            | SessionsError::Recording => SessionsErrorCode::Validation,
             SessionsError::Busy(_) => SessionsErrorCode::Busy,
             SessionsError::Files(_) => {
                 log_source("session file operation failed", &error);
@@ -657,6 +669,19 @@ pub async fn search_sessions(
     Ok(results.iter().map(Into::into).collect())
 }
 
+/// Lets the webview read `dir` (a folder of one session) through the asset protocol. Failing
+/// only costs the images or the player, so it is logged, not returned.
+fn allow_in_asset_scope(app: &AppHandle, dir: std::io::Result<std::path::PathBuf>, what: &str) {
+    match dir {
+        Ok(dir) => {
+            if let Err(error) = app.asset_protocol_scope().allow_directory(&dir, true) {
+                tracing::warn!(%error, folder = what, "cannot allow the folder in the asset scope");
+            }
+        }
+        Err(error) => tracing::warn!(%error, folder = what, "no such folder for the session"),
+    }
+}
+
 /// A session with its audio tracks, frames, transcript, note and processing job.
 #[tauri::command]
 #[specta::specta]
@@ -668,23 +693,15 @@ pub async fn get_session_detail(
 ) -> Result<SessionDetailDto, SessionsIpcError> {
     let id = parse_session_id(session_id)?;
     let detail = state.get_session_detail.execute(&id).await?;
-    // The frame images are shown through the asset protocol, which can read nothing until
-    // its scope allows it. The scope grows by the `frames/` folder of each session whose
-    // detail is requested and keeps it until the app exits (never the audio, the database or
-    // `notes.md`). The save dialog also adds the export file the user picks. So the real bound
-    // is: the frames folders of the sessions opened in this run (any session's, since the
-    // webview can request any id) plus the dialog-picked export file.
-    match state.layout.frames_dir(&id) {
-        Ok(frames_dir) => {
-            if let Err(error) = app
-                .asset_protocol_scope()
-                .allow_directory(&frames_dir, true)
-            {
-                tracing::warn!(%error, "cannot allow the frames folder in the asset scope");
-            }
-        }
-        Err(error) => tracing::warn!(%error, "no frames folder for the session"),
-    }
+    // Frame images and audio are shown and played through the asset protocol, which can read
+    // nothing until its scope allows it. The scope grows by the `frames/` and `audio/` folders
+    // of each session whose detail is requested and keeps them until the app exits (never the
+    // database, `notes.md` or the rest of the session folder). The save dialog also adds the
+    // export file the user picks. So the real bound is: the frames and audio folders of the
+    // sessions opened in this run (any session's, since the webview can request any id) plus
+    // the dialog-picked export file.
+    allow_in_asset_scope(&app, state.layout.frames_dir(&id), "frames");
+    allow_in_asset_scope(&app, state.layout.audio_dir(&id), "audio");
     let session_dir = state
         .layout
         .session_dir(&id)
@@ -713,6 +730,39 @@ pub async fn toggle_action_item(
         .await?)
 }
 
+/// The checks every export to a path the user picked in the save dialog goes through, in this
+/// order: the shape of the path, the dialog's pick, the data folder, and an extension that
+/// was added to the picked name.
+fn check_picked_destination(
+    app: &AppHandle,
+    state: &AppState,
+    destination: &str,
+    extension: ExportExtension,
+) -> Result<ExportDestination, SessionsIpcError> {
+    let chosen = std::path::Path::new(destination);
+    // 1. Shape of the path first, without touching the file system: the scope check below
+    //    stats the path, which for a UNC path would open a network connection.
+    let target = resolve_export_destination_as(chosen, extension)?;
+    // 2. The path must be exactly the one the user picked in the save dialog (the dialog
+    //    plugin adds it to the asset scope; the UI sends it back unchanged).
+    if !app.asset_protocol_scope().is_allowed(chosen) {
+        return Err(ExportDestinationProblem::NotDialogSelected.into());
+    }
+    // 3. The asset scope also holds the frames and audio folders of opened sessions: only a
+    //    place outside Tan's own data folder counts as a dialog pick.
+    match state.layout.contains(&target.path) {
+        Ok(false) => {}
+        Ok(true) => return Err(ExportDestinationProblem::InsideDataDir.into()),
+        Err(_) => return Err(ExportDestinationProblem::FolderMissing.into()),
+    }
+    // 4. The dialog confirmed replacing the path as picked. When the extension was added, the
+    //    file now named may be a different, existing one nobody confirmed: refuse.
+    if target.extension_added && target.path.exists() {
+        return Err(ExportDestinationProblem::AlreadyExists.into());
+    }
+    Ok(target)
+}
+
 /// Exports the session's note, key frames and transcript as a Markdown file and returns the
 /// file's absolute path.
 ///
@@ -739,27 +789,8 @@ pub async fn export_session_markdown(
     let detail = state.get_session_detail.execute(&id).await?;
     let path = match destination {
         Some(destination) => {
-            let chosen = std::path::Path::new(&destination);
-            // 1. Shape of the path first, without touching the file system: the scope check
-            //    below stats the path, which for a UNC path would open a network connection.
-            let target = resolve_export_destination(chosen)?;
-            // 2. The path must be exactly the one the user picked in the save dialog (the
-            //    dialog plugin adds it to the asset scope; the UI sends it back unchanged).
-            if !app.asset_protocol_scope().is_allowed(chosen) {
-                return Err(ExportDestinationProblem::NotDialogSelected.into());
-            }
-            // 3. The asset scope also holds the frames folders of opened sessions: only a
-            //    place outside Tan's own data folder counts as a dialog pick.
-            match state.layout.contains(&target.path) {
-                Ok(false) => {}
-                Ok(true) => return Err(ExportDestinationProblem::InsideDataDir.into()),
-                Err(_) => return Err(ExportDestinationProblem::FolderMissing.into()),
-            }
-            // 4. The dialog confirmed replacing the path as picked. When `.md` was added, the
-            //    file now named may be a different, existing one nobody confirmed: refuse.
-            if target.extension_added && target.path.exists() {
-                return Err(ExportDestinationProblem::AlreadyExists.into());
-            }
+            let target =
+                check_picked_destination(&app, &state, &destination, ExportExtension::Markdown)?;
             // Copies images and writes files: keep it off the async worker.
             let export = state.export_session.clone();
             tauri::async_runtime::spawn_blocking(move || export.execute_to(&detail, &target.path))
@@ -772,6 +803,44 @@ pub async fn export_session_markdown(
         }
         None => state.export_session.execute(&detail)?,
     };
+    Ok(path.display().to_string())
+}
+
+/// Mixes the session's audio tracks (microphone and system sound) into one mono WAV file and
+/// returns the file's absolute path.
+///
+/// `destination` is the absolute `.wav` path the user picked in the save dialog, sent back
+/// unchanged; the rules are those of `export_session_markdown`'s `destination` (absolute, local
+/// drive, outside Tan's data folder, exactly what the dialog returned; a path without an
+/// extension gets `.wav` and a file already having that name is not replaced; any other
+/// extension is refused), and a refusal is the same `validation` error with the reason in
+/// `exportProblem`. Also `validation`: `exportProblem: no_audio` when the session has no audio
+/// left to export (none recorded, deleted by the retention policy, files gone) and
+/// `exportProblem: session_recording` while the session is still being recorded. Tracks of a
+/// different sample rate are brought to the higher one and the shorter is completed with
+/// silence. A file already at `destination` is replaced; a failure leaves no partial file.
+#[tauri::command]
+#[specta::specta]
+#[tracing::instrument(skip_all)]
+pub async fn export_session_audio(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    destination: String,
+) -> Result<String, SessionsIpcError> {
+    let id = parse_session_id(session_id)?;
+    let detail = state.get_session_detail.execute(&id).await?;
+    let target = check_picked_destination(&app, &state, &destination, ExportExtension::Wav)?;
+    // Reads, resamples and writes the whole recording: keep it off the async worker.
+    let export = state.export_audio.clone();
+    let path =
+        tauri::async_runtime::spawn_blocking(move || export.execute_to(&detail, &target.path))
+            .await
+            .map_err(|e| SessionsIpcError {
+                code: SessionsErrorCode::Internal,
+                message: format!("the export did not finish: {e}"),
+                export_problem: None,
+            })??;
     Ok(path.display().to_string())
 }
 

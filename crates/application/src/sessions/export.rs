@@ -432,8 +432,8 @@ impl<W: SessionFileStore> ExportSessionMarkdown<W> {
     }
 }
 
-/// Why a Markdown export destination was refused. Callers react to the variant; the text is
-/// for logs and details.
+/// Why an export destination was refused (Markdown note or WAV audio). Callers react to the
+/// variant; the text is for logs and details.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportDestinationProblem {
     /// The path is not absolute.
@@ -444,16 +444,19 @@ pub enum ExportDestinationProblem {
     NetworkPath,
     /// The path has no file name.
     MissingName,
-    /// The file has an extension other than `.md`.
+    /// The note's file has an extension other than `.md`.
     InvalidExtension,
+    /// The audio's file has an extension other than `.wav`. The UI sees both as
+    /// `invalid_extension`; the split only lets the message name the expected extension.
+    InvalidAudioExtension,
     /// The path is not the one the user picked in the save dialog.
     NotDialogSelected,
     /// The path is inside Tan's own data folder.
     InsideDataDir,
     /// The folder the file should go into does not exist.
     FolderMissing,
-    /// `.md` was appended to the picked name and a file with that name already exists (the
-    /// dialog only confirmed replacing the name as picked).
+    /// The export's extension was appended to the picked name and a file with that name
+    /// already exists (the dialog only confirmed replacing the name as picked).
     AlreadyExists,
 }
 
@@ -465,11 +468,12 @@ impl fmt::Display for ExportDestinationProblem {
             Self::NetworkPath => "network and device paths are not allowed",
             Self::MissingName => "the file must have a name",
             Self::InvalidExtension => "the file must have the .md extension",
+            Self::InvalidAudioExtension => "the file must have the .wav extension",
             Self::NotDialogSelected => "the destination was not chosen in the save dialog",
             Self::InsideDataDir => "the destination must be outside Tan's data folder",
             Self::FolderMissing => "the destination's folder does not exist",
             Self::AlreadyExists => {
-                "a file with that name and the .md extension already exists; pick another name"
+                "a file with that name and the export's extension already exists; pick another name"
             }
         })
     }
@@ -481,27 +485,56 @@ impl From<ExportDestinationProblem> for SessionsError {
     }
 }
 
+/// The kind of file an export writes; fixes the extension the destination must have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportExtension {
+    /// The Markdown note (`.md`).
+    Markdown,
+    /// The mixed audio (`.wav`).
+    Wav,
+}
+
+impl ExportExtension {
+    /// The extension without the dot.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Markdown => "md",
+            Self::Wav => "wav",
+        }
+    }
+}
+
 /// Where an export goes, derived from the path the user picked in the save dialog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportDestination {
-    /// The Markdown file to write.
+    /// The file to write.
     pub path: PathBuf,
-    /// Whether `.md` was appended because the picked path had no extension (some desktops'
+    /// Whether the extension was appended because the picked path had none (some desktops'
     /// save dialogs do not add one). The dialog only asked the user to confirm replacing the
     /// path as picked, so the caller should not silently replace an existing `path` then.
     pub extension_added: bool,
 }
 
+/// Checks the path picked in the save dialog for a Markdown export without touching the file
+/// system, and completes a missing extension to `.md`. See [`resolve_export_destination_as`].
+pub fn resolve_export_destination(chosen: &Path) -> SessionsResult<ExportDestination> {
+    resolve_export_destination_as(chosen, ExportExtension::Markdown)
+}
+
 /// Checks the path picked in the save dialog without touching the file system, and completes
-/// a missing extension to `.md`.
+/// a missing extension to `extension`.
 ///
 /// The path must be absolute, free of `..`, on a local drive (no UNC or device paths) and
-/// either end in `.md` or have no extension at all; any other extension is refused (the user
-/// asked for a file that is not Markdown).
-pub fn resolve_export_destination(chosen: &Path) -> SessionsResult<ExportDestination> {
+/// either end in `extension` (any letter case) or have no extension at all; any other
+/// extension is refused (the user asked for a file that is not what the export writes).
+pub fn resolve_export_destination_as(
+    chosen: &Path,
+    extension: ExportExtension,
+) -> SessionsResult<ExportDestination> {
     check_destination_path(chosen)?;
     if chosen.extension().is_some() {
-        frames_dir_name(chosen)?;
+        file_stem_of(chosen, extension)?;
         return Ok(ExportDestination {
             path: chosen.to_path_buf(),
             extension_added: false,
@@ -510,27 +543,49 @@ pub fn resolve_export_destination(chosen: &Path) -> SessionsResult<ExportDestina
     // `with_extension` would also be right for names ending in a dot or without one; keep the
     // picked name as is and append.
     let mut name = chosen.as_os_str().to_os_string();
-    name.push(".md");
+    name.push(".");
+    name.push(extension.as_str());
     let path = PathBuf::from(name);
-    frames_dir_name(&path)?;
+    file_stem_of(&path, extension)?;
     Ok(ExportDestination {
         path,
         extension_added: true,
     })
 }
 
-/// Checks `destination` and returns the name of the folder for the frame images.
+/// Checks `destination` for a Markdown export and returns the name of the folder for the
+/// frame images.
 fn frames_dir_name(destination: &Path) -> SessionsResult<String> {
     check_destination_path(destination)?;
-    let is_markdown = destination
+    let stem = file_stem_of(destination, ExportExtension::Markdown)?;
+    Ok(format!("{stem}{FRAMES_DIR_SUFFIX}"))
+}
+
+/// The file name without its extension, provided the file has a name and the extension the
+/// export needs.
+fn file_stem_of(destination: &Path, extension: ExportExtension) -> SessionsResult<&str> {
+    let has_extension = destination
         .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
-    let stem = destination.file_stem().and_then(|stem| stem.to_str());
-    match stem {
-        Some(stem) if !stem.is_empty() && is_markdown => Ok(format!("{stem}{FRAMES_DIR_SUFFIX}")),
-        Some(stem) if !stem.is_empty() => Err(ExportDestinationProblem::InvalidExtension.into()),
+        .is_some_and(|actual| actual.eq_ignore_ascii_case(extension.as_str()));
+    match destination.file_stem().and_then(|stem| stem.to_str()) {
+        Some(stem) if !stem.is_empty() && has_extension => Ok(stem),
+        Some(stem) if !stem.is_empty() => Err(match extension {
+            ExportExtension::Markdown => ExportDestinationProblem::InvalidExtension,
+            ExportExtension::Wav => ExportDestinationProblem::InvalidAudioExtension,
+        }
+        .into()),
         _ => Err(ExportDestinationProblem::MissingName.into()),
     }
+}
+
+/// Checks that `destination` is an acceptable place for an export of kind `extension`
+/// (shape of the path, file name and extension) without touching the file system.
+pub(super) fn check_destination(
+    destination: &Path,
+    extension: ExportExtension,
+) -> SessionsResult<()> {
+    check_destination_path(destination)?;
+    file_stem_of(destination, extension).map(|_| ())
 }
 
 /// The part of the destination checks that does not depend on the extension.

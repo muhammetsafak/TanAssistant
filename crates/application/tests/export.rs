@@ -4,14 +4,17 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use tan_application::ports::{AudioMixError, AudioMixer};
 use tan_application::sessions::{
-    render_markdown, resolve_export_destination, ExportDestinationProblem, ExportSessionMarkdown,
+    render_markdown, resolve_export_destination, resolve_export_destination_as, AudioTrackState,
+    ExportDestinationProblem, ExportExtension, ExportSessionAudio, ExportSessionMarkdown,
     NoteWithItems, SessionDetail, SessionFileStore, SessionsError, StorageUsage, EXPORT_FILE_NAME,
 };
+use tan_application::transcription::SessionAudioFiles;
 use tan_domain::{
-    ActionItem, ActionItemId, EpochMs, Frame, FrameId, LanguageCode, LanguageSetting, Note, NoteId,
-    ProcessingJob, ProcessingStep, Session, SessionId, SessionKind, SessionRecord, SessionStatus,
-    TrackKind, TranscriptSegment,
+    ActionItem, ActionItemId, AudioTrack, EpochMs, Frame, FrameId, LanguageCode, LanguageSetting,
+    Note, NoteId, ProcessingJob, ProcessingStep, Session, SessionId, SessionKind, SessionRecord,
+    SessionStatus, TrackKind, TranscriptSegment,
 };
 
 const STARTED_AT: i64 = 1_793_959_200_000; // 2026-11-06 10:00 UTC
@@ -267,6 +270,8 @@ struct RecordingFiles {
     dirs: Mutex<Vec<PathBuf>>,
     // Frame images that exist, by relative path.
     images: Mutex<Vec<String>>,
+    // Audio files that exist, by relative path.
+    audio: Mutex<Vec<String>>,
 }
 
 impl SessionFileStore for RecordingFiles {
@@ -284,8 +289,12 @@ impl SessionFileStore for RecordingFiles {
         }
     }
 
-    fn audio_exists(&self, _: &SessionId, _: &str) -> bool {
-        false
+    fn audio_exists(&self, _: &SessionId, relative_path: &str) -> bool {
+        self.audio
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p == relative_path)
     }
 
     fn delete_audio(&self, _: &SessionId, _: &str) -> io::Result<u64> {
@@ -566,4 +575,322 @@ fn the_reason_shows_in_the_error_text_and_converts_into_the_error() {
         SessionsError::ExportDestination(ExportDestinationProblem::AlreadyExists)
     ));
     assert!(error.to_string().contains("already exists"), "{error}");
+}
+
+// ---------------------------------------------------------------------------------------
+// WAV destinations and the audio export
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_wav_destination_is_checked_like_a_markdown_one_with_its_own_extension() {
+    let temp = std::env::temp_dir();
+    let wav = ExportExtension::Wav;
+
+    // As picked when it already ends in `.wav`, in any letter case.
+    let picked = temp.join("meeting.wav");
+    let resolved = resolve_export_destination_as(&picked, wav).unwrap();
+    assert_eq!((resolved.path, resolved.extension_added), (picked, false));
+    assert!(
+        !resolve_export_destination_as(&temp.join("MEETING.WAV"), wav)
+            .unwrap()
+            .extension_added
+    );
+
+    // No extension: `.wav` is appended to the name as picked.
+    let resolved = resolve_export_destination_as(&temp.join("meeting v2 (final)"), wav).unwrap();
+    assert_eq!(resolved.path, temp.join("meeting v2 (final).wav"));
+    assert!(resolved.extension_added);
+
+    // The two kinds do not mix: each refuses the other's extension, and the message names the
+    // one it expected.
+    for (path, extension, problem, expected) in [
+        (
+            temp.join("notes.md"),
+            wav,
+            ExportDestinationProblem::InvalidAudioExtension,
+            ".wav",
+        ),
+        (
+            temp.join("meeting.mp3"),
+            wav,
+            ExportDestinationProblem::InvalidAudioExtension,
+            ".wav",
+        ),
+        (
+            temp.join("meeting.wav"),
+            ExportExtension::Markdown,
+            ExportDestinationProblem::InvalidExtension,
+            ".md",
+        ),
+    ] {
+        match resolve_export_destination_as(&path, extension) {
+            Err(error @ SessionsError::ExportDestination(actual)) => {
+                assert_eq!(actual, problem, "{path:?}");
+                assert!(error.to_string().contains(expected), "{error}");
+            }
+            other => panic!("{path:?}: expected a refusal, got {other:?}"),
+        }
+    }
+    assert!(matches!(
+        resolve_export_destination(&temp.join("meeting.wav")),
+        Err(SessionsError::ExportDestination(
+            ExportDestinationProblem::InvalidExtension
+        ))
+    ));
+
+    // The shape checks are the same: absolute, no `..`, a name.
+    for (bad, problem) in [
+        (
+            PathBuf::from("meeting.wav"),
+            ExportDestinationProblem::NotAbsolute,
+        ),
+        (
+            temp.join("..").join("meeting.wav"),
+            ExportDestinationProblem::ParentReference,
+        ),
+    ] {
+        match resolve_export_destination_as(&bad, wav) {
+            Err(SessionsError::ExportDestination(actual)) => assert_eq!(actual, problem, "{bad:?}"),
+            other => panic!("{bad:?}: expected a refusal, got {other:?}"),
+        }
+    }
+}
+
+/// Records what it was asked to mix.
+#[derive(Default)]
+struct FakeMixer {
+    calls: Mutex<Vec<(Vec<PathBuf>, PathBuf)>>,
+    // Makes every call fail, when set.
+    fail_with: Mutex<Option<fn() -> AudioMixError>>,
+}
+
+impl AudioMixer for FakeMixer {
+    fn mix_to_wav(&self, tracks: &[PathBuf], destination: &Path) -> Result<(), AudioMixError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((tracks.to_vec(), destination.to_path_buf()));
+        match *self.fail_with.lock().unwrap() {
+            Some(make) => Err(make()),
+            None => Ok(()),
+        }
+    }
+}
+
+struct FakePaths;
+
+impl SessionAudioFiles for FakePaths {
+    fn audio_path(&self, session_id: &SessionId, relative_path: &str) -> io::Result<PathBuf> {
+        Ok(PathBuf::from(format!(
+            "/data/sessions/{session_id}/{relative_path}"
+        )))
+    }
+}
+
+fn track(kind: TrackKind, path: &str, deleted_at: Option<i64>) -> AudioTrackState {
+    AudioTrackState {
+        track: AudioTrack {
+            session_id: SessionId::new("s1"),
+            kind,
+            path: path.to_owned(),
+            sample_rate: 48_000,
+            duration_ms: 60_000,
+        },
+        deleted_at: deleted_at.map(EpochMs::new),
+    }
+}
+
+fn audio_destination() -> PathBuf {
+    std::env::temp_dir().join("meeting.wav")
+}
+
+struct AudioFixture {
+    mixer: Arc<FakeMixer>,
+    files: Arc<RecordingFiles>,
+    export: ExportSessionAudio<FakeMixer, RecordingFiles, FakePaths>,
+}
+
+fn audio_fixture(existing: &[&str]) -> AudioFixture {
+    let mixer = Arc::new(FakeMixer::default());
+    let files = Arc::new(RecordingFiles::default());
+    *files.audio.lock().unwrap() = existing.iter().map(|p| (*p).to_owned()).collect();
+    let export = ExportSessionAudio::new(mixer.clone(), files.clone(), Arc::new(FakePaths));
+    AudioFixture {
+        mixer,
+        files,
+        export,
+    }
+}
+
+fn detail_with(tracks: Vec<AudioTrackState>) -> SessionDetail {
+    let mut d = detail(LanguageCode::turkish());
+    d.audio_tracks = tracks;
+    d
+}
+
+#[test]
+fn both_live_tracks_are_mixed_into_the_chosen_wav() {
+    let fx = audio_fixture(&["audio/microphone.wav", "audio/system.wav"]);
+    let d = detail_with(vec![
+        track(TrackKind::Microphone, "audio/microphone.wav", None),
+        track(TrackKind::System, "audio/system.wav", None),
+    ]);
+
+    let written = fx.export.execute_to(&d, &audio_destination()).unwrap();
+
+    assert_eq!(written, audio_destination());
+    let calls = fx.mixer.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].0,
+        [
+            PathBuf::from("/data/sessions/s1/audio/microphone.wav"),
+            PathBuf::from("/data/sessions/s1/audio/system.wav"),
+        ]
+    );
+    assert_eq!(calls[0].1, audio_destination());
+    // The audio export never touches the Markdown side.
+    assert!(fx.files.external.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_track_the_retention_policy_deleted_is_left_out() {
+    let fx = audio_fixture(&["audio/microphone.wav", "audio/system.wav"]);
+    let d = detail_with(vec![
+        track(TrackKind::Microphone, "audio/microphone.wav", None),
+        track(
+            TrackKind::System,
+            "audio/system.wav",
+            Some(1_793_959_200_000),
+        ),
+    ]);
+
+    fx.export.execute_to(&d, &audio_destination()).unwrap();
+
+    let calls = fx.mixer.calls.lock().unwrap();
+    assert_eq!(
+        calls[0].0,
+        [PathBuf::from("/data/sessions/s1/audio/microphone.wav")]
+    );
+}
+
+#[test]
+fn a_track_whose_file_is_gone_or_lies_outside_the_audio_folder_is_left_out() {
+    let fx = audio_fixture(&["audio/system.wav", "notes.md", "frames/a.png"]);
+    let d = detail_with(vec![
+        track(TrackKind::Microphone, "audio/microphone.wav", None), // file gone
+        track(TrackKind::System, "audio/system.wav", None),
+    ]);
+    fx.export.execute_to(&d, &audio_destination()).unwrap();
+    assert_eq!(
+        fx.mixer.calls.lock().unwrap()[0].0,
+        [PathBuf::from("/data/sessions/s1/audio/system.wav")]
+    );
+
+    // A corrupt row pointing at another file of the session is never handed to the mixer.
+    let d = detail_with(vec![
+        track(TrackKind::Microphone, "notes.md", None),
+        track(TrackKind::System, "frames/a.png", None),
+    ]);
+    let error = fx.export.execute_to(&d, &audio_destination()).unwrap_err();
+    assert!(matches!(error, SessionsError::NoAudio), "{error}");
+    assert_eq!(fx.mixer.calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn without_a_usable_track_the_export_says_so_and_mixes_nothing() {
+    let fx = audio_fixture(&[]);
+    for tracks in [
+        Vec::new(),
+        vec![track(TrackKind::Microphone, "audio/microphone.wav", None)],
+        vec![track(
+            TrackKind::Microphone,
+            "audio/microphone.wav",
+            Some(1_793_959_200_000),
+        )],
+    ] {
+        let error = fx
+            .export
+            .execute_to(&detail_with(tracks), &audio_destination())
+            .unwrap_err();
+        assert!(matches!(error, SessionsError::NoAudio), "{error}");
+    }
+    assert!(fx.mixer.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_recording_session_cannot_be_exported() {
+    let fx = audio_fixture(&["audio/microphone.wav"]);
+    let mut d = detail_with(vec![track(
+        TrackKind::Microphone,
+        "audio/microphone.wav",
+        None,
+    )]);
+    d.session = Session::restore(SessionRecord {
+        id: SessionId::new("s1"),
+        kind: SessionKind::Meeting,
+        title: "Live".to_owned(),
+        started_at: EpochMs::new(STARTED_AT),
+        ended_at: None,
+        language: LanguageSetting::Auto,
+        note_language: LanguageCode::turkish(),
+        status: SessionStatus::Recording,
+    })
+    .unwrap();
+
+    let error = fx.export.execute_to(&d, &audio_destination()).unwrap_err();
+    assert!(matches!(error, SessionsError::Recording), "{error}");
+    assert!(fx.mixer.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_bad_audio_destination_is_refused_before_anything_is_mixed() {
+    let fx = audio_fixture(&["audio/microphone.wav"]);
+    let d = detail_with(vec![track(
+        TrackKind::Microphone,
+        "audio/microphone.wav",
+        None,
+    )]);
+    let temp = std::env::temp_dir();
+    for bad in [
+        PathBuf::from("meeting.wav"),
+        temp.join("meeting.md"),
+        temp.join("meeting"),
+        temp.join("..").join("meeting.wav"),
+        temp.join(".wav"),
+    ] {
+        let error = fx.export.execute_to(&d, &bad).unwrap_err();
+        assert!(
+            matches!(error, SessionsError::ExportDestination(_)),
+            "{bad:?}: {error}"
+        );
+    }
+    assert!(fx.mixer.calls.lock().unwrap().is_empty());
+    // The extension check ignores case.
+    fx.export.execute_to(&d, &temp.join("MEETING.WAV")).unwrap();
+}
+
+#[test]
+fn a_mixer_failure_is_a_file_error_and_an_empty_result_is_no_audio() {
+    let fx = audio_fixture(&["audio/microphone.wav"]);
+    let d = detail_with(vec![track(
+        TrackKind::Microphone,
+        "audio/microphone.wav",
+        None,
+    )]);
+
+    *fx.mixer.fail_with.lock().unwrap() =
+        Some(|| AudioMixError::Source("not a readable WAV file".to_owned()));
+    let error = fx.export.execute_to(&d, &audio_destination()).unwrap_err();
+    assert!(matches!(error, SessionsError::Files(_)), "{error}");
+    // The user-facing text stays generic; the cause is in the source chain for the log.
+    assert_eq!(error.to_string(), "a file operation failed");
+    assert!(std::error::Error::source(&error)
+        .unwrap()
+        .to_string()
+        .contains("not a readable WAV file"));
+
+    *fx.mixer.fail_with.lock().unwrap() = Some(|| AudioMixError::Empty);
+    let error = fx.export.execute_to(&d, &audio_destination()).unwrap_err();
+    assert!(matches!(error, SessionsError::NoAudio), "{error}");
 }

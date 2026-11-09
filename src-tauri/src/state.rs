@@ -18,8 +18,8 @@ use tan_application::ports::{Clock, IdGenerator};
 use tan_application::processing::{ProcessPorts, ProcessSession, SessionTranscriber};
 use tan_application::recording::{RecordingEvents, RecordingPorts, RecordingService};
 use tan_application::sessions::{
-    ApplyRetention, DeleteSession, ExportSessionMarkdown, GetSessionDetail, GetStorageUsage,
-    ListSessions, SearchSessions, ToggleActionItem,
+    ApplyRetention, DeleteSession, ExportSessionAudio, ExportSessionMarkdown, GetSessionDetail,
+    GetStorageUsage, ListSessions, SearchSessions, ToggleActionItem,
 };
 use tan_application::settings::{GetSettings, UpdateSettings};
 use tan_application::transcription::{
@@ -38,7 +38,7 @@ use tan_infra_storage::{
     SqliteTranscriptRepository, SqliteVariableRepository, StorageError,
 };
 use tan_infra_transcription::{
-    ModelError, ModelManager, SessionFiles, WavAudioChunker, WhisperTranscriber,
+    ModelError, ModelManager, SessionFiles, WavAudioChunker, WavMixer, WhisperTranscriber,
 };
 
 /// Environment variable that overrides the data directory (development, tests, portable use).
@@ -253,6 +253,8 @@ pub struct AppState {
     pub toggle_action_item: ToggleActionItem<SqliteNoteRepository>,
     /// Writes the Markdown export of a session.
     pub export_session: Arc<ExportSessionMarkdown<DataDirFiles>>,
+    /// Mixes the audio tracks of a session into one WAV file.
+    pub export_audio: Arc<ExportSessionAudio<WavMixer, DataDirFiles, SessionFiles>>,
     /// Deletes a session with its files.
     pub delete_session: DeleteSession<SqliteSessionRepository, DataDirFiles>,
     /// Measures disk usage (walks the data directory: run it on a blocking thread).
@@ -296,6 +298,7 @@ impl AppState {
         let processing = Arc::new(SqliteProcessingRepository::new(database.clone()));
         let search_index = Arc::new(SqliteSearchIndex::new(database.clone()));
         let files = Arc::new(DataDirFiles::new(layout.clone()));
+        let session_files = Arc::new(SessionFiles::new(layout.sessions_dir()));
         let settings = Arc::new(SqliteSettingsRepository::new(database));
         let resolve_secret = Arc::new(ResolveSecret::new(metadata.clone(), secret_store.clone()));
         let ai_factory = Arc::new(
@@ -315,7 +318,7 @@ impl AppState {
             factory: ai_factory.clone(),
             local: Arc::new(WhisperTranscriber::new(whisper_models.clone())),
             chunker: Arc::new(WavAudioChunker),
-            files: Arc::new(SessionFiles::new(layout.sessions_dir())),
+            files: session_files.clone(),
         }));
         let process_session = Arc::new(ProcessSession::new(ProcessPorts {
             sessions: sessions.clone(),
@@ -405,6 +408,11 @@ impl AppState {
             ),
             toggle_action_item: ToggleActionItem::new(notes),
             export_session: Arc::new(ExportSessionMarkdown::new(files.clone())),
+            export_audio: Arc::new(ExportSessionAudio::new(
+                Arc::new(WavMixer),
+                files.clone(),
+                session_files,
+            )),
             delete_session: DeleteSession::new(sessions, files.clone()),
             storage_usage: Arc::new(GetStorageUsage::new(files)),
             apply_retention,
