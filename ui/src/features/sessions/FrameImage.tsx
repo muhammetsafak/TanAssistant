@@ -7,7 +7,9 @@ import { formatClock } from './format';
 import './sessions.css';
 
 /**
- * A frame image at a fixed 16:9 box (spans only: it also sits inside buttons), so a slow or missing image never moves the layout. The image
+ * A frame image in a box (spans only: it also sits inside buttons) that starts at 16:10, so a slow or
+ * missing image still holds its place, and takes the captured screen's own ratio once the image
+ * loads, so the screenshot fills it without bands above and below. The image
  * comes from the application data directory only (see `frameImageUrl`); when it cannot be shown
  * the box says so instead of leaving a broken-image icon.
  */
@@ -20,16 +22,22 @@ export function FrameImage({ sessionDir, frame }: { sessionDir: string; frame: F
 function FrameImageBox({ src, frame }: { src: string | null; frame: Frame }) {
   const { t } = useTranslation();
   const [failed, setFailed] = useState(false);
+  const [ratio, setRatio] = useState<string | null>(null);
   const time = formatClock(frame.timestampMs);
 
   return (
-    <span className="frame-image">
+    <span className="frame-image" style={ratio && !failed ? { aspectRatio: ratio } : undefined}>
       {src && !failed ? (
         <img
           src={src}
           alt={frame.description ?? t('sessions.frames.altAt', { time })}
           loading="lazy"
           decoding="async"
+          onLoad={(event) => {
+            const { naturalWidth, naturalHeight } = event.currentTarget;
+            if (naturalWidth > 0 && naturalHeight > 0)
+              setRatio(`${naturalWidth} / ${naturalHeight}`);
+          }}
           onError={() => setFailed(true)}
         />
       ) : (

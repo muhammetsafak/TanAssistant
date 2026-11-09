@@ -158,6 +158,9 @@ function DisplayCard({
         alt={display.name}
         width={image.width ?? display.width}
         height={image.height ?? display.height}
+        style={{
+          aspectRatio: `${image.width ?? display.width} / ${image.height ?? display.height}`,
+        }}
       />
     );
   } else if (thumbnail.isError || image) {

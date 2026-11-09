@@ -833,6 +833,11 @@
   gap: var(--space-3);
 }
 
+/* A portrait or very tall screen must not push the dialog past the window. */
+.frame-viewer .frame-image {
+  max-height: 70vh;
+}
+
 .frame-viewer__description {
   white-space: pre-line;
   overflow-wrap: anywhere;
