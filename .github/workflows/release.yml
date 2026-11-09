@@ -313,6 +313,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd dist
+          # Artifacts keep their bundle folders (nsis/, dmg/, deb/, appimage/): flatten them so
+          # the checksum file and the release hold the installers themselves.
+          find . -mindepth 2 -type f -exec mv -n -t . {} +
+          find . -mindepth 1 -type d -empty -delete
           ls -l
           sha256sum * > SHA256SUMS.txt
           flags=(--draft --verify-tag --title "Tan ${GITHUB_REF_NAME#v}" --generate-notes)
