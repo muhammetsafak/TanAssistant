@@ -8,7 +8,9 @@ both, and the tag) and `src-tauri/tauri.conf.json` has no `version` of its own.
 
 ## [Unreleased]
 
-First version (0.1.0, not tagged yet).
+## [0.1.0] - 2026-11-09
+
+First version.
 
 ### Added
 
