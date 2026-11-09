@@ -8,11 +8,32 @@ both, and the tag) and `src-tauri/tauri.conf.json` has no `version` of its own.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-09
+
 ### Added
 
+- In-app updates: Tan checks GitHub for a newer version at start and once a day (switchable in
+  Settings, on by default) and on demand from Settings. It downloads the update, verifies its
+  signature, installs it and restarts. Installing and restarting wait while a recording or
+  processing run is active, and no new recording or run starts while an update installs. `.deb`
+  installs cannot update themselves and get a link to the release page instead. This version
+  must be installed by hand once; later versions arrive through the app.
+- Audio on the session detail page: the microphone and system tracks play in sync (each can be
+  muted), a transcript line seeks the player to its start, and the tracks download as one mixed
+  WAV file.
 - Diagnostic log: every operation and error is written with a UTC timestamp to a daily file in
   the `logs/` folder of the data directory (`tan.YYYY-MM-DD.log`), including panics with their
   backtrace. Files older than 45 days are deleted automatically; `TAN_LOG` changes the level.
+
+### Changed
+
+- Releases carry signed updater files (`*.sig`, the macOS `.app.tar.gz`) and a `latest.json`
+  manifest; local bundle builds without the signing key turn them off (see
+  `docs/releasing.md`).
+
+### Fixed
+
+- Screenshot boxes take the aspect ratio of the captured screen.
 
 ## [0.1.0] - 2026-11-09
 
