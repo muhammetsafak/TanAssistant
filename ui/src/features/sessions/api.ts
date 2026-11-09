@@ -11,6 +11,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import {
   commands,
   type ActionItemDto_Serialize,
+  type AudioTrackDto_Serialize,
   type FrameDto_Serialize,
   type NoteDto_Serialize,
   type ProcessingJobDto_Serialize,
@@ -39,6 +40,7 @@ export type SessionSearchResult = SessionSearchResultDto_Serialize;
 export type SearchHit = SearchHitDto_Serialize;
 export type SessionStatus = SessionStatusDto;
 export type Frame = FrameDto_Serialize;
+export type AudioTrack = AudioTrackDto_Serialize;
 export type Note = NoteDto_Serialize;
 export type ActionItem = ActionItemDto_Serialize;
 export type TranscriptLine = TranscriptLineDto_Serialize;
@@ -133,6 +135,14 @@ export function useExportSession() {
   return useMutation({
     mutationFn: ({ sessionId, destination }: { sessionId: string; destination: string | null }) =>
       unwrapSessions(commands.exportSessionMarkdown(sessionId, destination)),
+  });
+}
+
+/** Mixes the session's audio tracks into one WAV file at `destination` (from the save dialog). */
+export function useExportSessionAudio() {
+  return useMutation({
+    mutationFn: ({ sessionId, destination }: { sessionId: string; destination: string }) =>
+      unwrapSessions(commands.exportSessionAudio(sessionId, destination)),
   });
 }
 
@@ -294,4 +304,18 @@ export function frameImageUrl(sessionDir: string, relativePath: string): string 
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// Audio
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The webview URL of a session's audio track through Tauri's asset protocol. Like `frameImageUrl`
+ * it takes a path relative to the session folder, and it only accepts the `audio/` folder, so a
+ * track can never point at anything else. `null` when the URL cannot be built (no Tauri runtime).
+ */
+export function audioUrl(sessionDir: string, relativePath: string): string | null {
+  if (!/^audio[\\/]/.test(relativePath)) return null;
+  return frameImageUrl(sessionDir, relativePath);
 }

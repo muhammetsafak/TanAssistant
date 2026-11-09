@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router';
 
@@ -7,11 +7,19 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { TanIllustration } from '../components/ui/TanIllustration';
 import { useToast } from '../components/ui/toast-context';
 import { SessionsCommandError, useCommandErrorHandler } from '../ipc/errors';
-import { useDeleteSession, useSessionDetail, type SessionDetail } from '../features/sessions/api';
+import {
+  audioUrl,
+  useDeleteSession,
+  useSessionDetail,
+  type SessionDetail,
+} from '../features/sessions/api';
+import { AudioDownloadButton } from '../features/sessions/AudioDownloadButton';
+import { AudioPlayer, type AudioPlayerHandle } from '../features/sessions/AudioPlayer';
 import { ExportButton } from '../features/sessions/ExportButton';
 import { formatDateTime, formatDuration } from '../features/sessions/format';
 import { FrameGallery } from '../features/sessions/FrameGallery';
 import { NoteView } from '../features/sessions/NoteView';
+import { createPlayhead } from '../features/sessions/playhead';
 import { ProcessingProgress, ReprocessButton } from '../features/sessions/ProcessingProgress';
 import { StatusBadge } from '../features/sessions/StatusBadge';
 import { TranscriptView } from '../features/sessions/TranscriptView';
@@ -45,7 +53,7 @@ export default function SessionDetailPage() {
           </Button>
         </div>
       ) : (
-        <SessionDetailView detail={detail.data} />
+        <SessionDetailView key={detail.data.session.id} detail={detail.data} />
       )}
     </section>
   );
@@ -59,6 +67,24 @@ function SessionDetailView({ detail }: { detail: SessionDetail }) {
   const deleteSession = useDeleteSession();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const { session, note } = detail;
+
+  // Audio the retention policy deleted is gone; a session still being recorded has no finished
+  // files to play yet.
+  const audioTracks = useMemo(
+    () =>
+      session.status === 'recording'
+        ? []
+        : detail.audioTracks.filter((track) => track.deletedAt === null),
+    [detail.audioTracks, session.status],
+  );
+  const playerRef = useRef<AudioPlayerHandle>(null);
+  const [playhead] = useState(() => createPlayhead());
+  const seekAudio = useCallback((ms: number) => playerRef.current?.seek(ms), []);
+  // Lines are only a way to move the player if there is a track the webview can load and play.
+  const [playerAvailable, setPlayerAvailable] = useState(true);
+  const canSeek =
+    playerAvailable &&
+    audioTracks.some((track) => audioUrl(detail.sessionDir, track.path) !== null);
 
   const busy = session.status === 'recording' || session.status === 'processing';
   const exportable = note !== null || detail.transcript.length > 0;
@@ -157,6 +183,22 @@ function SessionDetailView({ detail }: { detail: SessionDetail }) {
             />
           </section>
 
+          {audioTracks.length > 0 ? (
+            <section className="session-card" aria-labelledby="audio-heading">
+              <div className="session-card__head">
+                <h2 id="audio-heading">{t('sessions.audio.title')}</h2>
+                <AudioDownloadButton sessionId={session.id} title={session.title} />
+              </div>
+              <AudioPlayer
+                ref={playerRef}
+                sessionDir={detail.sessionDir}
+                tracks={audioTracks}
+                playhead={playhead}
+                onAvailabilityChange={setPlayerAvailable}
+              />
+            </section>
+          ) : null}
+
           <section className="session-card" aria-labelledby="transcript-heading">
             <div className="session-card__head">
               <h2 id="transcript-heading">{t('sessions.detail.transcript')}</h2>
@@ -166,6 +208,8 @@ function SessionDetailView({ detail }: { detail: SessionDetail }) {
               sessionDir={detail.sessionDir}
               lines={detail.transcript}
               frames={detail.frames}
+              onSeek={canSeek ? seekAudio : undefined}
+              playhead={canSeek ? playhead : undefined}
             />
           </section>
         </aside>

@@ -465,7 +465,9 @@
       "speaker": {
         "me": "Ben",
         "others": "Diğerleri"
-      }
+      },
+      "seekTo": "{{time}} anına git",
+      "seekAndShowFrame": "{{time}} anına git ve en yakın kareyi göster"
     },
     "frames": {
       "empty": "Bu kayıtta ekran karesi yok.",
@@ -501,7 +503,9 @@
         "not_dialog_selected": "Konum kaydetme penceresinden seçilmedi. Dışa aktarmayı yeniden başlatıp yeri pencerede seçin.",
         "inside_data_dir": "Tan'ın kendi veri klasörüne dışa aktarılamaz. Başka bir klasör seçin.",
         "folder_missing": "Seçilen klasör yok. Var olan bir klasör seçin.",
-        "already_exists": "Adın sonuna .md eklenince bu adda bir dosya zaten var; üzerine yazılmaz. Başka bir ad seçin."
+        "already_exists": "Adın sonuna .md eklenince bu adda bir dosya zaten var; üzerine yazılmaz. Başka bir ad seçin.",
+        "no_audio": "Bu kayıtta dışa aktarılacak ses kalmadı (kaydedilmemiş, saklama ilkesiyle silinmiş ya da dosyalar yok).",
+        "session_recording": "Kayıt sürerken ses dışa aktarılamaz. Kayıt bittikten sonra deneyin."
       },
       "errors": {
         "validation": "Seçilen konuma yazılamaz. Kaydetme penceresinden bu bilgisayardaki bir sürücüde bir yer seçin.",
@@ -514,6 +518,40 @@
       "busy": "Kayıt ya da işleme sürüyor; şimdi değiştirilemez.",
       "files_failed": "Dosya işlemi başarısız oldu.",
       "internal": "Beklenmeyen bir hata oluştu."
+    },
+    "audio": {
+      "title": "Ses",
+      "playerLabel": "Ses oynatıcı",
+      "play": "Oynat",
+      "pause": "Duraklat",
+      "position": "Oynatma konumu",
+      "positionValue": "{{current}} / {{total}}",
+      "tracks": {
+        "microphone": "Mikrofon",
+        "system": "Sistem sesi"
+      },
+      "muteMicrophone": "Mikrofonu sustur",
+      "muteSystem": "Sistem sesini sustur",
+      "muteOther": "{{track}} kanalını sustur",
+      "muted": "Sessiz",
+      "unavailable": "Ses dosyası bu pencerede oynatılamıyor.",
+      "trackUnavailable": "{{track}} oynatılamıyor.",
+      "playFailed": "Ses başlatılamadı. Yeniden deneyin.",
+      "download": {
+        "button": "WAV olarak indir",
+        "preparing": "Hazırlanıyor…",
+        "done": "Ses dosyası kaydedildi.",
+        "dialogTitle": "Sesi WAV olarak kaydet",
+        "defaultName": "kayit",
+        "problems": {
+          "invalid_extension": "Dosya uzantısı .wav olmalı. Uzantıyı değiştirmeyin ya da hiç yazmayın.",
+          "already_exists": "Adın sonuna .wav eklenince bu adda bir dosya zaten var; üzerine yazılmaz. Başka bir ad seçin."
+        },
+        "errors": {
+          "validation": "Seçilen konuma yazılamaz. Kaydetme penceresinden bu bilgisayardaki bir sürücüde bir yer seçin.",
+          "filesFailed": "Ses dosyası yazılamadı. Konumun var olduğunu ve yazma izniniz olduğunu kontrol edin."
+        }
+      }
     }
   },
   "processing": {

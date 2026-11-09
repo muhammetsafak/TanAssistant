@@ -13,6 +13,11 @@ import { session, sessionDetail } from './fixtures';
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({ save: vi.fn() }));
 
+// Without the Tauri runtime the asset URL cannot be built; the audio card needs one.
+vi.mock('@tauri-apps/api/core', () => ({
+  convertFileSrc: (path: string) => `asset://localhost/${encodeURIComponent(path)}`,
+}));
+
 vi.mock('../../ipc/bindings', async () => {
   const { stubEvents } = await import('../../test-events');
   return {
@@ -28,6 +33,7 @@ vi.mock('../../ipc/bindings', async () => {
       listProviderProfiles: vi.fn(),
       deleteSession: vi.fn(),
       exportSessionMarkdown: vi.fn(),
+      exportSessionAudio: vi.fn(),
     },
     events: stubEvents(),
   };
@@ -51,10 +57,14 @@ describe('SessionDetailPage', () => {
       ok({ running: false, job: sessionDetail().job }),
     );
     vi.mocked(commands.listProviderProfiles).mockResolvedValue(ok([]));
+    // jsdom has no media pipeline: playing and pausing are stubbed, as is the length of a track.
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   describe('action items', () => {
@@ -113,7 +123,9 @@ describe('SessionDetailPage', () => {
       expect(preview).not.toHaveTextContent('Q3 plan');
 
       // 00:12 is closest to the 00:10 frame; the time button does the same by keyboard.
-      await user.click(screen.getByRole('button', { name: '00:12 anına en yakın kareyi göster' }));
+      await user.click(
+        screen.getByRole('button', { name: '00:12 anına git ve en yakın kareyi göster' }),
+      );
       expect(preview).toHaveTextContent('Slide: Q3 plan');
     });
 
@@ -503,6 +515,302 @@ describe('SessionDetailPage', () => {
       await waitFor(() => expect(save).toHaveBeenCalled());
       expect(commands.exportSessionMarkdown).not.toHaveBeenCalled();
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('audio', () => {
+    const microphone = {
+      kind: 'microphone',
+      path: 'audio/microphone.wav',
+      sampleRate: 16000,
+      durationMs: 120_000,
+      deletedAt: null,
+    };
+    const system = { ...microphone, kind: 'system', path: 'audio/system.wav' };
+
+    function audioElements(container: HTMLElement) {
+      return Array.from(container.querySelectorAll('audio'));
+    }
+
+    it('shows an audio card between the frames and the transcript', async () => {
+      renderDetail();
+
+      const headings = (await screen.findAllByRole('heading', { level: 2 })).map(
+        (heading) => heading.textContent,
+      );
+      const frames = headings.indexOf('Kareler');
+      expect(headings.indexOf('Ses')).toBe(frames + 1);
+      expect(headings.indexOf('Transkript')).toBe(frames + 2);
+      expect(screen.getByRole('button', { name: 'WAV olarak indir' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Oynat' })).toBeInTheDocument();
+    });
+
+    it('has no audio card while the session is being recorded', async () => {
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(sessionDetail({ session: { ...session, status: 'recording' } })),
+      );
+      renderDetail();
+
+      await screen.findByRole('heading', { name: 'Transkript' });
+      expect(screen.queryByRole('heading', { name: 'Ses' })).not.toBeInTheDocument();
+    });
+
+    it('has no audio card without tracks, and ignores tracks the retention policy deleted', async () => {
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(sessionDetail({ audioTracks: [] })),
+      );
+      const first = renderDetail();
+      await first.findByRole('heading', { name: 'Transkript' });
+      expect(first.queryByRole('heading', { name: 'Ses' })).not.toBeInTheDocument();
+      first.unmount();
+
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(
+          sessionDetail({
+            audioTracks: [
+              { ...microphone, deletedAt: 1 },
+              { ...system, deletedAt: 1 },
+            ],
+          }),
+        ),
+      );
+      const second = renderDetail();
+      await second.findByRole('heading', { name: 'Transkript' });
+      expect(second.queryByRole('heading', { name: 'Ses' })).not.toBeInTheDocument();
+      expect(audioElements(second.container)).toHaveLength(0);
+
+      // Only the track that is kept is loaded.
+      second.unmount();
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(sessionDetail({ audioTracks: [{ ...microphone, deletedAt: 1 }, system] })),
+      );
+      const third = renderDetail();
+      await third.findByRole('heading', { name: 'Ses' });
+      const [only, ...rest] = audioElements(third.container);
+      expect(rest).toHaveLength(0);
+      expect(only?.getAttribute('src')).toContain(encodeURIComponent('audio\\system.wav'));
+      expect(third.queryByRole('button', { name: 'Mikrofonu sustur' })).not.toBeInTheDocument();
+    });
+
+    it('loads both tracks from the audio folder and mutes them one by one', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(sessionDetail({ audioTracks: [microphone, system] })),
+      );
+      const { container } = renderDetail();
+
+      const mute = await screen.findByRole('button', { name: 'Sistem sesini sustur' });
+      const [mic, sys] = audioElements(container);
+      expect(mic?.getAttribute('src')).toContain('microphone.wav');
+      expect(sys?.getAttribute('src')).toContain('system.wav');
+      expect(mic?.muted).toBe(false);
+      expect(sys?.muted).toBe(false);
+
+      await user.click(mute);
+
+      expect(sys?.muted).toBe(true);
+      expect(mic?.muted).toBe(false);
+      expect(mute).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('button', { name: 'Mikrofonu sustur' })).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      );
+    });
+
+    it('plays and pauses both tracks together', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(sessionDetail({ audioTracks: [microphone, system] })),
+      );
+      renderDetail();
+
+      await user.click(await screen.findByRole('button', { name: 'Oynat' }));
+      expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
+
+      await user.click(await screen.findByRole('button', { name: 'Duraklat' }));
+      expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('button', { name: 'Oynat' })).toBeInTheDocument();
+    });
+
+    it('moves both tracks and marks the line when a transcript line is chosen', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(sessionDetail({ audioTracks: [microphone, system] })),
+      );
+      const { container } = renderDetail();
+
+      await user.click(await screen.findByText('Bütçeye bakalım'));
+
+      for (const element of audioElements(container)) expect(element.currentTime).toBe(70);
+      const slider = screen.getByRole('slider', { name: 'Oynatma konumu' });
+      expect(slider).toHaveValue('70000');
+      expect(slider).toHaveAttribute('aria-valuetext', '01:10 / 02:00');
+      expect(screen.getByText('Bütçeye bakalım').closest('li')).toHaveAttribute(
+        'aria-current',
+        'time',
+      );
+      expect(screen.getByText('Merhaba herkese').closest('li')).not.toHaveAttribute('aria-current');
+    });
+
+    it('marks no line as playing before the player has moved, even one starting at 0', async () => {
+      const first = { ...sessionDetail().transcript[0]!, startMs: 0, endMs: 3000 };
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(sessionDetail({ transcript: [first] })),
+      );
+      renderDetail();
+
+      expect((await screen.findByText('Merhaba herkese')).closest('li')).not.toHaveAttribute(
+        'aria-current',
+      );
+    });
+
+    it('marks no line as playing in a session without audio', async () => {
+      const first = { ...sessionDetail().transcript[0]!, startMs: 0, endMs: 3000 };
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(sessionDetail({ transcript: [first], audioTracks: [] })),
+      );
+      renderDetail();
+
+      expect((await screen.findByText('Merhaba herkese')).closest('li')).not.toHaveAttribute(
+        'aria-current',
+      );
+    });
+
+    it('seeks from the time button of a line, also when there are no frames', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(ok(sessionDetail({ frames: [] })));
+      const { container } = renderDetail();
+
+      await user.click(await screen.findByRole('button', { name: '00:12 anına git' }));
+
+      expect(audioElements(container)[0]?.currentTime).toBe(12);
+      expect(screen.queryByRole('button', { name: /kareyi göster/ })).not.toBeInTheDocument();
+    });
+
+    it('keeps lines plain when there is neither audio nor frames', async () => {
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(sessionDetail({ frames: [], audioTracks: [] })),
+      );
+      renderDetail();
+
+      await screen.findByText('Bütçeye bakalım');
+      expect(screen.queryByRole('button', { name: /anına/ })).not.toBeInTheDocument();
+    });
+
+    it('says so when the audio cannot be loaded at all', async () => {
+      const user = userEvent.setup();
+      const { container } = renderDetail();
+      await screen.findByRole('button', { name: 'Oynat' });
+
+      for (const element of audioElements(container)) element.dispatchEvent(new Event('error'));
+
+      expect(await screen.findByRole('status')).toHaveTextContent('Mikrofon oynatılamıyor.');
+      expect(screen.getByRole('button', { name: 'Oynat' })).toBeDisabled();
+      // The lines no longer pretend to move a player that cannot play.
+      expect(screen.queryByRole('button', { name: /anına git/ })).not.toBeInTheDocument();
+      await user.click(screen.getByText('Bütçeye bakalım'));
+      expect(screen.getByText('Bütçeye bakalım').closest('li')).not.toHaveAttribute('aria-current');
+      // The mixed file is made by the backend, so the download still works.
+      expect(screen.getByRole('button', { name: 'WAV olarak indir' })).toBeEnabled();
+    });
+
+    describe('download', () => {
+      it('saves the mix where the dialog says and reports it', async () => {
+        const user = userEvent.setup();
+        vi.mocked(save).mockResolvedValue('/audio/weekly.wav');
+        vi.mocked(commands.exportSessionAudio).mockResolvedValue(ok('/audio/weekly.wav'));
+        renderDetail();
+
+        await user.click(await screen.findByRole('button', { name: 'WAV olarak indir' }));
+
+        expect(save).toHaveBeenCalledWith(
+          expect.objectContaining({
+            defaultPath: 'Weekly sync.wav',
+            filters: [{ name: 'WAV', extensions: ['wav'] }],
+          }),
+        );
+        expect(commands.exportSessionAudio).toHaveBeenCalledWith('s1', '/audio/weekly.wav');
+        expect(await screen.findByText('Ses dosyası kaydedildi.')).toBeInTheDocument();
+      });
+
+      it('names the file after the recording, and falls back to a word of its own', async () => {
+        const user = userEvent.setup();
+        vi.mocked(commands.getSessionDetail).mockResolvedValue(
+          ok(sessionDetail({ session: { ...session, title: '' } })),
+        );
+        vi.mocked(save).mockResolvedValue(null);
+        renderDetail();
+
+        await user.click(await screen.findByRole('button', { name: 'WAV olarak indir' }));
+
+        expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: 'kayit.wav' }));
+      });
+
+      it('is disabled with a progress text while the file is made', async () => {
+        const user = userEvent.setup();
+        let finish: (value: unknown) => void = () => undefined;
+        vi.mocked(save).mockResolvedValue('/audio/weekly.wav');
+        vi.mocked(commands.exportSessionAudio).mockReturnValue(
+          new Promise((resolve) => {
+            finish = resolve;
+          }) as never,
+        );
+        renderDetail();
+
+        await user.click(await screen.findByRole('button', { name: 'WAV olarak indir' }));
+
+        const busy = await screen.findByRole('button', { name: 'Hazırlanıyor…' });
+        expect(busy).toBeDisabled();
+        expect(busy).toHaveAttribute('aria-busy', 'true');
+
+        finish(ok('/audio/weekly.wav'));
+        expect(await screen.findByRole('button', { name: 'WAV olarak indir' })).toBeEnabled();
+      });
+
+      it('does nothing when the save dialog is cancelled', async () => {
+        const user = userEvent.setup();
+        vi.mocked(save).mockResolvedValue(null);
+        renderDetail();
+
+        await user.click(await screen.findByRole('button', { name: 'WAV olarak indir' }));
+
+        await waitFor(() => expect(save).toHaveBeenCalled());
+        expect(commands.exportSessionAudio).not.toHaveBeenCalled();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      });
+
+      it.each([
+        ['no_audio', /dışa aktarılacak ses kalmadı/],
+        ['session_recording', /Kayıt sürerken ses dışa aktarılamaz/],
+        ['invalid_extension', /uzantısı .wav olmalı/],
+        ['already_exists', /.wav eklenince/],
+        ['inside_data_dir', /veri klasörüne/],
+        ['something_new', /Seçilen konuma yazılamaz/],
+      ])('explains the problem %s', async (exportProblem, message) => {
+        const user = userEvent.setup();
+        vi.mocked(save).mockResolvedValue('/audio/weekly.wav');
+        vi.mocked(commands.exportSessionAudio).mockResolvedValue({
+          status: 'error',
+          error: { code: 'validation', message: 'raw', exportProblem },
+        } as never);
+        renderDetail();
+
+        await user.click(await screen.findByRole('button', { name: 'WAV olarak indir' }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(message);
+        expect(screen.getByRole('alert')).not.toHaveTextContent('raw');
+      });
+
+      it('reports a file that could not be written', async () => {
+        const user = userEvent.setup();
+        vi.mocked(save).mockResolvedValue('/audio/weekly.wav');
+        vi.mocked(commands.exportSessionAudio).mockResolvedValue(fail('files_failed') as never);
+        renderDetail();
+
+        await user.click(await screen.findByRole('button', { name: 'WAV olarak indir' }));
+
+        expect(await screen.findByText(/Ses dosyası yazılamadı/)).toBeInTheDocument();
+      });
     });
   });
 });

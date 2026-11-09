@@ -8,6 +8,7 @@ import { formatClock } from './format';
 import { nearestFrame } from './frames';
 import { FrameImage } from './FrameImage';
 import { FrameViewer } from './FrameViewer';
+import { useActiveLineIndex, type Playhead } from './playhead';
 
 import './sessions.css';
 
@@ -18,9 +19,14 @@ interface RowProps {
   /** Which side spoke: it picks the speaker's colour. Any other label has none. */
   side: 'me' | 'others' | 'other';
   selected: boolean;
-  /** Without frames the timestamp is plain text: there is nothing to select. */
+  /** The audio is at this line right now. */
+  playing: boolean;
+  /** There are frames to preview: choosing the line shows the closest one. */
   selectable: boolean;
+  /** There is audio to play: choosing the line moves the player to it. */
+  seekable: boolean;
   onSelect: (index: number) => void;
+  onSeek: (ms: number) => void;
 }
 
 const TranscriptRow = memo(function TranscriptRow({
@@ -29,28 +35,42 @@ const TranscriptRow = memo(function TranscriptRow({
   speaker,
   side,
   selected,
+  playing,
   selectable,
+  seekable,
   onSelect,
+  onSeek,
 }: RowProps) {
   const { t } = useTranslation();
   const time = formatClock(line.startMs);
+  const interactive = selectable || seekable;
+  const choose = () => {
+    if (selectable) onSelect(index);
+    if (seekable) onSeek(line.startMs);
+  };
+  const timeLabel = selectable
+    ? seekable
+      ? t('sessions.transcript.seekAndShowFrame', { time })
+      : t('sessions.transcript.showFrame', { time })
+    : t('sessions.transcript.seekTo', { time });
   return (
     <li
-      className={`transcript-line transcript-line--${side}${selected ? ' transcript-line--selected' : ''}`}
+      className={`transcript-line transcript-line--${side}${selected ? ' transcript-line--selected' : ''}${playing ? ' transcript-line--playing' : ''}`}
+      aria-current={playing ? 'time' : undefined}
       onClick={() => {
-        // Dragging to copy some text also ends in a click; that must not move the selection.
-        if (selectable && !window.getSelection()?.toString()) onSelect(index);
+        // Dragging to copy some text also ends in a click; that must not move anything.
+        if (interactive && !window.getSelection()?.toString()) choose();
       }}
     >
-      {selectable ? (
+      {interactive ? (
         <button
           type="button"
           className="transcript-line__time"
-          aria-pressed={selected}
-          aria-label={t('sessions.transcript.showFrame', { time })}
+          aria-pressed={selectable ? selected : undefined}
+          aria-label={timeLabel}
           onClick={(event) => {
             event.stopPropagation();
-            onSelect(index);
+            choose();
           }}
         >
           {time}
@@ -78,21 +98,30 @@ function speakerOf(
 
 /**
  * The transcript with a time stamp and speaker per line. Choosing a line shows the screen frame
- * closest in time to it.
+ * closest in time to it and, when there is audio, moves the player there; the line being played
+ * is marked.
  */
 export function TranscriptView({
   sessionDir,
   lines,
   frames,
+  onSeek,
+  playhead,
 }: {
   sessionDir: string;
   lines: readonly TranscriptLine[];
   frames: readonly Frame[];
+  /** Given when there is audio to play; the line's start in milliseconds. */
+  onSeek?: (startMs: number) => void;
+  /** Where the audio is, to mark the line being played. */
+  playhead?: Playhead;
 }) {
   const { t } = useTranslation();
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [viewing, setViewing] = useState<number | null>(null);
   const select = useCallback((index: number) => setSelectedIndex(index), []);
+  const seek = useCallback((ms: number) => onSeek?.(ms), [onSeek]);
+  const playingIndex = useActiveLineIndex(playhead, lines);
   const linesRef = useRef<HTMLOListElement>(null);
   const [scrollable, setScrollable] = useState(false);
 
@@ -162,8 +191,11 @@ export function TranscriptView({
               speaker={label}
               side={side}
               selected={index === selectedIndex}
+              playing={index === playingIndex}
               selectable={hasFrames}
+              seekable={onSeek !== undefined}
               onSelect={select}
+              onSeek={seek}
             />
           );
         })}

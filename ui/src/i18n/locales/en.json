@@ -465,7 +465,9 @@
       "speaker": {
         "me": "Me",
         "others": "Others"
-      }
+      },
+      "seekTo": "Go to {{time}}",
+      "seekAndShowFrame": "Go to {{time}} and show the closest frame"
     },
     "frames": {
       "empty": "This recording has no screen frames.",
@@ -501,7 +503,9 @@
         "not_dialog_selected": "The location was not chosen in the save dialog. Start the export again and pick the place in the dialog.",
         "inside_data_dir": "Tan's own data folder cannot be exported into. Pick another folder.",
         "folder_missing": "The chosen folder does not exist. Pick an existing folder.",
-        "already_exists": "With .md added to the name, a file with that name already exists and will not be overwritten. Pick another name."
+        "already_exists": "With .md added to the name, a file with that name already exists and will not be overwritten. Pick another name.",
+        "no_audio": "This recording has no audio left to export (none recorded, deleted by the retention policy, or the files are gone).",
+        "session_recording": "Audio cannot be exported while the recording is going on. Try again once it has ended."
       },
       "errors": {
         "validation": "That place cannot be written to. Pick a location on a drive of this computer in the save dialog.",
@@ -514,6 +518,40 @@
       "busy": "The recording is being recorded or processed and cannot be changed now.",
       "files_failed": "A file operation failed.",
       "internal": "An unexpected error occurred."
+    },
+    "audio": {
+      "title": "Audio",
+      "playerLabel": "Audio player",
+      "play": "Play",
+      "pause": "Pause",
+      "position": "Playback position",
+      "positionValue": "{{current}} / {{total}}",
+      "tracks": {
+        "microphone": "Microphone",
+        "system": "System sound"
+      },
+      "muteMicrophone": "Mute the microphone",
+      "muteSystem": "Mute the system sound",
+      "muteOther": "Mute {{track}}",
+      "muted": "Muted",
+      "unavailable": "The audio cannot be played in this window.",
+      "trackUnavailable": "{{track}} cannot be played.",
+      "playFailed": "Playback could not start. Try again.",
+      "download": {
+        "button": "Download as WAV",
+        "preparing": "Preparing…",
+        "done": "Audio file saved.",
+        "dialogTitle": "Save the audio as WAV",
+        "defaultName": "recording",
+        "problems": {
+          "invalid_extension": "The file extension must be .wav. Leave the extension off or keep .wav.",
+          "already_exists": "With .wav added to the name, a file with that name already exists and will not be overwritten. Pick another name."
+        },
+        "errors": {
+          "validation": "That place cannot be written to. Pick a location on a drive of this computer in the save dialog.",
+          "filesFailed": "The audio file could not be written. Check that the location exists and that you may write there."
+        }
+      }
     }
   },
   "processing": {

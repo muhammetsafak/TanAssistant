@@ -52,8 +52,11 @@ export function formatBytes(bytes: number | null, language: string): string {
   return `${new Intl.NumberFormat(language, { maximumFractionDigits: digits }).format(value)} ${units[unit]}`;
 }
 
-/** A file name for the save dialog: the title without characters file systems refuse. */
-export function suggestedFileName(title: string): string {
+/**
+ * A file name for the save dialog: the title without characters file systems refuse, with the
+ * given extension. A title that is empty once cleaned falls back to `fallback`.
+ */
+export function suggestedFileName(title: string, extension = 'md', fallback = 'notes'): string {
   // Control characters (below U+0020) are refused too; the whitespace collapse below absorbs them.
   const printable = Array.from(title, (char) => (char.charCodeAt(0) < 32 ? ' ' : char)).join('');
   const cleaned = printable
@@ -61,5 +64,5 @@ export function suggestedFileName(title: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/[. ]+$/, '');
-  return `${cleaned.slice(0, 80).trim() || 'notes'}.md`;
+  return `${cleaned.slice(0, 80).trim() || fallback}.${extension}`;
 }
