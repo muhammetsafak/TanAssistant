@@ -280,6 +280,14 @@ where
         lock(&self.active).contains_key(session_id)
     }
 
+    /// Whether this application is processing any session right now. A run counts from the
+    /// moment it is registered (before the session turns `Processing`) until it ends, so there
+    /// is no gap in which a run has started but this still answers `false`.
+    #[must_use]
+    pub fn is_any_running(&self) -> bool {
+        !lock(&self.active).is_empty()
+    }
+
     /// The session's job, if it was ever processed.
     pub async fn status(&self, session_id: &SessionId) -> ProcessResult<Option<ProcessingJob>> {
         Ok(self.ports.jobs.get(session_id).await?)

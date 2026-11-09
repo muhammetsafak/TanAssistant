@@ -16,6 +16,7 @@ use tauri::{AppHandle, State};
 use tauri_specta::Event;
 
 use crate::commands::transcription::{TranscriptionErrorCode, TranscriptionIpcError};
+use crate::commands::updates::{gated, StartKind, UpdateInProgress, UpdaterState};
 use crate::state::AppState;
 
 /// Machine-readable failure class of the processing commands.
@@ -56,6 +57,9 @@ pub enum ProcessingErrorCode {
     ProviderError,
     /// The API key could not be read from the secret store.
     SecretUnavailable,
+    /// An update is being installed (or waits for the restart): no processing run can start
+    /// until the application restarts.
+    UpdateInProgress,
     /// Anything else; details are in the log.
     Internal,
 }
@@ -104,6 +108,16 @@ const fn ai_error_code(error: &AiError) -> ProcessingErrorCode {
         AiError::Network(_) => ProcessingErrorCode::ProviderNetwork,
         AiError::Provider { .. } => ProcessingErrorCode::ProviderError,
         AiError::SecretUnavailable(_) => ProcessingErrorCode::SecretUnavailable,
+    }
+}
+
+impl From<UpdateInProgress> for ProcessingIpcError {
+    fn from(error: UpdateInProgress) -> Self {
+        Self {
+            code: ProcessingErrorCode::UpdateInProgress,
+            transcription_code: None,
+            message: error.to_string(),
+        }
     }
 }
 
@@ -356,17 +370,27 @@ fn parse_profile_id(
 pub async fn process_session(
     app: AppHandle,
     state: State<'_, AppState>,
+    updater_state: State<'_, UpdaterState>,
     session_id: String,
     transcription_profile_id: Option<String>,
 ) -> Result<ProcessSummaryDto, ProcessingIpcError> {
-    let id = parse_session_id(session_id)?;
-    let profile = parse_profile_id(transcription_profile_id)?;
-    let announce = announcer(app, &id);
-    let summary = state
-        .process_session
-        .execute_with_profile(&id, profile.as_ref(), &announce)
-        .await?;
-    Ok(summary.into())
+    // Refused while an update installs; the permit is held for the whole run, so the install
+    // sees it as active.
+    gated(
+        &updater_state,
+        StartKind::Processing,
+        Box::pin(async {
+            let id = parse_session_id(session_id)?;
+            let profile = parse_profile_id(transcription_profile_id)?;
+            let announce = announcer(app, &id);
+            let summary = state
+                .process_session
+                .execute_with_profile(&id, profile.as_ref(), &announce)
+                .await?;
+            Ok(summary.into())
+        }),
+    )
+    .await
 }
 
 /// Continues a failed or cancelled run: finished steps are kept, the rest runs again.
@@ -379,17 +403,25 @@ pub async fn process_session(
 pub async fn retry_processing(
     app: AppHandle,
     state: State<'_, AppState>,
+    updater_state: State<'_, UpdaterState>,
     session_id: String,
     transcription_profile_id: Option<String>,
 ) -> Result<ProcessSummaryDto, ProcessingIpcError> {
-    let id = parse_session_id(session_id)?;
-    let profile = parse_profile_id(transcription_profile_id)?;
-    let announce = announcer(app, &id);
-    let summary = state
-        .process_session
-        .retry_with_profile(&id, profile.as_ref(), &announce)
-        .await?;
-    Ok(summary.into())
+    gated(
+        &updater_state,
+        StartKind::Processing,
+        Box::pin(async {
+            let id = parse_session_id(session_id)?;
+            let profile = parse_profile_id(transcription_profile_id)?;
+            let announce = announcer(app, &id);
+            let summary = state
+                .process_session
+                .retry_with_profile(&id, profile.as_ref(), &announce)
+                .await?;
+            Ok(summary.into())
+        }),
+    )
+    .await
 }
 
 /// Cancels the session's running run (its `process_session` call returns `cancelled`). Returns

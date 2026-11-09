@@ -1754,6 +1754,49 @@ fn a_running_session_can_be_cancelled_and_resumed_and_cannot_run_twice() {
 }
 
 #[test]
+fn any_running_tells_whether_some_session_is_being_processed() {
+    let rig = Setup {
+        transcribe_mode: TranscribeMode::Block,
+        ..Setup::new()
+    }
+    .build();
+    assert!(!rig.process.is_any_running(), "nothing was started");
+
+    // A run that is cancelled: running from its registration on, idle again once it ended.
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(|| block_on(rig.process.execute(&sid(), &|_| {})));
+        while !rig.world.transcribe_started.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        assert!(rig.process.is_any_running());
+        assert!(rig.process.cancel(&sid()));
+        let result = handle.join().unwrap();
+        assert!(matches!(result, Err(ProcessError::Cancelled)), "{result:?}");
+    });
+    assert!(!rig.process.is_any_running(), "the cancelled run ended");
+
+    // A run that finishes: it is seen from its first progress report to its end.
+    *rig.world.transcribe_mode.lock().unwrap() = TranscribeMode::Write;
+    rig.script_vision(vec![
+        Ok(VISION_REPLY.to_owned()),
+        Ok(VISION_REPLY.to_owned()),
+    ]);
+    rig.script_chat(vec![Ok(VALID_NOTE.to_owned())]);
+    let seen_running = Mutex::new(Vec::<bool>::new());
+    block_on(rig.process.retry(&sid(), &|_| {
+        seen_running
+            .lock()
+            .unwrap()
+            .push(rig.process.is_any_running());
+    }))
+    .unwrap();
+    let seen_running = seen_running.into_inner().unwrap();
+    assert!(!seen_running.is_empty());
+    assert!(seen_running.iter().all(|running| *running));
+    assert!(!rig.process.is_any_running(), "the finished run ended");
+}
+
+#[test]
 fn sessions_left_processing_by_a_crash_are_settled_at_startup() {
     let rig = Setup {
         status: SessionStatus::Processing,

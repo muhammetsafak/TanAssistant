@@ -23,6 +23,7 @@ use tan_domain::{LanguageCode, LanguageSetting, SessionStatus};
 use tauri::{AppHandle, Manager, State};
 use tauri_specta::Event;
 
+use crate::commands::updates::{gated, StartKind, UpdateInProgress, UpdaterState};
 use crate::state::{AppState, SystemClock};
 use crate::tray;
 
@@ -52,6 +53,9 @@ pub enum RecordingErrorCode {
     CaptureUnsupported,
     /// The capture backend failed.
     CaptureFailed,
+    /// An update is being installed (or waits for the restart): no recording can start or
+    /// resume until the application restarts.
+    UpdateInProgress,
     /// Anything else; details are in the log.
     Internal,
 }
@@ -71,6 +75,15 @@ impl RecordingIpcError {
         Self {
             code: RecordingErrorCode::Validation,
             message: message.into(),
+        }
+    }
+}
+
+impl From<UpdateInProgress> for RecordingIpcError {
+    fn from(error: UpdateInProgress) -> Self {
+        Self {
+            code: RecordingErrorCode::UpdateInProgress,
+            message: error.to_string(),
         }
     }
 }
@@ -583,16 +596,21 @@ impl RecordingEvents for TauriRecordingEvents {
 #[tracing::instrument(skip_all)]
 pub async fn start_recording(
     state: State<'_, AppState>,
+    updater_state: State<'_, UpdaterState>,
     options: StartRecordingOptionsDto,
 ) -> Result<RecordingStartedDto, RecordingIpcError> {
-    let options = options.into_options(&SystemClock)?;
-    let session = state.recording.start(options).await?;
-    Ok(RecordingStartedDto {
-        session_id: session.id.to_string(),
-        title: session.title,
-        #[allow(clippy::cast_precision_loss)] // see `RecordingStatusDto`
-        started_at: session.started_at.get() as f64,
+    // Refused while an update installs; the permit is held until the start is over.
+    gated(&updater_state, StartKind::Recording, async {
+        let options = options.into_options(&SystemClock)?;
+        let session = state.recording.start(options).await?;
+        Ok(RecordingStartedDto {
+            session_id: session.id.to_string(),
+            title: session.title,
+            #[allow(clippy::cast_precision_loss)] // see `RecordingStatusDto`
+            started_at: session.started_at.get() as f64,
+        })
     })
+    .await
 }
 
 /// Stops the running recording.
@@ -623,8 +641,12 @@ pub async fn pause_recording(
 #[tracing::instrument(skip_all)]
 pub async fn resume_recording(
     state: State<'_, AppState>,
+    updater_state: State<'_, UpdaterState>,
 ) -> Result<RecordingStatusDto, RecordingIpcError> {
-    resume_paused(&state.recording).await.map(Into::into)
+    gated(&updater_state, StartKind::Recording, async {
+        resume_paused(&state.recording).await.map(Into::into)
+    })
+    .await
 }
 
 /// Whether a recording is running, with its live numbers.
@@ -756,9 +778,13 @@ where
 /// Starts a recording with default options (tray menu).
 pub async fn start_with_defaults(app: &AppHandle) -> Result<(), RecordingIpcError> {
     let state = app.state::<AppState>();
-    let options = StartRecordingOptionsDto::default().into_options(&SystemClock)?;
-    state.recording.start(options).await?;
-    Ok(())
+    let updater_state = app.state::<UpdaterState>();
+    gated(&updater_state, StartKind::Recording, async {
+        let options = StartRecordingOptionsDto::default().into_options(&SystemClock)?;
+        state.recording.start(options).await?;
+        Ok(())
+    })
+    .await
 }
 
 /// Stops the recording. Taking it waits for a pause or resume in progress (as long as the
@@ -802,8 +828,12 @@ pub async fn pause_current(app: &AppHandle) -> Result<(), RecordingIpcError> {
 /// Resumes the paused recording (tray menu).
 pub async fn resume_current(app: &AppHandle) -> Result<(), RecordingIpcError> {
     let state = app.state::<AppState>();
-    resume_paused(&state.recording).await?;
-    Ok(())
+    let updater_state = app.state::<UpdaterState>();
+    gated(&updater_state, StartKind::Recording, async {
+        resume_paused(&state.recording).await?;
+        Ok(())
+    })
+    .await
 }
 
 /// Stops the running or paused recording (tray menu, quit).

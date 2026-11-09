@@ -7,6 +7,13 @@
 //! The flow is: [`check_for_update`] -> [`download_update`] (progress arrives as
 //! [`UpdateDownloadProgress`] events) -> [`install_update_and_restart`]. Installing is refused
 //! while a recording or a processing run is active, so an update never cuts one short.
+//!
+//! The other direction is closed too: from the moment an install starts until the application
+//! restarts, no new recording or processing run may start. That is the *install gate* kept in
+//! [`Slots`]: the install takes it first and only then looks at what is active; every start
+//! takes a [`StartPermit`] from it for as long as the start takes. Both go through the same
+//! mutex, so either the start is admitted before the gate closes (and the install sees it as
+//! active) or it is refused; a recording or a run cannot slip in between.
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -16,9 +23,6 @@ use specta::Type;
 use tauri::{AppHandle, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tauri_specta::Event;
-
-use tan_application::sessions::{Page, SessionFilter, MAX_PAGE_SIZE};
-use tan_domain::SessionStatus;
 
 use crate::commands::recording;
 use crate::error::{ErrorCode, IpcError};
@@ -62,6 +66,8 @@ pub enum BlockedReason {
     Processing,
     /// An update is already downloading.
     DownloadRunning,
+    /// An update is already being installed.
+    InstallRunning,
 }
 
 impl std::fmt::Display for UpdateError {
@@ -76,9 +82,12 @@ impl std::fmt::Display for UpdateError {
             Self::Blocked(BlockedReason::DownloadRunning) => {
                 f.write_str("an update is already downloading")
             }
+            Self::Blocked(BlockedReason::InstallRunning) => {
+                f.write_str("an update is already being installed")
+            }
             Self::RestartPending => f.write_str(
                 "the update is installed; it takes effect at the next start, or when you \
-                 restart once no recording or processing is active",
+                 restart again once no recording or processing is active",
             ),
             Self::NotFound => f.write_str("there is no update to download or install"),
             Self::Unsupported => {
@@ -102,6 +111,31 @@ impl From<UpdateError> for IpcError {
         };
         Self::new(code, error.to_string())
     }
+}
+
+/// A new recording or processing run was refused because an update is being installed (or is
+/// installed and only waits for the restart).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdateInProgress;
+
+impl std::fmt::Display for UpdateInProgress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "an update is being installed; recording and processing are unavailable until the \
+             application restarts",
+        )
+    }
+}
+
+impl std::error::Error for UpdateInProgress {}
+
+/// Which kind of start a [`StartPermit`] covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartKind {
+    /// A recording starts or resumes.
+    Recording,
+    /// A processing run starts (the permit is held for the whole run).
+    Processing,
 }
 
 /// Whether an installation can replace itself. `is_linux` and `appimage` are the facts, passed
@@ -184,16 +218,13 @@ pub fn ensure_can_install(context: InstallContext) -> Result<(), UpdateError> {
 }
 
 /// Decides whether the application may restart now that the update is installed. `activity` is
-/// what was read just before; when that read failed the answer is unknown and the restart is
-/// held back (fail closed). The update stays installed either way, hence
+/// what was read just before. The update stays installed either way, hence
 /// [`UpdateError::RestartPending`] and not [`UpdateError::Blocked`].
-pub fn ensure_can_restart(activity: Result<Activity, UpdateError>) -> Result<(), UpdateError> {
-    match activity {
-        Ok(Activity {
-            recording: false,
-            processing: false,
-        }) => Ok(()),
-        Ok(_) | Err(_) => Err(UpdateError::RestartPending),
+pub fn ensure_can_restart(activity: Activity) -> Result<(), UpdateError> {
+    if activity == Activity::default() {
+        Ok(())
+    } else {
+        Err(UpdateError::RestartPending)
     }
 }
 
@@ -215,6 +246,13 @@ pub struct Slots<U> {
     downloaded: Option<Downloaded<U>>,
     /// The bundle is installed; only the restart is left.
     installed: bool,
+    /// The install gate is closed: an install runs, or it finished and waits for the restart.
+    /// No recording or processing run may start meanwhile.
+    install_gate_closed: bool,
+    /// Recording starts that were admitted and have not finished starting.
+    recordings_starting: usize,
+    /// Processing runs that were admitted and have not ended.
+    processing_runs: usize,
 }
 
 impl<U> Default for Slots<U> {
@@ -224,6 +262,9 @@ impl<U> Default for Slots<U> {
             downloading: false,
             downloaded: None,
             installed: false,
+            install_gate_closed: false,
+            recordings_starting: 0,
+            processing_runs: 0,
         }
     }
 }
@@ -255,6 +296,10 @@ impl<U: Clone> Slots<U> {
             update_found: self.found.is_some(),
             download_running: self.downloading,
         })?;
+        // A download resets what is installed: not while an install is running.
+        if self.install_gate_closed && !self.installed {
+            return Err(UpdateError::Blocked(BlockedReason::InstallRunning));
+        }
         let (version, update) = self.found.clone().ok_or(UpdateError::NotFound)?;
         if self
             .downloaded
@@ -276,7 +321,9 @@ impl<U: Clone> Slots<U> {
                 update,
                 bytes,
             });
+            // A fresh bundle replaces what was installed; its install closes the gate again.
             self.installed = false;
+            self.install_gate_closed = false;
         }
     }
 
@@ -292,9 +339,10 @@ impl<U: Clone> Slots<U> {
     }
 
     /// Puts the bundle back after a failed install, so the install can be tried again without
-    /// downloading it a second time.
+    /// downloading it a second time, and opens the install gate again.
     pub fn restore_after_failed_install(&mut self, package: Downloaded<U>) {
         self.downloaded = Some(package);
+        self.install_gate_closed = false;
     }
 
     /// Whether the bundle is installed and only the restart is left.
@@ -303,9 +351,63 @@ impl<U: Clone> Slots<U> {
         self.installed
     }
 
-    /// The bundle was installed; only the restart is left.
+    /// The bundle was installed; only the restart is left. The install gate stays closed until
+    /// then.
     pub fn mark_installed(&mut self) {
         self.installed = true;
+    }
+
+    /// Closes the install gate: from now on no recording or processing run is admitted. Refused
+    /// while another install holds it. Call it *before* looking at what is active, so nothing
+    /// can start between the look and the install.
+    pub fn close_install_gate(&mut self) -> Result<(), UpdateError> {
+        if self.install_gate_closed && !self.installed {
+            return Err(UpdateError::Blocked(BlockedReason::InstallRunning));
+        }
+        self.install_gate_closed = true;
+        Ok(())
+    }
+
+    /// Opens the install gate again, for an install that was refused or did not happen.
+    pub fn open_install_gate(&mut self) {
+        self.install_gate_closed = false;
+    }
+
+    /// Whether the install gate is closed.
+    #[must_use]
+    pub fn is_install_gate_closed(&self) -> bool {
+        self.install_gate_closed
+    }
+
+    /// Admits a start, unless the install gate is closed. Every admitted start must be ended
+    /// with [`Self::end_start`].
+    pub fn admit_start(&mut self, kind: StartKind) -> Result<(), UpdateInProgress> {
+        if self.install_gate_closed {
+            return Err(UpdateInProgress);
+        }
+        match kind {
+            StartKind::Recording => self.recordings_starting += 1,
+            StartKind::Processing => self.processing_runs += 1,
+        }
+        Ok(())
+    }
+
+    /// Ends a start admitted by [`Self::admit_start`].
+    pub fn end_start(&mut self, kind: StartKind) {
+        let counter = match kind {
+            StartKind::Recording => &mut self.recordings_starting,
+            StartKind::Processing => &mut self.processing_runs,
+        };
+        *counter = counter.saturating_sub(1);
+    }
+
+    /// The starts admitted and not yet ended. With the gate closed this can only shrink.
+    #[must_use]
+    pub fn starts_in_flight(&self) -> Activity {
+        Activity {
+            recording: self.recordings_starting > 0,
+            processing: self.processing_runs > 0,
+        }
     }
 }
 
@@ -318,6 +420,51 @@ pub struct UpdaterState {
 impl UpdaterState {
     fn lock(&self) -> MutexGuard<'_, Slots<Update>> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Admits a recording start or a processing run, or refuses it while an update is being
+    /// installed. Hold the permit for as long as the start takes (a recording start) or the run
+    /// lasts (processing); the install counts it as activity until it is dropped.
+    pub fn admit(&self, kind: StartKind) -> Result<StartPermit<'_>, UpdateInProgress> {
+        self.lock().admit_start(kind)?;
+        Ok(StartPermit { state: self, kind })
+    }
+
+    /// See [`Slots::close_install_gate`].
+    pub fn close_install_gate(&self) -> Result<(), UpdateError> {
+        self.lock().close_install_gate()
+    }
+
+    /// See [`Slots::starts_in_flight`].
+    #[must_use]
+    pub fn starts_in_flight(&self) -> Activity {
+        self.lock().starts_in_flight()
+    }
+}
+
+/// Runs `work` (a recording start or a processing run) under a [`StartPermit`]: refused with
+/// [`UpdateInProgress`] while an update installs, otherwise the permit is held until `work` is
+/// done. Every gated command goes through this, so the permit cannot be forgotten or dropped
+/// early; `work` is not polled when the start is refused.
+pub async fn gated<T, E, F>(updater: &UpdaterState, kind: StartKind, work: F) -> Result<T, E>
+where
+    E: From<UpdateInProgress>,
+    F: std::future::Future<Output = Result<T, E>>,
+{
+    let _permit = updater.admit(kind)?;
+    work.await
+}
+
+/// An admitted recording start or processing run; see [`UpdaterState::admit`].
+#[must_use = "the permit counts as activity only while it is held"]
+pub struct StartPermit<'a> {
+    state: &'a UpdaterState,
+    kind: StartKind,
+}
+
+impl Drop for StartPermit<'_> {
+    fn drop(&mut self) {
+        self.state.lock().end_start(self.kind);
     }
 }
 
@@ -493,67 +640,15 @@ fn announce(app: &AppHandle, downloaded: u64, total: Option<u64>) {
     }
 }
 
-/// Walks the pages `fetch` returns (each: the items from `offset` on, and the total count) and
-/// tells whether `is_running` holds for any item.
-pub async fn any_running<T, E, F, Fut>(
-    mut fetch: F,
-    is_running: impl Fn(&T) -> bool,
-) -> Result<bool, E>
-where
-    F: FnMut(usize) -> Fut,
-    Fut: std::future::Future<Output = Result<(Vec<T>, usize), E>>,
-{
-    let mut offset = 0;
-    loop {
-        let (items, total) = fetch(offset).await?;
-        if items.iter().any(&is_running) {
-            return Ok(true);
-        }
-        offset += items.len();
-        if items.is_empty() || offset >= total {
-            return Ok(false);
-        }
+/// What a restart would interrupt right now. Read it *after* the install gate was closed: the
+/// starts still in flight are read first and the live state after them, so a start that ends in
+/// between is seen as the recording or the run it became.
+fn current_activity(app: &AppHandle, state: &AppState, updater_state: &UpdaterState) -> Activity {
+    let in_flight = updater_state.starts_in_flight();
+    Activity {
+        recording: in_flight.recording || recording::is_busy(app),
+        processing: in_flight.processing || state.process_session.is_any_running(),
     }
-}
-
-/// Whether any session is being processed by this application right now.
-async fn processing_active(state: &AppState) -> Result<bool, UpdateError> {
-    let filter = SessionFilter {
-        status: Some(SessionStatus::Processing),
-        ..Default::default()
-    };
-    let filter = &filter;
-    any_running(
-        |offset| async move {
-            state
-                .list_sessions
-                .execute(
-                    filter,
-                    Page {
-                        offset,
-                        limit: MAX_PAGE_SIZE,
-                    },
-                )
-                .await
-                .map(|page| (page.items, page.total))
-        },
-        |item| state.process_session.is_running(&item.session.id),
-    )
-    .await
-    .map_err(|error| {
-        // Fail closed: when the answer is unknown the app is not restarted.
-        tracing::warn!(%error, "cannot tell whether a session is being processed");
-        UpdateError::Failed
-    })
-}
-
-/// What a restart would interrupt right now.
-async fn current_activity(app: &AppHandle, state: &AppState) -> Result<Activity, UpdateError> {
-    let processing = processing_active(state).await?;
-    Ok(Activity {
-        recording: recording::is_busy(app),
-        processing,
-    })
 }
 
 /// Installs the downloaded update and restarts the application. Refused while a recording or a
@@ -571,15 +666,23 @@ pub async fn install_update_and_restart(
     // `update_restart_pending`, not `update_blocked`, while something is still active).
     let already_installed = updater_state.lock().is_installed();
     if !already_installed {
-        let activity = current_activity(&app, &state).await?;
+        // Close the gate first, look at what is active second: nothing can start in between.
+        // Whatever stops the install from going through opens the gate again.
+        updater_state
+            .close_install_gate()
+            .inspect_err(|error| tracing::info!(%error, "the update install was refused"))?;
         let package = {
+            let activity = current_activity(&app, &state, &updater_state);
             let mut inner = updater_state.lock();
-            ensure_can_install(InstallContext {
+            if let Err(error) = ensure_can_install(InstallContext {
                 can_self_update: can_self_update(),
                 update_downloaded: inner.has_package(),
                 activity,
-            })
-            .inspect_err(|error| tracing::info!(%error, "the update install was refused"))?;
+            }) {
+                tracing::info!(%error, "the update install was refused");
+                inner.open_install_gate();
+                return Err(error.into());
+            }
             inner.take_for_install()
         };
 
@@ -593,6 +696,7 @@ pub async fn install_update_and_restart(
             })
             .await;
             match installed {
+                // The gate stays closed: only the restart is left.
                 Ok((_, Ok(()))) => updater_state.lock().mark_installed(),
                 Ok((package, Err(error))) => {
                     tracing::warn!(%error, "the update install failed");
@@ -601,16 +705,17 @@ pub async fn install_update_and_restart(
                 }
                 Err(error) => {
                     tracing::warn!(%error, "the update install task failed");
+                    updater_state.lock().open_install_gate();
                     return Err(UpdateError::Failed.into());
                 }
             }
         }
     }
 
-    // Installing takes a while and a recording or a processing run may have started meanwhile:
-    // look again right before the restart. When something is active the update stays installed
-    // and takes effect at the next start (or at a retry of this command once it is idle).
-    ensure_can_restart(current_activity(&app, &state).await).inspect_err(|error| {
+    // The gate keeps new starts out, but look once more right before the restart (a safety net
+    // for a start that does not take a permit). When something is active the update stays
+    // installed and takes effect at the next start (or at a retry of this command once idle).
+    ensure_can_restart(current_activity(&app, &state, &updater_state)).inspect_err(|error| {
         tracing::warn!(%error, "the update is installed; the restart is held back");
     })?;
     tracing::info!("the update was installed; restarting");

@@ -504,13 +504,14 @@ export type ErrorCode =
 "secret_value_missing" | 
 /**
  *  An update cannot be installed (or downloaded) right now: a recording or a processing
- *  run is active, or another download is running.
+ *  run is active, or another download or install is running.
  */
 "update_blocked" | 
 /**
- *  The update is installed but the restart is held back (a recording or a processing run
- *  started meanwhile); it takes effect at the next start, or when the install command is
- *  called again once the app is idle.
+ *  The update is installed but the restart is held back because activity was still seen
+ *  right before it. Not expected in the normal flow: while an
+ *  install runs no new recording or processing run can start. The update takes effect at
+ *  the next start, or when the install command is called again once the app is idle.
  */
 "update_restart_pending" | 
 /**  There is no update to download or install (check first, download before installing). */
@@ -739,6 +740,11 @@ export type ProcessingErrorCode =
 "provider_error" | 
 /**  The API key could not be read from the secret store. */
 "secret_unavailable" | 
+/**
+ *  An update is being installed (or waits for the restart): no processing run can start
+ *  until the application restarts.
+ */
+"update_in_progress" | 
 /**  Anything else; details are in the log. */
 "internal";
 
@@ -1023,6 +1029,11 @@ export type RecordingErrorCode =
 "capture_unsupported" | 
 /**  The capture backend failed. */
 "capture_failed" | 
+/**
+ *  An update is being installed (or waits for the restart): no recording can start or
+ *  resume until the application restarts.
+ */
+"update_in_progress" | 
 /**  Anything else; details are in the log. */
 "internal";
 

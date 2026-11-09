@@ -103,10 +103,14 @@ fn export_refusals_carry_a_typed_problem_code() {
 /// The update rules are pure functions (no `AppHandle`), so they are tested here, outside the
 /// lib (see the note at the top of this file).
 mod updates {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use tan_app_lib::commands::processing::{ProcessingErrorCode, ProcessingIpcError};
+    use tan_app_lib::commands::recording::{RecordingErrorCode, RecordingIpcError};
     use tan_app_lib::commands::updates::{
-        any_running, can_self_update_for, ensure_can_download, ensure_can_install,
-        ensure_can_restart, Activity, BlockedReason, DownloadContext, InstallContext, Slots,
-        UpdateError,
+        can_self_update_for, ensure_can_download, ensure_can_install, ensure_can_restart, gated,
+        Activity, BlockedReason, DownloadContext, InstallContext, Slots, StartKind, UpdateError,
+        UpdateInProgress, UpdaterState,
     };
     use tan_app_lib::error::{ErrorCode, IpcError};
 
@@ -204,9 +208,9 @@ mod updates {
     }
 
     #[test]
-    fn a_restart_after_the_install_is_held_back_when_busy_or_unsure() {
+    fn a_restart_after_the_install_is_held_back_when_busy() {
         let idle = Activity::default();
-        assert_eq!(ensure_can_restart(Ok(idle)), Ok(()));
+        assert_eq!(ensure_can_restart(idle), Ok(()));
         for busy in [
             Activity {
                 recording: true,
@@ -217,17 +221,9 @@ mod updates {
                 processing: true,
             },
         ] {
-            assert_eq!(
-                ensure_can_restart(Ok(busy)),
-                Err(UpdateError::RestartPending)
-            );
+            // The update is installed either way, so it is "pending", not "blocked".
+            assert_eq!(ensure_can_restart(busy), Err(UpdateError::RestartPending));
         }
-        // The activity could not be read: unknown, so the restart waits (fail closed). The
-        // update is installed either way, so it is "pending", not "failed".
-        assert_eq!(
-            ensure_can_restart(Err(UpdateError::Failed)),
-            Err(UpdateError::RestartPending)
-        );
     }
 
     #[test]
@@ -353,46 +349,246 @@ mod updates {
         assert!(!slots.is_installed());
     }
 
-    /// A fake paged list: `items` are served `page_size` at a time from the asked offset.
-    fn paged(
-        items: Vec<u32>,
-        page_size: usize,
-    ) -> impl FnMut(usize) -> std::future::Ready<Result<(Vec<u32>, usize), ()>> {
-        move |offset| {
-            let page = items.iter().skip(offset).take(page_size).copied().collect();
-            std::future::ready(Ok((page, items.len())))
+    fn downloaded_slots() -> Slots<String> {
+        let mut slots = slots_with_found("1.1.0");
+        slots.start_download(true).unwrap();
+        slots.finish_download("1.1.0", Some(("update 1.1.0".to_owned(), vec![1])));
+        slots
+    }
+
+    #[test]
+    fn without_an_install_every_start_is_admitted_as_before() {
+        let mut slots: Slots<String> = Slots::default();
+        assert!(!slots.is_install_gate_closed());
+        assert_eq!(slots.starts_in_flight(), Activity::default());
+        assert_eq!(slots.admit_start(StartKind::Recording), Ok(()));
+        assert_eq!(slots.admit_start(StartKind::Processing), Ok(()));
+        assert_eq!(slots.admit_start(StartKind::Processing), Ok(()));
+        assert_eq!(
+            slots.starts_in_flight(),
+            Activity {
+                recording: true,
+                processing: true
+            }
+        );
+        slots.end_start(StartKind::Recording);
+        slots.end_start(StartKind::Processing);
+        assert_eq!(
+            slots.starts_in_flight(),
+            Activity {
+                recording: false,
+                processing: true
+            },
+            "one processing run is still going"
+        );
+        slots.end_start(StartKind::Processing);
+        assert_eq!(slots.starts_in_flight(), Activity::default());
+        // Ending more than was admitted does not wrap around.
+        slots.end_start(StartKind::Recording);
+        assert_eq!(slots.starts_in_flight(), Activity::default());
+    }
+
+    #[test]
+    fn a_closed_install_gate_refuses_every_start_and_leaves_the_counts_alone() {
+        let mut slots = downloaded_slots();
+        slots.admit_start(StartKind::Recording).unwrap();
+        slots.close_install_gate().unwrap();
+        assert!(slots.is_install_gate_closed());
+        for kind in [StartKind::Recording, StartKind::Processing] {
+            assert_eq!(slots.admit_start(kind), Err(UpdateInProgress));
         }
+        // What was admitted before the gate closed is still seen (the install counts it as
+        // activity); nothing refused was counted.
+        assert_eq!(
+            slots.starts_in_flight(),
+            Activity {
+                recording: true,
+                processing: false
+            }
+        );
+        slots.end_start(StartKind::Recording);
+        assert_eq!(slots.starts_in_flight(), Activity::default());
     }
 
     #[test]
-    fn any_running_walks_every_page() {
-        let run = |items, page_size, running: u32| {
-            tauri::async_runtime::block_on(any_running(paged(items, page_size), |&id| {
-                id == running
-            }))
-        };
-        // Found on the last page.
-        assert_eq!(run(vec![1, 2, 3, 4, 5], 2, 5), Ok(true));
-        // Found on the first page.
-        assert_eq!(run(vec![1, 2, 3, 4, 5], 2, 1), Ok(true));
-        // Not there at all, with a page size that does not divide the total.
-        assert_eq!(run(vec![1, 2, 3, 4, 5], 2, 9), Ok(false));
-        // No sessions in the status.
-        assert_eq!(run(vec![], 2, 1), Ok(false));
+    fn a_second_install_cannot_take_the_gate_while_one_runs() {
+        let mut slots = downloaded_slots();
+        assert_eq!(slots.close_install_gate(), Ok(()));
+        assert_eq!(
+            slots.close_install_gate(),
+            Err(UpdateError::Blocked(BlockedReason::InstallRunning))
+        );
+        // A download would reset what the install is about to mark.
+        slots.record_found("1.2.0", "update 1.2.0".to_owned());
+        assert_eq!(
+            slots.start_download(true),
+            Err(UpdateError::Blocked(BlockedReason::InstallRunning))
+        );
     }
 
     #[test]
-    fn any_running_stops_on_an_empty_page_and_passes_errors_on() {
-        // A list that shrinks under the walk (total says 10, the page is empty) must not loop.
-        let shrinking = |_offset: usize| std::future::ready(Ok::<_, ()>((Vec::<u32>::new(), 10)));
+    fn a_refused_install_opens_the_gate_again() {
+        let mut slots = downloaded_slots();
+        slots.close_install_gate().unwrap();
+        slots.open_install_gate();
+        assert!(!slots.is_install_gate_closed());
+        assert_eq!(slots.admit_start(StartKind::Recording), Ok(()));
+        assert_eq!(slots.close_install_gate(), Ok(()), "and it can close again");
+    }
+
+    #[test]
+    fn a_failed_install_opens_the_gate_and_keeps_the_bundle() {
+        let mut slots = downloaded_slots();
+        slots.close_install_gate().unwrap();
+        let package = slots.take_for_install().expect("a bundle");
         assert_eq!(
-            tauri::async_runtime::block_on(any_running(shrinking, |_| true)),
-            Ok(false)
+            slots.admit_start(StartKind::Processing),
+            Err(UpdateInProgress)
         );
-        let failing = |_offset: usize| std::future::ready(Err::<(Vec<u32>, usize), _>("boom"));
+
+        slots.restore_after_failed_install(package);
+        assert!(!slots.is_install_gate_closed(), "the gate is open again");
+        assert!(slots.has_package(), "the install can be retried");
+        assert_eq!(slots.admit_start(StartKind::Recording), Ok(()));
+        assert_eq!(slots.admit_start(StartKind::Processing), Ok(()));
+    }
+
+    #[test]
+    fn a_successful_install_keeps_the_gate_closed_until_the_restart() {
+        let mut slots = downloaded_slots();
+        slots.close_install_gate().unwrap();
+        let _package = slots.take_for_install().unwrap();
+        slots.mark_installed();
+        assert!(slots.is_install_gate_closed());
         assert_eq!(
-            tauri::async_runtime::block_on(any_running(failing, |_| true)),
-            Err("boom")
+            slots.admit_start(StartKind::Recording),
+            Err(UpdateInProgress)
         );
+        assert_eq!(
+            slots.admit_start(StartKind::Processing),
+            Err(UpdateInProgress)
+        );
+        // A repeated install call goes straight to the restart check and does not reopen it.
+        assert!(slots.is_installed());
+        assert!(slots.is_install_gate_closed());
+    }
+
+    #[test]
+    fn a_new_download_after_an_install_lets_the_next_install_close_the_gate_again() {
+        let mut slots = downloaded_slots();
+        slots.close_install_gate().unwrap();
+        let _package = slots.take_for_install().unwrap();
+        slots.mark_installed();
+
+        slots.record_found("1.2.0", "update 1.2.0".to_owned());
+        slots.start_download(true).unwrap();
+        slots.finish_download("1.2.0", Some(("update 1.2.0".to_owned(), vec![2])));
+        assert!(!slots.is_installed());
+        assert!(!slots.is_install_gate_closed());
+        assert_eq!(slots.close_install_gate(), Ok(()));
+    }
+
+    #[test]
+    fn a_refused_start_says_update_in_progress_in_both_command_families() {
+        let refused = UpdateInProgress;
+        assert_eq!(
+            RecordingIpcError::from(refused).code,
+            RecordingErrorCode::UpdateInProgress
+        );
+        let processing = ProcessingIpcError::from(refused);
+        assert_eq!(processing.code, ProcessingErrorCode::UpdateInProgress);
+        assert!(processing.transcription_code.is_none());
+        assert!(RecordingIpcError::from(refused).message.contains("update"));
+    }
+
+    #[test]
+    fn a_permit_counts_as_activity_until_it_is_dropped_and_is_refused_once_the_gate_closed() {
+        let state = UpdaterState::default();
+        let recording = state.admit(StartKind::Recording).expect("admitted");
+        {
+            let _run = state.admit(StartKind::Processing).expect("admitted");
+            assert_eq!(
+                state.starts_in_flight(),
+                Activity {
+                    recording: true,
+                    processing: true
+                }
+            );
+        }
+        assert_eq!(
+            state.starts_in_flight(),
+            Activity {
+                recording: true,
+                processing: false
+            }
+        );
+
+        // The install closes the gate while the recording is still starting: it is refused
+        // nothing, but it is seen, and nothing new gets in.
+        state.close_install_gate().unwrap();
+        assert!(state.admit(StartKind::Recording).is_err());
+        assert!(state.admit(StartKind::Processing).is_err());
+        assert!(state.starts_in_flight().recording);
+        drop(recording);
+        assert_eq!(state.starts_in_flight(), Activity::default());
+    }
+
+    /// A start that reports whether the permit was held while it ran.
+    // `async` on purpose: the body must run only when the future is polled.
+    #[allow(clippy::unused_async)]
+    async fn observed_start(
+        state: &UpdaterState,
+        ran: &AtomicBool,
+    ) -> Result<Activity, UpdateInProgress> {
+        ran.store(true, Ordering::SeqCst);
+        Ok(state.starts_in_flight())
+    }
+
+    #[test]
+    fn gated_holds_the_permit_for_the_whole_start_and_releases_it_after() {
+        let state = UpdaterState::default();
+        let ran = AtomicBool::new(false);
+        let during = tauri::async_runtime::block_on(gated(&state, StartKind::Processing, {
+            observed_start(&state, &ran)
+        }))
+        .expect("admitted");
+        assert!(ran.load(Ordering::SeqCst));
+        assert_eq!(
+            during,
+            Activity {
+                recording: false,
+                processing: true
+            },
+            "the run counts as activity while it lasts"
+        );
+        assert_eq!(state.starts_in_flight(), Activity::default(), "released");
+
+        let during = tauri::async_runtime::block_on(gated(&state, StartKind::Recording, {
+            observed_start(&state, &ran)
+        }))
+        .expect("admitted");
+        assert!(during.recording && !during.processing);
+        assert_eq!(state.starts_in_flight(), Activity::default());
+    }
+
+    #[test]
+    fn gated_refuses_without_running_the_start_while_the_gate_is_closed() {
+        let state = UpdaterState::default();
+        state.close_install_gate().unwrap();
+        for kind in [StartKind::Recording, StartKind::Processing] {
+            let ran = AtomicBool::new(false);
+            let result = tauri::async_runtime::block_on(gated(&state, kind, {
+                observed_start(&state, &ran)
+            }));
+            assert_eq!(result, Err(UpdateInProgress));
+            assert!(!ran.load(Ordering::SeqCst), "the start must not run");
+        }
+        assert_eq!(state.starts_in_flight(), Activity::default());
+    }
+
+    #[test]
+    fn a_blocked_install_names_its_reason() {
+        let error = UpdateError::Blocked(BlockedReason::InstallRunning);
+        assert_eq!(IpcError::from(error).code, ErrorCode::UpdateBlocked);
     }
 }

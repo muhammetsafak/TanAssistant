@@ -32,11 +32,12 @@ pub enum ErrorCode {
     /// The vault holds no value for a secret that exists in the database.
     SecretValueMissing,
     /// An update cannot be installed (or downloaded) right now: a recording or a processing
-    /// run is active, or another download is running.
+    /// run is active, or another download or install is running.
     UpdateBlocked,
-    /// The update is installed but the restart is held back (a recording or a processing run
-    /// started meanwhile); it takes effect at the next start, or when the install command is
-    /// called again once the app is idle.
+    /// The update is installed but the restart is held back because activity was still seen
+    /// right before it. Not expected in the normal flow: while an
+    /// install runs no new recording or processing run can start. The update takes effect at
+    /// the next start, or when the install command is called again once the app is idle.
     UpdateRestartPending,
     /// There is no update to download or install (check first, download before installing).
     UpdateNotFound,
