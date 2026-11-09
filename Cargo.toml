@@ -50,6 +50,7 @@ tokio = "1"
 base64 = "0.23"
 wiremock = "0.6"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+tracing-appender = "0.2"
 
 # Third-party (cloud transcription chunking phase)
 flacenc = { version = "0.5", default-features = false }

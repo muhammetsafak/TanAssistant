@@ -2,6 +2,7 @@
 
 pub mod commands;
 pub mod error;
+pub mod logging;
 pub mod state;
 pub mod tray;
 
@@ -122,6 +123,18 @@ fn spawn_retention(retention: std::sync::Arc<state::Retention>) {
     }
 }
 
+/// IPC commands the UI polls every few seconds; logged at `debug` to keep the log readable.
+const POLLED_COMMANDS: &[&str] = &["display_thumbnail", "processing_status", "recording_status"];
+
+/// Records each IPC command the UI calls (its name only: arguments may hold secrets).
+fn log_command(command: &str) {
+    if POLLED_COMMANDS.contains(&command) {
+        tracing::debug!(command, "ipc command");
+    } else {
+        tracing::info!(command, "ipc command");
+    }
+}
+
 /// Set once a requested exit has waited for the running recording (so it exits only once).
 static EXIT_SETTLED: AtomicBool = AtomicBool::new(false);
 
@@ -131,7 +144,13 @@ static EXIT_SETTLED: AtomicBool = AtomicBool::new(false);
 ///
 /// Panics if the Tauri runtime fails to start.
 pub fn run() {
+    // Logging comes first so that a failure anywhere after this point leaves a trace.
+    match resolve_layout() {
+        Ok(layout) => logging::init(&logging::logs_dir(layout.root())),
+        Err(error) => eprintln!("cannot resolve the data directory for logs: {error}"),
+    }
     let builder = ipc_builder();
+    let invoke_handler = builder.invoke_handler();
 
     tauri::Builder::default()
         // Must be the first plugin: a second launch brings the running window forward and
@@ -142,7 +161,10 @@ pub fn run() {
         }))
         // The "save as" dialog of the Markdown export (the capability allows `save` only).
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(builder.invoke_handler())
+        .invoke_handler(move |invoke| {
+            log_command(invoke.message.command());
+            invoke_handler(invoke)
+        })
         .on_window_event(|window, event| {
             // A recording must outlive its window: while one runs, closing the window only
             // hides it (the tray icon stays and offers stop / show / quit).

@@ -8,6 +8,12 @@ both, and the tag) and `src-tauri/tauri.conf.json` has no `version` of its own.
 
 ## [Unreleased]
 
+### Added
+
+- Diagnostic log: every operation and error is written with a UTC timestamp to a daily file in
+  the `logs/` folder of the data directory (`tan.YYYY-MM-DD.log`), including panics with their
+  backtrace. Files older than 45 days are deleted automatically; `TAN_LOG` changes the level.
+
 ## [0.1.0] - 2026-11-09
 
 First version.
