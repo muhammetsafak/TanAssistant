@@ -1,6 +1,6 @@
 name: Release
 
-# A `v*` tag builds the installers of all three systems and collects them in a draft GitHub
+# A `v*` tag builds the installers of all three systems and publishes them in a GitHub
 # release. A manual run builds the same bundles and keeps them as workflow artifacts only (no
 # release), which is how the pipeline is tried without publishing a tag.
 #
@@ -294,9 +294,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # Only a tag run publishes: a draft release holding every installer and a checksum file.
+  # Only a tag run publishes: the GitHub release holding every installer and a checksum file.
   release:
-    name: Draft release
+    name: Publish release
     if: github.ref_type == 'tag'
     needs: bundle
     runs-on: ubuntu-latest
@@ -308,7 +308,7 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Create the draft release
+      - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -319,7 +319,7 @@ jobs:
           find . -mindepth 1 -type d -empty -delete
           ls -l
           sha256sum * > SHA256SUMS.txt
-          flags=(--draft --verify-tag --title "Tan ${GITHUB_REF_NAME#v}" --generate-notes)
+          flags=(--verify-tag --title "Tan ${GITHUB_REF_NAME#v}" --generate-notes)
           # `v0.1.0-rc.1` and similar are pre-releases.
           case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" "${flags[@]}" --repo "$GITHUB_REPOSITORY" ./*

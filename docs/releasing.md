@@ -20,9 +20,10 @@ Use `vX.Y.Z-rc.1` for a pre-release.
 ## Release Workflow
 
 `.github/workflows/release.yml` builds the Windows NSIS installer, the macOS `.app` and `.dmg`
-(Apple Silicon) and the Linux `.deb` and AppImage on their own runners, and opens a draft GitHub
-release with the files and `SHA256SUMS.txt`; publish it by hand. *Actions > Release > Run
-workflow* builds the same bundles without a tag and without a release (artifacts only).
+(Apple Silicon) and the Linux `.deb` and AppImage on their own runners, and publishes a GitHub
+release with the files and `SHA256SUMS.txt` (a pre-release for `-rc` style tags).
+*Actions > Release > Run workflow* builds the same bundles without a tag and
+without a release (artifacts only).
 
 Release bundles use the GPU backends (Vulkan on Windows and Linux, Metal on macOS) and the
 portable CPU baseline of `.cargo/config.toml`.
