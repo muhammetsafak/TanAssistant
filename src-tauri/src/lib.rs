@@ -74,6 +74,10 @@ pub fn ipc_builder() -> Builder<tauri::Wry> {
             commands::sessions::export_session_audio,
             commands::sessions::get_storage_usage,
             commands::sessions::delete_session,
+            commands::updates::check_for_update,
+            commands::updates::download_update,
+            commands::updates::install_update_and_restart,
+            commands::updates::open_release_page,
         ])
         .events(collect_events![
             commands::recording::RecordingProgressEvent,
@@ -82,6 +86,7 @@ pub fn ipc_builder() -> Builder<tauri::Wry> {
             commands::transcription::WhisperModelDownloadEvent,
             commands::transcription::TranscriptionProgressEvent,
             commands::processing::ProcessingProgressEvent,
+            commands::updates::UpdateDownloadProgress,
         ])
 }
 
@@ -162,6 +167,9 @@ pub fn run() {
         }))
         // The "save as" dialog of the Markdown export (the capability allows `save` only).
         .plugin(tauri_plugin_dialog::init())
+        // Updates (ADR-012). The endpoint and the public key come from `tauri.conf.json`; the
+        // UI reaches the updater only through the commands of `commands::updates`.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(move |invoke| {
             log_command(invoke.message.command());
             invoke_handler(invoke)
@@ -212,6 +220,7 @@ pub fn run() {
                 .map_or(UiLanguage::Tr, |settings| settings.ui_language);
             let retention = state.apply_retention.clone();
             app.manage(state);
+            app.manage(commands::updates::UpdaterState::default());
             spawn_retention(retention);
             // The tray is a convenience; the app works without it.
             if let Err(error) = tray::init(app.handle(), ui_language) {

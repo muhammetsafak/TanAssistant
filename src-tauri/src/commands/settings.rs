@@ -56,6 +56,8 @@ pub struct AppSettingsDto {
     pub audio_retention_days: Option<u32>,
     /// Whether the recording-consent notice was acknowledged.
     pub consent_notice_acknowledged: bool,
+    /// Check for a new release at startup and now and then while the app runs.
+    pub auto_check_updates: bool,
 }
 
 impl From<AppSettings> for AppSettingsDto {
@@ -69,6 +71,7 @@ impl From<AppSettings> for AppSettingsDto {
             auto_process_after_recording: settings.auto_process_after_recording,
             audio_retention_days: settings.audio_retention_days,
             consent_notice_acknowledged: settings.consent_notice_acknowledged,
+            auto_check_updates: settings.auto_check_updates,
         }
     }
 }
@@ -101,6 +104,8 @@ pub struct SettingsPatchDto {
     pub audio_retention: Option<RetentionPatchDto>,
     /// New consent-acknowledged flag.
     pub consent_notice_acknowledged: Option<bool>,
+    /// New automatic-update-check flag.
+    pub auto_check_updates: Option<bool>,
 }
 
 impl SettingsPatchDto {
@@ -126,6 +131,7 @@ impl SettingsPatchDto {
             auto_process_after_recording: self.auto_process_after_recording,
             audio_retention_days: self.audio_retention.map(|r| r.days),
             consent_notice_acknowledged: self.consent_notice_acknowledged,
+            auto_check_updates: self.auto_check_updates,
         })
     }
 }

@@ -19,6 +19,7 @@ const FRAME_CHANGE_THRESHOLD: &str = "frame_change_threshold";
 const AUTO_PROCESS_AFTER_RECORDING: &str = "auto_process_after_recording";
 const AUDIO_RETENTION_DAYS: &str = "audio_retention_days";
 const CONSENT_NOTICE_ACKNOWLEDGED: &str = "consent_notice_acknowledged";
+const AUTO_CHECK_UPDATES: &str = "auto_check_updates";
 
 fn corrupt(key: &str, value: &str, reason: impl std::fmt::Display) -> DbError {
     RepositoryError::CorruptData(format!(
@@ -58,6 +59,7 @@ fn apply_stored(settings: &mut AppSettings, key: &str, value: &str) -> Result<()
         CONSENT_NOTICE_ACKNOWLEDGED => {
             settings.consent_notice_acknowledged = parse_bool(key, value)?;
         }
+        AUTO_CHECK_UPDATES => settings.auto_check_updates = parse_bool(key, value)?,
         _ => {}
     }
     Ok(())
@@ -154,6 +156,13 @@ fn write_patch(
             conn,
             CONSENT_NOTICE_ACKNOWLEDGED,
             &next.consent_notice_acknowledged.to_string(),
+        )?;
+    }
+    if patch.auto_check_updates.is_some() {
+        put(
+            conn,
+            AUTO_CHECK_UPDATES,
+            &next.auto_check_updates.to_string(),
         )?;
     }
     Ok(())

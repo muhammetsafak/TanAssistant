@@ -32,6 +32,7 @@ function settings(uiLanguage: 'tr' | 'en') {
     autoProcessAfterRecording: true,
     audioRetentionDays: null,
     consentNoticeAcknowledged: true,
+    autoCheckUpdates: true,
   };
 }
 

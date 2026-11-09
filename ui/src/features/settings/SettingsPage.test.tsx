@@ -33,6 +33,7 @@ const settings = {
   autoProcessAfterRecording: true,
   audioRetentionDays: null,
   consentNoticeAcknowledged: true,
+  autoCheckUpdates: true,
 };
 
 const MB = 1024 * 1024;

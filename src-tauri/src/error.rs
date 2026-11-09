@@ -31,6 +31,19 @@ pub enum ErrorCode {
     SecretStoreUnavailable,
     /// The vault holds no value for a secret that exists in the database.
     SecretValueMissing,
+    /// An update cannot be installed (or downloaded) right now: a recording or a processing
+    /// run is active, or another download is running.
+    UpdateBlocked,
+    /// The update is installed but the restart is held back (a recording or a processing run
+    /// started meanwhile); it takes effect at the next start, or when the install command is
+    /// called again once the app is idle.
+    UpdateRestartPending,
+    /// There is no update to download or install (check first, download before installing).
+    UpdateNotFound,
+    /// This installation cannot update itself (a `.deb` install); use the release page.
+    UpdateUnsupported,
+    /// Checking, downloading, verifying or installing the update failed; details are in the log.
+    UpdateFailed,
     /// Anything else; details are in the log.
     Internal,
 }

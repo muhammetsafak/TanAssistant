@@ -7,6 +7,7 @@ pub mod recording;
 pub mod sessions;
 pub mod settings;
 pub mod transcription;
+pub mod updates;
 
 /// Returns the application version (from the crate manifest).
 #[tauri::command]

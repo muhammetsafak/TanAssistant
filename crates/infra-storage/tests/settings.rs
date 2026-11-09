@@ -173,3 +173,35 @@ fn out_of_range_stored_values_are_reported_and_a_patch_can_repair_them() {
     assert_eq!(healed.frame_interval_ms, 2_000);
     assert_eq!(healed.audio_retention_days, None);
 }
+
+#[test]
+fn update_check_defaults_to_on_and_the_choice_persists() {
+    let t = test_db();
+    let repo = SqliteSettingsRepository::new(t.db.clone());
+    // No stored row: the domain default applies.
+    assert!(block_on(repo.load()).unwrap().auto_check_updates);
+
+    let off = block_on(repo.update(&SettingsPatch {
+        auto_check_updates: Some(false),
+        ..SettingsPatch::default()
+    }))
+    .unwrap();
+    assert!(!off.auto_check_updates);
+
+    // A patch that does not mention it leaves it alone, and a reopened file still reads it.
+    block_on(repo.update(&SettingsPatch {
+        ui_language: Some(UiLanguage::En),
+        ..SettingsPatch::default()
+    }))
+    .unwrap();
+    let reopened = SqliteSettingsRepository::new(Database::open(&t.path).unwrap());
+    assert!(!block_on(reopened.load()).unwrap().auto_check_updates);
+
+    let on = block_on(repo.update(&SettingsPatch {
+        auto_check_updates: Some(true),
+        ..SettingsPatch::default()
+    }))
+    .unwrap();
+    assert!(on.auto_check_updates);
+    assert!(block_on(reopened.load()).unwrap().auto_check_updates);
+}

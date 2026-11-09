@@ -36,7 +36,16 @@ tauri-plugin-dialog = "2"
 # A second launch must not open a second process: it would share the database and the
 # capture devices, and its startup recovery would mark the live recording as finished.
 tauri-plugin-single-instance = "2"
+# In-app updates (ADR-012): checks `latest.json`, downloads and verifies the signed bundle.
+# The endpoint and the public key come from `tauri.conf.json` only. The plugin's JS API is not
+# opened to the UI; the UI uses the typed commands of `commands::updates`.
+tauri-plugin-updater = "2"
+# Opens the release page in the system browser from Rust. Deliberately not registered as a
+# plugin: the UI gets no opener commands (the URL is a constant in `commands::updates`).
+tauri-plugin-opener = "2"
 serde.workspace = true
+# `tauri::generate_context!` embeds the `plugins` section of `tauri.conf.json` as JSON values.
+serde_json.workspace = true
 tracing.workspace = true
 # The diagnostic log: daily files under `<data>/logs/` (see `logging.rs`).
 tracing-subscriber.workspace = true

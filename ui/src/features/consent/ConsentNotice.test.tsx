@@ -21,6 +21,7 @@ function settings(consentNoticeAcknowledged: boolean) {
     autoProcessAfterRecording: true,
     audioRetentionDays: null,
     consentNoticeAcknowledged,
+    autoCheckUpdates: true,
   };
 }
 

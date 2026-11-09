@@ -37,6 +37,7 @@ const settings = {
   autoProcessAfterRecording: true,
   audioRetentionDays: null,
   consentNoticeAcknowledged: true,
+  autoCheckUpdates: true,
 };
 
 const active = {

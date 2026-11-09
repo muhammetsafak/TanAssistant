@@ -31,6 +31,8 @@ pub struct AppSettings {
     pub audio_retention_days: Option<u32>,
     /// Whether the user acknowledged the recording-consent notice (shown once).
     pub consent_notice_acknowledged: bool,
+    /// Check for a new release at startup and now and then while the app runs.
+    pub auto_check_updates: bool,
 }
 
 impl Default for AppSettings {
@@ -44,6 +46,7 @@ impl Default for AppSettings {
             auto_process_after_recording: true,
             audio_retention_days: None,
             consent_notice_acknowledged: false,
+            auto_check_updates: true,
         }
     }
 }
@@ -67,6 +70,8 @@ pub struct SettingsPatch {
     pub audio_retention_days: Option<Option<u32>>,
     /// New consent-acknowledged flag.
     pub consent_notice_acknowledged: Option<bool>,
+    /// New automatic-update-check flag.
+    pub auto_check_updates: Option<bool>,
 }
 
 /// A settings value is out of its allowed range.
@@ -147,6 +152,9 @@ impl AppSettings {
         if let Some(v) = patch.consent_notice_acknowledged {
             next.consent_notice_acknowledged = v;
         }
+        if let Some(v) = patch.auto_check_updates {
+            next.auto_check_updates = v;
+        }
         next.validate()?;
         Ok(next)
     }
@@ -166,6 +174,25 @@ mod tests {
         assert_eq!(d.default_speech_language, LanguageSetting::Auto);
         assert_eq!(d.audio_retention_days, None);
         assert!(!d.consent_notice_acknowledged);
+        assert!(d.auto_check_updates);
+    }
+
+    #[test]
+    fn patch_toggles_the_update_check_flag() {
+        let off = AppSettings::default()
+            .patched(&SettingsPatch {
+                auto_check_updates: Some(false),
+                ..SettingsPatch::default()
+            })
+            .unwrap();
+        assert!(!off.auto_check_updates);
+        let on = off
+            .patched(&SettingsPatch {
+                auto_check_updates: Some(true),
+                ..SettingsPatch::default()
+            })
+            .unwrap();
+        assert!(on.auto_check_updates);
     }
 
     #[test]

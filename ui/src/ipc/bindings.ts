@@ -186,6 +186,23 @@ export const commands = {
 	 *  recorded or processed is refused.
 	 */
 	deleteSession: (sessionId: string, confirm: boolean) => typedError<null, SessionsIpcError_Serialize>(__TAURI_INVOKE("delete_session", { sessionId, confirm })),
+	/**  Asks the update endpoint whether a newer version exists. */
+	checkForUpdate: () => typedError<UpdateInfo_Serialize, IpcError>(__TAURI_INVOKE("check_for_update")),
+	/**
+	 *  Downloads the update the last check found and verifies its signature. Progress arrives as
+	 *  [`UpdateDownloadProgress`] events. A second download while one runs is refused.
+	 */
+	downloadUpdate: () => typedError<null, IpcError>(__TAURI_INVOKE("download_update")),
+	/**
+	 *  Installs the downloaded update and restarts the application. Refused while a recording or a
+	 *  processing run is active.
+	 */
+	installUpdateAndRestart: () => typedError<null, IpcError>(__TAURI_INVOKE("install_update_and_restart")),
+	/**
+	 *  Opens the release page in the system browser, for installations that cannot update
+	 *  themselves. The address is fixed: the UI cannot choose it.
+	 */
+	openReleasePage: () => typedError<null, IpcError>(__TAURI_INVOKE("open_release_page")),
 };
 
 /** Events */
@@ -195,6 +212,7 @@ export const events = {
 	recordingStateEvent: makeEvent<RecordingStateEvent, RecordingStateEvent>("recording-state-event"),
 	recordingWarningEvent: makeEvent<RecordingWarningEvent, RecordingWarningEvent>("recording-warning-event"),
 	transcriptionProgressEvent: makeEvent<TranscriptionProgressEvent_Serialize, TranscriptionProgressEvent_Deserialize>("transcription-progress-event"),
+	updateDownloadProgress: makeEvent<UpdateDownloadProgress_Serialize, UpdateDownloadProgress_Deserialize>("update-download-progress"),
 	whisperModelDownloadEvent: makeEvent<WhisperModelDownloadEvent, WhisperModelDownloadEvent>("whisper-model-download-event"),
 };
 
@@ -306,6 +324,8 @@ export type AppSettingsDto_Deserialize = {
 	audioRetentionDays?: number | null,
 	/**  Whether the recording-consent notice was acknowledged. */
 	consentNoticeAcknowledged: boolean,
+	/**  Check for a new release at startup and now and then while the app runs. */
+	autoCheckUpdates: boolean,
 };
 
 /**  The application settings. */
@@ -326,6 +346,8 @@ export type AppSettingsDto_Serialize = {
 	audioRetentionDays: number | null,
 	/**  Whether the recording-consent notice was acknowledged. */
 	consentNoticeAcknowledged: boolean,
+	/**  Check for a new release at startup and now and then while the app runs. */
+	autoCheckUpdates: boolean,
 };
 
 /**  A selectable microphone. */
@@ -480,6 +502,23 @@ export type ErrorCode =
 "secret_store_unavailable" | 
 /**  The vault holds no value for a secret that exists in the database. */
 "secret_value_missing" | 
+/**
+ *  An update cannot be installed (or downloaded) right now: a recording or a processing
+ *  run is active, or another download is running.
+ */
+"update_blocked" | 
+/**
+ *  The update is installed but the restart is held back (a recording or a processing run
+ *  started meanwhile); it takes effect at the next start, or when the install command is
+ *  called again once the app is idle.
+ */
+"update_restart_pending" | 
+/**  There is no update to download or install (check first, download before installing). */
+"update_not_found" | 
+/**  This installation cannot update itself (a `.deb` install); use the release page. */
+"update_unsupported" | 
+/**  Checking, downloading, verifying or installing the update failed; details are in the log. */
+"update_failed" | 
 /**  Anything else; details are in the log. */
 "internal";
 
@@ -1432,6 +1471,8 @@ export type SettingsPatchDto_Deserialize = {
 	audioRetention?: RetentionPatchDto_Deserialize | null,
 	/**  New consent-acknowledged flag. */
 	consentNoticeAcknowledged?: boolean | null,
+	/**  New automatic-update-check flag. */
+	autoCheckUpdates?: boolean | null,
 };
 
 /**  A partial settings update: only the fields that are present change. */
@@ -1452,6 +1493,8 @@ export type SettingsPatchDto_Serialize = {
 	audioRetention: RetentionPatchDto_Serialize | null,
 	/**  New consent-acknowledged flag. */
 	consentNoticeAcknowledged: boolean | null,
+	/**  New automatic-update-check flag. */
+	autoCheckUpdates: boolean | null,
 };
 
 /**
@@ -1802,6 +1845,64 @@ export type UiLanguageDto =
 "tr" | 
 /**  English. */
 "en";
+
+/**  Emitted while an update downloads (about five times a second, plus at the start and end). */
+export type UpdateDownloadProgress = UpdateDownloadProgress_Serialize | UpdateDownloadProgress_Deserialize;
+
+/**  Emitted while an update downloads (about five times a second, plus at the start and end). */
+export type UpdateDownloadProgress_Deserialize = {
+	/**  Bytes received so far. */
+	downloaded: number,
+	/**  Total size, when the server states it. */
+	total?: number | null,
+};
+
+/**  Emitted while an update downloads (about five times a second, plus at the start and end). */
+export type UpdateDownloadProgress_Serialize = {
+	/**  Bytes received so far. */
+	downloaded: number,
+	/**  Total size, when the server states it. */
+	total: number | null,
+};
+
+/**  The result of a check. */
+export type UpdateInfo = UpdateInfo_Serialize | UpdateInfo_Deserialize;
+
+/**  The result of a check. */
+export type UpdateInfo_Deserialize = {
+	/**  Whether a newer version exists. */
+	available: boolean,
+	/**  The running version. */
+	currentVersion: string,
+	/**  The newer version, when there is one. */
+	version?: string | null,
+	/**  Its release notes (plain text), when it has any. */
+	notes?: string | null,
+	/**  Its publication date as the manifest states it (RFC 3339), when it has one. */
+	pubDate?: string | null,
+	/**  Whether this installation can download and install it itself. */
+	canSelfUpdate: boolean,
+	/**  The release page, for installations that cannot update themselves. */
+	releaseUrl: string,
+};
+
+/**  The result of a check. */
+export type UpdateInfo_Serialize = {
+	/**  Whether a newer version exists. */
+	available: boolean,
+	/**  The running version. */
+	currentVersion: string,
+	/**  The newer version, when there is one. */
+	version: string | null,
+	/**  Its release notes (plain text), when it has any. */
+	notes: string | null,
+	/**  Its publication date as the manifest states it (RFC 3339), when it has one. */
+	pubDate: string | null,
+	/**  Whether this installation can download and install it itself. */
+	canSelfUpdate: boolean,
+	/**  The release page, for installations that cannot update themselves. */
+	releaseUrl: string,
+};
 
 /**  Input to update a secret; omitted (null) fields stay unchanged. */
 export type UpdateSecretDto = UpdateSecretDto_Serialize | UpdateSecretDto_Deserialize;
