@@ -6,6 +6,10 @@ name: Release
 #
 # Signing is optional. Without the Apple secrets the macOS bundle is built unsigned (ad-hoc
 # signed by Tauri) and the log says so; see "Releasing" in the README for the secret names.
+#
+# The in-app updater needs every bundle signed with the minisign key of
+# TAURI_SIGNING_PRIVATE_KEY (see docs/releasing.md). Without it the bundles are still built, but
+# no update files and no `latest.json` are produced, and the log says so.
 
 on:
   push:
@@ -192,6 +196,9 @@ jobs:
           APPLE_TEAM_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_TEAM_ID || '' }}
           # linuxdeploy's `strip` fails on the newer binutils of the runner image.
           NO_STRIP: 'true'
+          # Updater signing: the minisign private key (the file's content) and its password.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           # An empty CARGO_TARGET_DIR (non-Windows) would be read as a path.
           [ -n "${CARGO_TARGET_DIR:-}" ] || unset CARGO_TARGET_DIR
@@ -215,6 +222,20 @@ jobs:
             fi
           fi
           extra=()
+          # `createUpdaterArtifacts` makes Tauri sign the bundles with the minisign key and fail
+          # without one. A run without the secrets (a fork, a manual try) still has to build the
+          # installers, so the update files are switched off for it.
+          [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || unset TAURI_SIGNING_PRIVATE_KEY
+          [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] || unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "Updater: the bundles will be signed for the in-app updater."
+            if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+              echo "::warning::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not configured: fine for a key without a password, the signing fails for a protected one."
+            fi
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not configured: no update files (.sig, .app.tar.gz) are built and the release gets no latest.json, so installed copies will not see this version."
+            extra+=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
+          fi
           if [ "$RUNNER_OS" = Linux ]; then
             # The package is linked against the glibc of this runner image; `dpkg-shlibdeps` is not
             # run by Tauri, so declare that floor, or an older Ubuntu installs the .deb without
@@ -227,7 +248,7 @@ jobs:
               const depends = [...deb.depends, `libc6 (>= ${process.argv[1]})`];
               console.log(JSON.stringify({ bundle: { linux: { deb: { depends } } } }));
             ' "$glibc" > "$RUNNER_TEMP/deb-libc.json"
-            extra=(--config "$RUNNER_TEMP/deb-libc.json")
+            extra+=(--config "$RUNNER_TEMP/deb-libc.json")
           fi
           # The Tauri CLI must run from the repository root; call the binary `npm ci` installed.
           ./ui/node_modules/.bin/tauri build --features "${{ matrix.features }}" --bundles "${{ matrix.bundles }}" "${extra[@]}"
@@ -288,13 +309,18 @@ jobs:
           name: ${{ matrix.artifact }}
           path: |
             ${{ steps.bundles.outputs.dir }}/nsis/*.exe
+            ${{ steps.bundles.outputs.dir }}/nsis/*.exe.sig
             ${{ steps.bundles.outputs.dir }}/dmg/*.dmg
+            ${{ steps.bundles.outputs.dir }}/macos/*.app.tar.gz
+            ${{ steps.bundles.outputs.dir }}/macos/*.app.tar.gz.sig
             ${{ steps.bundles.outputs.dir }}/deb/*.deb
             ${{ steps.bundles.outputs.dir }}/appimage/*.AppImage
+            ${{ steps.bundles.outputs.dir }}/appimage/*.AppImage.sig
           if-no-files-found: error
           retention-days: 14
 
-  # Only a tag run publishes: the GitHub release holding every installer and a checksum file.
+  # Only a tag run publishes: the GitHub release holding every installer, the signed update
+  # files, `latest.json` (what the in-app updater reads) and a checksum file.
   release:
     name: Publish release
     if: github.ref_type == 'tag'
@@ -308,16 +334,65 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Create the release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Flatten the bundles
+        working-directory: dist
         run: |
-          cd dist
-          # Artifacts keep their bundle folders (nsis/, dmg/, deb/, appimage/): flatten them so
-          # the checksum file and the release hold the installers themselves.
+          # Artifacts keep their bundle folders (nsis/, dmg/, deb/, appimage/, macos/): flatten
+          # them so the checksum file and the release hold the files themselves.
           find . -mindepth 2 -type f -exec mv -n -t . {} +
           find . -mindepth 1 -type d -empty -delete
           ls -l
+
+      # The manifest the updater plugin downloads from the `latest` release. Every platform
+      # entry needs the signature (the content of its `.sig`) and the URL of the update file;
+      # one missing signature (the key secret was not configured) means no manifest at all, as
+      # a half-filled one would break the update check of the platform that is missing.
+      - name: Write latest.json
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          win=(*.exe.sig)
+          mac=(*.app.tar.gz.sig)
+          linux=(*.AppImage.sig)
+          if [ "${#win[@]}" -ne 1 ] || [ "${#mac[@]}" -ne 1 ] || [ "${#linux[@]}" -ne 1 ]; then
+            echo "::warning::update signatures found: windows=${#win[@]} macos=${#mac[@]} linux=${#linux[@]} (one each expected): latest.json is NOT written, installed copies will not see this release."
+            exit 0
+          fi
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          signature() {
+            local sig
+            sig="$(tr -d '\r\n' < "$1")"
+            [ -n "$sig" ] || { echo "::error::$1 is empty" >&2; exit 1; }
+            printf '%s' "$sig"
+          }
+          # Assigned first: a failure inside an argument's `$(...)` would not stop the step.
+          win_sig="$(signature "${win[0]}")"
+          mac_sig="$(signature "${mac[0]}")"
+          linux_sig="$(signature "${linux[0]}")"
+          jq -n \
+            --arg version "${GITHUB_REF_NAME#v}" \
+            --arg notes "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg win_sig "$win_sig" --arg win_url "$base/${win[0]%.sig}" \
+            --arg mac_sig "$mac_sig" --arg mac_url "$base/${mac[0]%.sig}" \
+            --arg linux_sig "$linux_sig" --arg linux_url "$base/${linux[0]%.sig}" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "windows-x86_64": {signature: $win_sig, url: $win_url},
+                "darwin-aarch64": {signature: $mac_sig, url: $mac_url},
+                "linux-x86_64": {signature: $linux_sig, url: $linux_url}
+              }
+            }' > latest.json
+          cat latest.json
+
+      - name: Create the release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           sha256sum * > SHA256SUMS.txt
           flags=(--verify-tag --title "Tan ${GITHUB_REF_NAME#v}" --generate-notes)
           # `v0.1.0-rc.1` and similar are pre-releases.

@@ -28,8 +28,18 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDExQUVEMzQxMTcyNzdCNEUKUldST2V5Y1hRZE91RWJOR3kzZ2FoZjVmSTVJWTF0ZmRFbENUUm5FbmxsTWtLdVRRUCsxdWptWDMK",
+      "endpoints": [
+        "https://github.com/muhammetsafak/TanAssistant/releases/latest/download/latest.json"
+      ],
+      "windows": { "installMode": "passive" }
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis", "app", "dmg", "deb", "appimage"],
     "category": "Productivity",
     "publisher": "Muhammet Safak",

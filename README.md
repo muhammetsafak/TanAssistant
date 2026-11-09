@@ -45,10 +45,16 @@ with a one-time recording notice. A development build transcribes on the CPU; ad
 There is no published release yet. Until the first release, build the app from source:
 
 ```bash
-./ui/node_modules/.bin/tauri build --features metal --bundles app,dmg        # macOS
-./ui/node_modules/.bin/tauri build --features vulkan --bundles nsis          # Windows
-./ui/node_modules/.bin/tauri build --features vulkan --bundles deb,appimage  # Linux
+cfg='{"bundle":{"createUpdaterArtifacts":false}}'  # no updater signing key on this machine
+./ui/node_modules/.bin/tauri build --features metal --bundles app,dmg --config "$cfg"        # macOS
+./ui/node_modules/.bin/tauri build --features vulkan --bundles nsis --config "$cfg"          # Windows
+./ui/node_modules/.bin/tauri build --features vulkan --bundles deb,appimage --config "$cfg"  # Linux
 ```
+
+The `--config` switches the update files off; without it `tauri build` fails without the
+project's signing key (see [Releasing](docs/releasing.md#building-the-bundles-locally)). The
+commands are bash: on Windows run them in Git Bash, as PowerShell does not take the `cfg=...`
+assignment or the single-quoted JSON the same way.
 
 Requirements:
 
