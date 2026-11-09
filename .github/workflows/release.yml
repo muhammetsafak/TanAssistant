@@ -266,7 +266,7 @@ jobs:
               || { echo "::error::$key is missing from Info.plist"; exit 1; }
           done
           codesign -dv --entitlements - "$app" 2>&1 || true
-          if codesign -dv "$app" 2>&1 | grep -q 'Authority=Developer ID Application'; then
+          if codesign -dvv "$app" 2>&1 | grep -q 'Authority=Developer ID Application'; then
             codesign --verify --deep --strict --verbose=2 "$app"
             spctl -a -vv "$app" || echo "::warning::spctl does not accept the app (not notarized?)"
             xcrun stapler validate "$app" || echo "::warning::the app carries no notarization ticket"
