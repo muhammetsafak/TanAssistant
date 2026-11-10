@@ -159,6 +159,20 @@ pub fn find_in_environment(name: &str, env: &LookupEnv) -> Option<PathBuf> {
     })
 }
 
+/// On Windows a console program started from a GUI process gets a console window of its own,
+/// so every CLI call would flash a terminal in front of the user. `CREATE_NO_WINDOW` runs it
+/// without one; stdin/stdout/stderr are pipes, so nothing is lost. A no-op elsewhere.
+fn hide_console_window(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        /// `CREATE_NO_WINDOW` from `winbase.h`.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
 /// Asks the login shell where `name` is (`$SHELL -lc 'command -v <name>'`): an application
 /// opened from Finder does not get the `PATH` of the user's shell profile.
 async fn find_via_login_shell(name: &str, shell: &Path) -> Option<PathBuf> {
@@ -167,6 +181,7 @@ async fn find_via_login_shell(name: &str, shell: &Path) -> Option<PathBuf> {
         return None;
     }
     let mut command = Command::new(shell);
+    hide_console_window(&mut command);
     command
         .arg("-lc")
         .arg(format!("command -v {name}"))
@@ -405,6 +420,7 @@ async fn spawn(
     let mut attempt = 0;
     loop {
         let mut command = Command::new(path);
+        hide_console_window(&mut command);
         // Its own process group, so a timeout can take down what the CLI started as well.
         #[cfg(unix)]
         command.process_group(0);
