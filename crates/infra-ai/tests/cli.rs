@@ -8,8 +8,6 @@
 
 mod common;
 
-use std::time::Duration;
-
 use tan_application::ports::{ChatModel, VisionModel};
 use tan_infra_ai::claude_cli::ClaudeCliClient;
 use tan_infra_ai::codex_cli::CodexCliClient;
@@ -21,6 +19,7 @@ use common::{chat_request, vision_request};
 mod fake {
     use std::os::unix::fs::PermissionsExt as _;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use serde_json::{json, Value};
     use tan_application::ports::{AiError, ChatRequest};

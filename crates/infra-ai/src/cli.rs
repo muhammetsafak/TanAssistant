@@ -457,6 +457,9 @@ impl Drop for GroupGuard {
                 .stderr(Stdio::null())
                 .status();
         }
+        // Elsewhere `kill_on_drop` ends the CLI itself; the pid is not needed.
+        #[cfg(not(unix))]
+        let _ = self.pid;
     }
 }
 
