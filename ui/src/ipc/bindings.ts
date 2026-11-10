@@ -58,7 +58,7 @@ export const commands = {
 	/**  Starts recording a new session. */
 	startRecording: (options: StartRecordingOptionsDto_Deserialize) => typedError<RecordingStartedDto, RecordingIpcError>(__TAURI_INVOKE("start_recording", { options })),
 	/**  Stops the running recording. */
-	stopRecording: () => typedError<RecordingSummaryDto, RecordingIpcError>(__TAURI_INVOKE("stop_recording")),
+	stopRecording: () => typedError<RecordingSummaryDto_Serialize, RecordingIpcError>(__TAURI_INVOKE("stop_recording")),
 	/**
 	 *  Pauses the running recording: nothing is captured (microphone, system audio and screen
 	 *  are released) and the recording clock stops until `resume_recording`. A paused recording
@@ -210,7 +210,7 @@ export const events = {
 	processingProgressEvent: makeEvent<ProcessingProgressEvent, ProcessingProgressEvent>("processing-progress-event"),
 	recordingProgressEvent: makeEvent<RecordingProgressEvent, RecordingProgressEvent>("recording-progress-event"),
 	recordingStateEvent: makeEvent<RecordingStateEvent, RecordingStateEvent>("recording-state-event"),
-	recordingWarningEvent: makeEvent<RecordingWarningEvent, RecordingWarningEvent>("recording-warning-event"),
+	recordingWarningEvent: makeEvent<RecordingWarningEvent_Serialize, RecordingWarningEvent_Deserialize>("recording-warning-event"),
 	transcriptionProgressEvent: makeEvent<TranscriptionProgressEvent_Serialize, TranscriptionProgressEvent_Deserialize>("transcription-progress-event"),
 	updateDownloadProgress: makeEvent<UpdateDownloadProgress_Serialize, UpdateDownloadProgress_Deserialize>("update-download-progress"),
 	whisperModelDownloadEvent: makeEvent<WhisperModelDownloadEvent, WhisperModelDownloadEvent>("whisper-model-download-event"),
@@ -1124,7 +1124,10 @@ export type RecordingStatusDto_Serialize = {
 };
 
 /**  The outcome of a finished recording. */
-export type RecordingSummaryDto = {
+export type RecordingSummaryDto = RecordingSummaryDto_Serialize | RecordingSummaryDto_Deserialize;
+
+/**  The outcome of a finished recording. */
+export type RecordingSummaryDto_Deserialize = {
 	/**  The session. */
 	sessionId: string,
 	/**  `recorded`, or `failed` when nothing at all was captured. */
@@ -1138,14 +1141,81 @@ export type RecordingSummaryDto = {
 	/**  Frames dropped because processing could not keep up. */
 	droppedFrames: number,
 	/**  Non-fatal problems, in order of appearance. */
-	warnings: string[],
+	warnings: RecordingWarningDto_Deserialize[],
+};
+
+/**  The outcome of a finished recording. */
+export type RecordingSummaryDto_Serialize = {
+	/**  The session. */
+	sessionId: string,
+	/**  `recorded`, or `failed` when nothing at all was captured. */
+	status: string,
+	/**  Recording length in milliseconds. */
+	durationMs: number,
+	/**  The stored audio tracks. */
+	tracks: TrackSummaryDto[],
+	/**  Frames stored. */
+	frameCount: number,
+	/**  Frames dropped because processing could not keep up. */
+	droppedFrames: number,
+	/**  Non-fatal problems, in order of appearance. */
+	warnings: RecordingWarningDto_Serialize[],
+};
+
+/**  What kind of problem a recording warning reports, so the UI can show its own wording. */
+export type RecordingWarningCodeDto = 
+/**  An audio track had repeated short dropouts. */
+"audio_dropouts" | 
+/**  Anything else; only the English message describes it. */
+"other";
+
+/**  A non-fatal problem of a recording. */
+export type RecordingWarningDto = RecordingWarningDto_Serialize | RecordingWarningDto_Deserialize;
+
+/**  A non-fatal problem of a recording. */
+export type RecordingWarningDto_Deserialize = {
+	/**  Machine-readable class. */
+	code: RecordingWarningCodeDto,
+	/**  `microphone` or `system` when the warning concerns one audio track. */
+	track?: string | null,
+	/**  What happened (English); a fallback for codes the UI does not know. */
+	message: string,
+};
+
+/**  A non-fatal problem of a recording. */
+export type RecordingWarningDto_Serialize = {
+	/**  Machine-readable class. */
+	code: RecordingWarningCodeDto,
+	/**  `microphone` or `system` when the warning concerns one audio track. */
+	track: string | null,
+	/**  What happened (English); a fallback for codes the UI does not know. */
+	message: string,
 };
 
 /**  Emitted when a source has a problem but recording continues. */
-export type RecordingWarningEvent = {
+export type RecordingWarningEvent = RecordingWarningEvent_Serialize | RecordingWarningEvent_Deserialize;
+
+/**  Emitted when a source has a problem but recording continues. */
+export type RecordingWarningEvent_Deserialize = {
 	/**  The session being recorded. */
 	sessionId: string,
-	/**  What happened (English). */
+	/**  Machine-readable class. */
+	code: RecordingWarningCodeDto,
+	/**  `microphone` or `system` when the warning concerns one audio track. */
+	track?: string | null,
+	/**  What happened (English); a fallback for codes the UI does not know. */
+	message: string,
+};
+
+/**  Emitted when a source has a problem but recording continues. */
+export type RecordingWarningEvent_Serialize = {
+	/**  The session being recorded. */
+	sessionId: string,
+	/**  Machine-readable class. */
+	code: RecordingWarningCodeDto,
+	/**  `microphone` or `system` when the warning concerns one audio track. */
+	track: string | null,
+	/**  What happened (English); a fallback for codes the UI does not know. */
 	message: string,
 };
 
@@ -1672,8 +1742,16 @@ export type TrackSummaryDto = {
 	silenceInsertedMs: number,
 	/**  Audio blocks dropped because the writer could not keep up. */
 	droppedChunks: number,
-	/**  Problems the capture backend reported (xruns, device changes). */
+	/**
+	 *  Problems the capture backend reported (device changes, dropped connections), without
+	 *  the dropouts counted in `dropouts`.
+	 */
 	streamIssues: number,
+	/**
+	 *  Short dropouts (xruns, data discontinuities) the backend reported; the lost span is
+	 *  filled with silence.
+	 */
+	dropouts: number,
 };
 
 /**  What a finished transcription produced. */

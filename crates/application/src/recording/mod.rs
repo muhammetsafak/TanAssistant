@@ -24,7 +24,10 @@ pub use frame_selector::{
     decide_frame, hamming_distance, FrameDecision, FrameSelector, FrameSelectorConfig, KeepReason,
     KeptFrame, DEFAULT_KEEP_ALIVE_MS,
 };
-pub use service::{RecordingPorts, RecordingService, StoppingRecording};
+pub use service::{
+    DropoutPolicy, RecordingPorts, RecordingService, StoppingRecording, DROPOUT_WARN_COUNT,
+    DROPOUT_WARN_WINDOW,
+};
 
 /// Longest accepted session title, in characters.
 pub const MAX_TITLE_LEN: usize = 200;
@@ -104,6 +107,48 @@ pub struct RecordingProgress {
     pub frame_count: u32,
 }
 
+/// What kind of problem a [`RecordingWarning`] reports, so the UI can show its own wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingWarningCode {
+    /// An audio track had repeated short dropouts (see [`DROPOUT_WARN_COUNT`]).
+    AudioDropouts,
+    /// Anything else; only the English message describes it.
+    Other,
+}
+
+/// A non-fatal problem of a recording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordingWarning {
+    /// Machine-readable class.
+    pub code: RecordingWarningCode,
+    /// The audio track the warning is about, when it concerns one.
+    pub track: Option<TrackKind>,
+    /// English description, free of captured content. Kept for logs and as a fallback.
+    pub message: String,
+}
+
+impl RecordingWarning {
+    /// A warning without a specific class ([`RecordingWarningCode::Other`]).
+    #[must_use]
+    pub fn other(message: impl Into<String>) -> Self {
+        Self {
+            code: RecordingWarningCode::Other,
+            track: None,
+            message: message.into(),
+        }
+    }
+
+    /// Repeated short dropouts on `track` ([`RecordingWarningCode::AudioDropouts`]).
+    #[must_use]
+    pub fn audio_dropouts(track: TrackKind) -> Self {
+        Self {
+            code: RecordingWarningCode::AudioDropouts,
+            track: Some(track),
+            message: format!("{track} audio had short dropouts; recording continues"),
+        }
+    }
+}
+
 /// Something that happened to a recording.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecordingEvent {
@@ -128,13 +173,13 @@ pub enum RecordingEvent {
         /// The resumed session.
         session_id: SessionId,
     },
-    /// A source had a problem but recording continues (a stream failed to start, an xrun,
-    /// a write error...). The text is English and free of captured content.
+    /// A source had a problem but recording continues (a stream failed to start, repeated
+    /// dropouts, a write error...).
     Warning {
         /// The session being recorded.
         session_id: SessionId,
         /// What happened.
-        message: String,
+        warning: RecordingWarning,
     },
     /// Recording ended (successfully or not; the session carries the outcome).
     Stopped {
@@ -180,8 +225,12 @@ pub struct TrackSummary {
     pub silence_inserted_ms: u64,
     /// Audio blocks dropped because the writer could not keep up.
     pub dropped_chunks: u64,
-    /// Problems the capture backend reported (xruns, device changes...).
+    /// Problems the capture backend reported (device changes, dropped connections...),
+    /// without the dropouts counted in `dropouts`.
     pub stream_issues: u32,
+    /// Short dropouts (xruns, data discontinuities) the backend reported. The lost span is
+    /// filled with silence, so the recording stays aligned.
+    pub dropouts: u32,
 }
 
 /// The outcome of [`RecordingService::stop`].
@@ -196,7 +245,7 @@ pub struct RecordingSummary {
     /// Frames dropped because processing could not keep up with capture.
     pub dropped_frames: u32,
     /// Non-fatal problems, in order of appearance.
-    pub warnings: Vec<String>,
+    pub warnings: Vec<RecordingWarning>,
 }
 
 /// A session that was left in `Recording` by a crash and settled at startup.

@@ -270,7 +270,13 @@ where
                     samples,
                 });
             },
-            move |error| error_sink.on_error(error.to_string()),
+            move |error| {
+                if error.kind() == cpal::ErrorKind::Xrun {
+                    error_sink.on_dropout();
+                } else {
+                    error_sink.on_error(error.to_string());
+                }
+            },
             None,
         )
         .map_err(|e| map_cpal_error("cannot open the audio stream", &e))

@@ -150,9 +150,14 @@ pub trait AudioSink: Send + Sync {
     /// A block of audio arrived.
     fn on_chunk(&self, chunk: PcmChunk);
 
-    /// The backend reported a problem (xrun, device change, dropped connection...). The
-    /// stream may keep running.
+    /// The backend reported a problem (device change, dropped connection...). The stream may
+    /// keep running.
     fn on_error(&self, message: String);
+
+    /// The backend reported a short dropout in the audio data (an xrun or a data
+    /// discontinuity). The stream keeps running; the recording fills the lost span with
+    /// silence.
+    fn on_dropout(&self);
 }
 
 /// Which audio to capture.

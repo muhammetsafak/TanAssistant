@@ -18,8 +18,9 @@ use tan_application::ports::{
     ScreenUnavailableReason, SessionRepository, SettingsRepository,
 };
 use tan_application::recording::{
-    RecordingError, RecordingEvent, RecordingEvents, RecordingPorts, RecordingService,
-    RecordingStatus, StartOptions,
+    DropoutPolicy, RecordingError, RecordingEvent, RecordingEvents, RecordingPorts,
+    RecordingService, RecordingStatus, RecordingWarning, RecordingWarningCode, StartOptions,
+    DROPOUT_WARN_COUNT,
 };
 use tan_application::{RepositoryError, RepositoryResult};
 use tan_domain::{
@@ -700,7 +701,7 @@ fn one_failing_audio_source_is_only_a_warning() {
         summary
             .warnings
             .iter()
-            .any(|w| w.contains("system audio could not start")),
+            .any(|w| w.message.contains("system audio could not start")),
         "{:?}",
         summary.warnings
     );
@@ -725,7 +726,7 @@ fn a_screen_that_cannot_be_captured_is_only_a_warning() {
     assert!(summary
         .warnings
         .iter()
-        .any(|w| w.contains("screen could not be captured")));
+        .any(|w| w.message.contains("screen could not be captured")));
 }
 
 #[test]
@@ -766,10 +767,200 @@ fn a_digitally_silent_source_is_flagged() {
     let summary = block_on(h.service.stop()).unwrap();
     assert!(summary.tracks[0].peak.abs() < f32::EPSILON);
     assert!(
-        summary.warnings.iter().any(|w| w.contains("silent")),
+        summary
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("silent")),
         "{:?}",
         summary.warnings
     );
+}
+
+/// The dropout warnings among `warnings`.
+fn dropout_warnings(warnings: &[RecordingWarning]) -> Vec<&RecordingWarning> {
+    warnings
+        .iter()
+        .filter(|w| w.code == RecordingWarningCode::AudioDropouts)
+        .collect()
+}
+
+#[test]
+fn a_few_dropouts_are_counted_without_a_warning() {
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("blips"))).unwrap();
+    let mic = h.audio.sink(TrackKind::Microphone);
+    mic.on_chunk(chunk(480, 0.2, Instant::now()));
+    h.audio
+        .sink(TrackKind::System)
+        .on_chunk(chunk(480, 0.2, Instant::now()));
+    for _ in 0..DROPOUT_WARN_COUNT - 1 {
+        mic.on_dropout();
+    }
+    let summary = block_on(h.service.stop()).unwrap();
+
+    assert_eq!(summary.tracks[0].kind, TrackKind::Microphone);
+    assert_eq!(summary.tracks[0].dropouts, 4);
+    assert_eq!(summary.tracks[0].stream_issues, 0);
+    assert!(summary.warnings.is_empty(), "{:?}", summary.warnings);
+    assert!(!h
+        .events
+        .all()
+        .iter()
+        .any(|e| matches!(e, RecordingEvent::Warning { .. })));
+}
+
+#[test]
+fn a_burst_of_dropouts_raises_exactly_one_coded_warning() {
+    let h = harness();
+    let session = block_on(h.service.start(StartOptions::titled("burst"))).unwrap();
+    let mic = h.audio.sink(TrackKind::Microphone);
+    mic.on_chunk(chunk(480, 0.2, Instant::now()));
+    h.audio
+        .sink(TrackKind::System)
+        .on_chunk(chunk(480, 0.2, Instant::now()));
+    // More than the threshold: still one warning for the track.
+    for _ in 0..DROPOUT_WARN_COUNT + 3 {
+        mic.on_dropout();
+    }
+    let summary = block_on(h.service.stop()).unwrap();
+
+    let warnings = dropout_warnings(&summary.warnings);
+    assert_eq!(warnings.len(), 1, "{:?}", summary.warnings);
+    assert_eq!(warnings[0].track, Some(TrackKind::Microphone));
+    assert_eq!(
+        warnings[0].message,
+        "microphone audio had short dropouts; recording continues"
+    );
+    let mic_summary = summary
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Microphone)
+        .unwrap();
+    assert_eq!(mic_summary.dropouts, 8);
+
+    // It was published as an event too, carrying the same structure.
+    let events = h.events.all();
+    let published: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            RecordingEvent::Warning {
+                session_id,
+                warning,
+            } if warning.code == RecordingWarningCode::AudioDropouts => {
+                Some((session_id.clone(), warning.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(published.len(), 1);
+    assert_eq!(published[0].0, session.id);
+    assert_eq!(published[0].1, *warnings[0]);
+}
+
+#[test]
+fn dropouts_spread_over_the_window_never_warn() {
+    // The 5-in-60-s rule at 1:150 scale: 5 in 400 ms. A dropout every 120 ms (at least; a
+    // sleep never returns early) puts the fifth of any run of five 480 ms after the first,
+    // so the window never holds five at once.
+    let mut h = harness();
+    h.service = h.service.with_dropout_policy(DropoutPolicy {
+        count: DROPOUT_WARN_COUNT,
+        window: Duration::from_millis(400),
+    });
+    block_on(h.service.start(StartOptions::titled("sparse"))).unwrap();
+    let mic = h.audio.sink(TrackKind::Microphone);
+    mic.on_chunk(chunk(480, 0.2, Instant::now()));
+    h.audio
+        .sink(TrackKind::System)
+        .on_chunk(chunk(480, 0.2, Instant::now()));
+    for _ in 0..12 {
+        mic.on_dropout();
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    assert!(!h
+        .events
+        .all()
+        .iter()
+        .any(|e| matches!(e, RecordingEvent::Warning { .. })));
+    // The same number in a burst does warn, so the policy is really in effect.
+    for _ in 0..DROPOUT_WARN_COUNT {
+        mic.on_dropout();
+    }
+    let summary = block_on(h.service.stop()).unwrap();
+
+    assert_eq!(summary.tracks[0].dropouts, 12 + 5);
+    let warnings = dropout_warnings(&summary.warnings);
+    assert_eq!(warnings.len(), 1, "{:?}", summary.warnings);
+    assert_eq!(warnings[0].track, Some(TrackKind::Microphone));
+}
+
+#[test]
+fn microphone_and_system_dropouts_are_counted_separately() {
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("two sources"))).unwrap();
+    let mic = h.audio.sink(TrackKind::Microphone);
+    let system = h.audio.sink(TrackKind::System);
+    mic.on_chunk(chunk(480, 0.2, Instant::now()));
+    system.on_chunk(chunk(480, 0.2, Instant::now()));
+    // Four on each source: eight in total, but no track reaches the threshold.
+    for _ in 0..DROPOUT_WARN_COUNT - 1 {
+        mic.on_dropout();
+        system.on_dropout();
+    }
+    let summary = block_on(h.service.stop()).unwrap();
+    assert!(summary.warnings.is_empty(), "{:?}", summary.warnings);
+
+    // A new recording: only the system source bursts.
+    block_on(h.service.start(StartOptions::titled("system burst"))).unwrap();
+    let mic = h.audio.sink(TrackKind::Microphone);
+    let system = h.audio.sink(TrackKind::System);
+    mic.on_chunk(chunk(480, 0.2, Instant::now()));
+    system.on_chunk(chunk(480, 0.2, Instant::now()));
+    mic.on_dropout();
+    for _ in 0..DROPOUT_WARN_COUNT {
+        system.on_dropout();
+    }
+    let summary = block_on(h.service.stop()).unwrap();
+
+    let warnings = dropout_warnings(&summary.warnings);
+    assert_eq!(warnings.len(), 1, "{:?}", summary.warnings);
+    assert_eq!(warnings[0].track, Some(TrackKind::System));
+    let dropouts = |kind| {
+        summary
+            .tracks
+            .iter()
+            .find(|t| t.kind == kind)
+            .unwrap()
+            .dropouts
+    };
+    assert_eq!(dropouts(TrackKind::Microphone), 1);
+    assert_eq!(dropouts(TrackKind::System), 5);
+}
+
+#[test]
+fn a_backend_error_is_still_an_uncoded_warning_and_a_stream_issue() {
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("device change"))).unwrap();
+    let mic = h.audio.sink(TrackKind::Microphone);
+    mic.on_chunk(chunk(480, 0.2, Instant::now()));
+    h.audio
+        .sink(TrackKind::System)
+        .on_chunk(chunk(480, 0.2, Instant::now()));
+    mic.on_error("the device was unplugged".to_owned());
+    mic.on_dropout();
+    let summary = block_on(h.service.stop()).unwrap();
+
+    assert_eq!(
+        summary.warnings,
+        [RecordingWarning {
+            code: RecordingWarningCode::Other,
+            track: None,
+            message: "microphone audio: the device was unplugged".to_owned(),
+        }]
+    );
+    // The dropout is not a stream issue.
+    assert_eq!(summary.tracks[0].stream_issues, 1);
+    assert_eq!(summary.tracks[0].dropouts, 1);
 }
 
 #[test]
@@ -783,7 +974,10 @@ fn a_recording_that_captured_nothing_is_marked_failed() {
         h.sessions.get_now(session.id.as_str()).unwrap().status(),
         SessionStatus::Failed
     );
-    assert!(summary.warnings.iter().any(|w| w.contains("nothing")));
+    assert!(summary
+        .warnings
+        .iter()
+        .any(|w| w.message.contains("nothing")));
 }
 
 #[test]
@@ -1234,7 +1428,7 @@ fn one_source_that_cannot_reopen_is_only_a_warning() {
         summary
             .warnings
             .iter()
-            .any(|w| w.contains("system audio could not resume")),
+            .any(|w| w.message.contains("system audio could not resume")),
         "{:?}",
         summary.warnings
     );

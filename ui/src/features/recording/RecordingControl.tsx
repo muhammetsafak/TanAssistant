@@ -297,7 +297,9 @@ function ActiveRecordingView({ active, paused }: { active: ActiveRecording; paus
         toast.errorText(t('recording.silentTrack', { track: t(`recording.track.${kind}`) }));
       }
       if (summary.warnings.length > 0) {
-        toast.errorText(`${t('recording.warningsAfterStop')} ${summary.warnings.join(' · ')}`);
+        toast.errorText(
+          `${t('recording.warningsAfterStop')} ${summary.warnings.map((w) => w.message).join(' · ')}`,
+        );
       }
       void navigate(`/recordings/${summary.sessionId}`);
     } catch (error) {

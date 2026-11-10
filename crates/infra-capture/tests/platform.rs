@@ -21,6 +21,7 @@ struct CountingAudio {
     chunks: AtomicU64,
     frames: AtomicU64,
     errors: Mutex<Vec<String>>,
+    dropouts: AtomicU64,
     peak_bits: AtomicU64,
 }
 
@@ -37,6 +38,10 @@ impl AudioSink for CountingAudio {
 
     fn on_error(&self, message: String) {
         self.errors.lock().unwrap().push(message);
+    }
+
+    fn on_dropout(&self) {
+        self.dropouts.fetch_add(1, Ordering::Relaxed);
     }
 }
 

@@ -17,7 +17,8 @@ use tan_application::ports::{
 };
 use tan_application::recording::{
     default_session_title, ActiveRecordingStatus, RecordingError, RecordingEvent, RecordingEvents,
-    RecordingStatus, RecordingSummary, StartOptions, TrackSummary,
+    RecordingStatus, RecordingSummary, RecordingWarning, RecordingWarningCode, StartOptions,
+    TrackSummary,
 };
 use tan_domain::{LanguageCode, LanguageSetting, SessionStatus};
 use tauri::{AppHandle, Manager, State};
@@ -206,8 +207,53 @@ pub struct TrackSummaryDto {
     pub silence_inserted_ms: u32,
     /// Audio blocks dropped because the writer could not keep up.
     pub dropped_chunks: u32,
-    /// Problems the capture backend reported (xruns, device changes).
+    /// Problems the capture backend reported (device changes, dropped connections), without
+    /// the dropouts counted in `dropouts`.
     pub stream_issues: u32,
+    /// Short dropouts (xruns, data discontinuities) the backend reported; the lost span is
+    /// filled with silence.
+    pub dropouts: u32,
+}
+
+/// What kind of problem a recording warning reports, so the UI can show its own wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingWarningCodeDto {
+    /// An audio track had repeated short dropouts.
+    AudioDropouts,
+    /// Anything else; only the English message describes it.
+    Other,
+}
+
+impl From<RecordingWarningCode> for RecordingWarningCodeDto {
+    fn from(code: RecordingWarningCode) -> Self {
+        match code {
+            RecordingWarningCode::AudioDropouts => Self::AudioDropouts,
+            RecordingWarningCode::Other => Self::Other,
+        }
+    }
+}
+
+/// A non-fatal problem of a recording.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingWarningDto {
+    /// Machine-readable class.
+    pub code: RecordingWarningCodeDto,
+    /// `microphone` or `system` when the warning concerns one audio track.
+    pub track: Option<String>,
+    /// What happened (English); a fallback for codes the UI does not know.
+    pub message: String,
+}
+
+impl From<RecordingWarning> for RecordingWarningDto {
+    fn from(warning: RecordingWarning) -> Self {
+        Self {
+            code: warning.code.into(),
+            track: warning.track.map(|kind| kind.as_str().to_owned()),
+            message: warning.message,
+        }
+    }
 }
 
 fn saturating_u32(value: u64) -> u32 {
@@ -226,6 +272,7 @@ impl From<TrackSummary> for TrackSummaryDto {
             silence_inserted_ms: saturating_u32(track.silence_inserted_ms),
             dropped_chunks: saturating_u32(track.dropped_chunks),
             stream_issues: track.stream_issues,
+            dropouts: track.dropouts,
         }
     }
 }
@@ -247,7 +294,7 @@ pub struct RecordingSummaryDto {
     /// Frames dropped because processing could not keep up.
     pub dropped_frames: u32,
     /// Non-fatal problems, in order of appearance.
-    pub warnings: Vec<String>,
+    pub warnings: Vec<RecordingWarningDto>,
 }
 
 impl From<RecordingSummary> for RecordingSummaryDto {
@@ -266,7 +313,7 @@ impl From<RecordingSummary> for RecordingSummaryDto {
             tracks: summary.tracks.into_iter().map(Into::into).collect(),
             frame_count: summary.frame_count,
             dropped_frames: summary.dropped_frames,
-            warnings: summary.warnings,
+            warnings: summary.warnings.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -516,7 +563,11 @@ pub struct RecordingStateEvent {
 pub struct RecordingWarningEvent {
     /// The session being recorded.
     pub session_id: String,
-    /// What happened (English).
+    /// Machine-readable class.
+    pub code: RecordingWarningCodeDto,
+    /// `microphone` or `system` when the warning concerns one audio track.
+    pub track: Option<String>,
+    /// What happened (English); a fallback for codes the UI does not know.
     pub message: String,
 }
 
@@ -570,12 +621,15 @@ impl RecordingEvents for TauriRecordingEvents {
             .emit(&self.app),
             RecordingEvent::Warning {
                 session_id,
-                message,
+                warning,
             } => {
-                tracing::warn!(session = %session_id, "{message}");
+                tracing::warn!(session = %session_id, "{}", warning.message);
+                let warning = RecordingWarningDto::from(warning);
                 RecordingWarningEvent {
                     session_id: session_id.to_string(),
-                    message,
+                    code: warning.code,
+                    track: warning.track,
+                    message: warning.message,
                 }
                 .emit(&self.app)
             }

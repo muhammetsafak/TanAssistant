@@ -23,6 +23,7 @@
 //! stays `Recording` in the database until `stop`. [`RecordingService::recover_interrupted`]
 //! settles whatever a crash left behind.
 
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -46,7 +47,8 @@ use crate::ports::{
 use super::frame_selector::{FrameDecision, FrameSelector, FrameSelectorConfig};
 use super::{
     ActiveRecordingStatus, RecordingError, RecordingEvent, RecordingEvents, RecordingProgress,
-    RecordingStatus, RecordingSummary, RecoveredSession, StartOptions, TrackSummary, MAX_TITLE_LEN,
+    RecordingStatus, RecordingSummary, RecordingWarning, RecoveredSession, StartOptions,
+    TrackSummary, MAX_TITLE_LEN,
 };
 
 /// How often the audio file headers are made durable. A crash loses at most this much audio.
@@ -68,6 +70,13 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Warnings kept for the summary; further distinct ones are only counted by the event stream.
 const MAX_WARNINGS: usize = 32;
+
+/// A track that reports this many dropouts within [`DROPOUT_WARN_WINDOW`] raises a warning
+/// (once per track). A few dropouts are ordinary; a burst means the source is struggling.
+pub const DROPOUT_WARN_COUNT: usize = 5;
+
+/// The sliding window [`DROPOUT_WARN_COUNT`] dropouts must fall into.
+pub const DROPOUT_WARN_WINDOW: Duration = Duration::from_secs(60);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // A poisoned lock only means another thread panicked; the data is plain counters/lists.
@@ -290,26 +299,95 @@ impl LevelMeter {
 struct WarningLog {
     session_id: SessionId,
     events: Arc<dyn RecordingEvents>,
-    items: Mutex<Vec<String>>,
+    items: Mutex<Vec<RecordingWarning>>,
 }
 
 impl WarningLog {
+    /// Records a warning that has no specific class.
     fn push(&self, message: String) {
+        self.push_warning(RecordingWarning::other(message));
+    }
+
+    fn push_warning(&self, warning: RecordingWarning) {
         {
             let mut items = lock(&self.items);
-            if items.len() >= MAX_WARNINGS || items.contains(&message) {
+            if items.len() >= MAX_WARNINGS || items.contains(&warning) {
                 return;
             }
-            items.push(message.clone());
+            items.push(warning.clone());
         }
         self.events.publish(RecordingEvent::Warning {
             session_id: self.session_id.clone(),
-            message,
+            warning,
         });
     }
 
-    fn snapshot(&self) -> Vec<String> {
+    fn snapshot(&self) -> Vec<RecordingWarning> {
         lock(&self.items).clone()
+    }
+}
+
+/// When a burst of dropouts on one track is worth a warning: `count` dropouts within
+/// `window`. The default is [`DROPOUT_WARN_COUNT`] within [`DROPOUT_WARN_WINDOW`]; a
+/// different policy (see [`RecordingService::with_dropout_policy`]) lets tests exercise the
+/// sliding window at a small time scale instead of waiting a minute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DropoutPolicy {
+    /// Dropouts within `window` that raise the warning.
+    pub count: usize,
+    /// The sliding window the dropouts must fall into.
+    pub window: Duration,
+}
+
+impl Default for DropoutPolicy {
+    fn default() -> Self {
+        Self {
+            count: DROPOUT_WARN_COUNT,
+            window: DROPOUT_WARN_WINDOW,
+        }
+    }
+}
+
+/// Sliding-window detector for bursts of dropouts on one track. Pure bookkeeping on
+/// monotonic instants, so it is tested without waiting.
+#[derive(Debug, Default)]
+struct DropoutWindow {
+    policy: DropoutPolicy,
+    /// The most recent dropouts, oldest first; never longer than `policy.count`.
+    recent: VecDeque<Instant>,
+    /// Whether the warning was already raised for this track.
+    warned: bool,
+}
+
+impl DropoutWindow {
+    fn new(policy: DropoutPolicy) -> Self {
+        Self {
+            policy,
+            ..Self::default()
+        }
+    }
+
+    /// Notes a dropout at `at`. Returns `true` exactly once: when this dropout is the
+    /// `policy.count`th within `policy.window`.
+    fn record(&mut self, at: Instant) -> bool {
+        if self.warned {
+            return false;
+        }
+        let window = self.policy.window;
+        while self
+            .recent
+            .front()
+            .is_some_and(|&oldest| at.saturating_duration_since(oldest) >= window)
+        {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(at);
+        if self.recent.len() >= self.policy.count {
+            self.warned = true;
+            self.recent.clear();
+            return true;
+        }
+        false
     }
 }
 
@@ -318,6 +396,8 @@ struct TrackShared {
     meter: LevelMeter,
     dropped_chunks: AtomicU64,
     stream_issues: AtomicU32,
+    dropouts: AtomicU32,
+    dropout_window: Mutex<DropoutWindow>,
 }
 
 #[derive(Default)]
@@ -373,6 +453,25 @@ impl AudioSink for TrackSink {
         self.shared.stream_issues.fetch_add(1, Ordering::Relaxed);
         self.warnings
             .push(format!("{} audio: {message}", self.kind));
+    }
+
+    fn on_dropout(&self) {
+        self.note_dropout(Instant::now());
+    }
+}
+
+impl TrackSink {
+    /// Counts a dropout seen at `at` and raises the burst warning when it is due.
+    fn note_dropout(&self, at: Instant) {
+        // A dropout reported while paused belongs to the stream being torn down.
+        if self.ledger.is_paused() {
+            return;
+        }
+        self.shared.dropouts.fetch_add(1, Ordering::Relaxed);
+        if lock(&self.shared.dropout_window).record(at) {
+            self.warnings
+                .push_warning(RecordingWarning::audio_dropouts(self.kind));
+        }
     }
 }
 
@@ -774,6 +873,7 @@ pub struct RecordingService<S, F, P> {
     ids: Arc<dyn IdGenerator>,
     clock: Arc<dyn Clock>,
     events: Arc<dyn RecordingEvents>,
+    dropout_policy: DropoutPolicy,
     state: Mutex<State>,
     /// Serialises start/pause/resume (and the taking of the recording by `stop`) together
     /// with the events they publish, so events reach subscribers in the order the state
@@ -801,9 +901,18 @@ where
             ids: ports.ids,
             clock: ports.clock,
             events: ports.events,
+            dropout_policy: DropoutPolicy::default(),
             state: Mutex::new(State::Idle),
             transition: Mutex::new(()),
         }
+    }
+
+    /// Replaces the dropout warning threshold ([`DropoutPolicy::default`] otherwise). Only
+    /// affects recordings started afterwards.
+    #[must_use]
+    pub fn with_dropout_policy(mut self, policy: DropoutPolicy) -> Self {
+        self.dropout_policy = policy;
+        self
     }
 
     /// Whether the screen can be sampled in this session. When it cannot, `start` records
@@ -994,7 +1103,10 @@ where
         ledger: &Arc<PauseLedger>,
         warnings: &Arc<WarningLog>,
     ) -> Result<TrackHandle, CaptureError> {
-        let shared = Arc::new(TrackShared::default());
+        let shared = Arc::new(TrackShared {
+            dropout_window: Mutex::new(DropoutWindow::new(self.dropout_policy)),
+            ..TrackShared::default()
+        });
         let (queue, receiver) = mpsc::sync_channel(TRACK_QUEUE_CAPACITY);
         let sink: Arc<dyn AudioSink> = Arc::new(TrackSink {
             kind,
@@ -1540,6 +1652,7 @@ fn finish_tracks(
                     silence_inserted_ms: outcome.silence_ms,
                     dropped_chunks: shared.dropped_chunks.load(Ordering::Relaxed),
                     stream_issues: shared.stream_issues.load(Ordering::Relaxed),
+                    dropouts: shared.dropouts.load(Ordering::Relaxed),
                 });
                 stored.push(AudioTrack {
                     session_id: session_id.clone(),
@@ -1699,6 +1812,98 @@ mod tests {
         // ...but the first block after a pause carries the reopened source's start-up delay.
         t.realign();
         assert_eq!(t.silence_before(Duration::from_millis(1_100)), 4_800);
+    }
+
+    #[test]
+    fn dropouts_warn_once_on_the_threshold_within_the_window() {
+        let t0 = Instant::now();
+        let mut window = DropoutWindow::default();
+        // Four within a second: below the threshold.
+        for i in 0..4 {
+            assert!(!window.record(t0 + Duration::from_millis(i * 250)));
+        }
+        // The fifth: the warning is due, exactly once.
+        assert!(window.record(t0 + secs(1)));
+        for i in 2..10 {
+            assert!(!window.record(t0 + secs(i)));
+        }
+    }
+
+    #[test]
+    fn dropouts_spread_over_the_window_never_warn() {
+        let t0 = Instant::now();
+        let mut window = DropoutWindow::default();
+        // One every 15 s: five are 60 s apart end to end, so the first has left the window
+        // by the time the fifth arrives. Keep going for ten minutes.
+        for i in 0..40 {
+            assert!(!window.record(t0 + secs(i * 15)), "warned at dropout {i}");
+        }
+    }
+
+    #[test]
+    fn the_window_slides_and_keeps_only_recent_dropouts() {
+        let t0 = Instant::now();
+        let mut window = DropoutWindow::default();
+        // Three early dropouts, then a long quiet spell: they no longer count.
+        for i in 0..3 {
+            assert!(!window.record(t0 + secs(i)));
+        }
+        assert!(!window.record(t0 + secs(100)));
+        assert!(!window.record(t0 + secs(101)));
+        assert!(!window.record(t0 + secs(102)));
+        assert!(!window.record(t0 + secs(103)));
+        // The fifth *recent* one is the 59.9 s mark of the first recent one: inside.
+        assert!(window.record(t0 + Duration::from_millis(159_900)));
+    }
+
+    fn sink_with_events(kind: TrackKind) -> (TrackSink, Arc<WarningLog>, Arc<PauseLedger>) {
+        let warnings = Arc::new(WarningLog {
+            session_id: SessionId::new("s1"),
+            events: Arc::new(super::super::NoRecordingEvents),
+            items: Mutex::default(),
+        });
+        let ledger = Arc::new(PauseLedger::new(Instant::now()));
+        let (queue, _receiver) = mpsc::sync_channel(1);
+        let sink = TrackSink {
+            kind,
+            queue,
+            shared: Arc::new(TrackShared::default()),
+            warnings: warnings.clone(),
+            ledger: ledger.clone(),
+        };
+        (sink, warnings, ledger)
+    }
+
+    #[test]
+    fn the_sink_counts_every_dropout_but_warns_once_per_track() {
+        let t0 = Instant::now();
+        let (sink, warnings, _) = sink_with_events(TrackKind::System);
+        // Sparse: 20 dropouts, 30 s apart, never five within 60 s.
+        for i in 0..20 {
+            sink.note_dropout(t0 + secs(i * 30));
+        }
+        assert_eq!(warnings.snapshot().len(), 0);
+        // A burst afterwards warns, once.
+        for i in 0..10 {
+            sink.note_dropout(t0 + secs(1_000 + i));
+        }
+        assert_eq!(
+            warnings.snapshot(),
+            [RecordingWarning::audio_dropouts(TrackKind::System)]
+        );
+        assert_eq!(sink.shared.dropouts.load(Ordering::Relaxed), 30);
+        assert_eq!(sink.shared.stream_issues.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_dropout_while_paused_is_ignored() {
+        let (sink, warnings, ledger) = sink_with_events(TrackKind::Microphone);
+        ledger.begin(Instant::now());
+        for _ in 0..DROPOUT_WARN_COUNT * 2 {
+            sink.on_dropout();
+        }
+        assert_eq!(sink.shared.dropouts.load(Ordering::Relaxed), 0);
+        assert_eq!(warnings.snapshot().len(), 0);
     }
 
     struct YieldOnce(bool);
