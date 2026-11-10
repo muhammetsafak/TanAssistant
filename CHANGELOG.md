@@ -8,6 +8,13 @@ both, and the tag) and `src-tauri/tauri.conf.json` has no `version` of its own.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-10
+
+### Fixed
+
+- On Windows the Claude Code CLI and Codex CLI providers no longer open a terminal window for
+  every summary or screen frame; the CLI runs in the background.
+
 ## [0.2.1] - 2026-11-10
 
 ### Added
