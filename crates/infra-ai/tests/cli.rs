@@ -621,3 +621,31 @@ async fn real_codex_answers() {
     let reply = client.complete(request).await.expect("codex chat");
     assert!(reply.text.to_lowercase().contains("pong"), "{}", reply.text);
 }
+
+#[tokio::test]
+#[ignore = "needs the real `codex` CLI, signed in"]
+async fn real_codex_sees_an_image() {
+    let client = CodexCliClient::new("gpt-6.1-sol", CliSettings::default());
+    let reply = client
+        .describe(red_image_request())
+        .await
+        .expect("codex vision");
+    assert!(reply.text.to_lowercase().contains("red"), "{}", reply.text);
+}
+
+#[tokio::test]
+#[ignore = "needs the real `codex` CLI, signed in"]
+async fn real_codex_structured_output_follows_the_schema() {
+    let client = CodexCliClient::new("gpt-6.1-sol", CliSettings::default());
+    let mut request = red_image_request();
+    "What is the main colour of this image?".clone_into(&mut request.prompt);
+    request.json_schema = Some(tan_application::ports::JsonSchema {
+        name: "colour".to_owned(),
+        schema_json: r#"{"type":"object","properties":{"colour":{"type":"string"}},"required":["colour"],"additionalProperties":false}"#
+            .to_owned(),
+    });
+    let reply = client.describe(request).await.expect("codex structured");
+    let parsed: serde_json::Value = serde_json::from_str(&reply.text).expect("JSON reply");
+    let colour = parsed["colour"].as_str().expect("a colour string");
+    assert!(colour.to_lowercase().contains("red"), "{colour}");
+}

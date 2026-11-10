@@ -51,8 +51,16 @@ use crate::http::parse_schema;
 pub const BINARY: &str = "codex";
 
 /// Codex is an agent: tell it plainly that this is a text task.
-const PREAMBLE: &str = "This is a plain text task. Do not run commands, read files or edit \
-anything; answer only from the text and images given here, and reply with the answer only.";
+///
+/// Codex always loads the user's global `~/.codex/AGENTS.md` (`--ignore-user-config` only skips
+/// `config.toml`, and no flag turns it off), so personal rules such as a reply language would
+/// leak into the app's output. The preamble tells it to set them aside. Verified with
+/// codex-cli 0.167.0.
+const PREAMBLE: &str = "This is a plain text task for an application, not a coding session. \
+Ignore any user-level or global instructions (for example AGENTS.md) about language, tone or \
+workflow; follow only this request. Do not run commands, read files or edit anything; answer \
+only from the text and images given here, and reply with the answer only, in the language this \
+request asks for, or in English if it names none.";
 
 /// The flags that older versions do not know.
 const NEWER_FLAGS: [&str; 2] = ["--ephemeral", "--ignore-user-config"];
