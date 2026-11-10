@@ -6,6 +6,7 @@ import i18n from '../../i18n';
 import { commands } from '../../ipc/bindings';
 import { fail, ok, renderWithProviders } from '../../test-utils';
 import {
+  codexCliProfile,
   deepSeekProfile,
   deepSeekSecret,
   kindInfos,
@@ -14,6 +15,7 @@ import {
   openAiSecret,
   secrets,
 } from './fixtures';
+import { isCliKind, PROVIDER_KINDS, type ProviderKind } from './api';
 import { ProfileForm, type ProfileTarget } from './ProfileForm';
 
 vi.mock('../../ipc/bindings', () => ({
@@ -181,6 +183,133 @@ describe('ProfileForm', () => {
         supportsVision: false,
       }),
     );
+  });
+
+  it('explains a Claude CLI profile and hides the API key, endpoint and vision fields', async () => {
+    const user = userEvent.setup();
+    const { dialog } = await openForm();
+
+    await user.selectOptions(within(dialog).getByLabelText('Sağlayıcı'), 'claude_cli');
+
+    const note = within(dialog).getByRole('note');
+    expect(note).toHaveTextContent('kurulu ve giriş yapılmış Claude Code CLI’ını (claude)');
+    expect(note).toHaveTextContent('Claude aboneliğinizin limitlerinden düşer');
+    expect(note).not.toHaveTextContent('read-only sandbox');
+    expect(note.querySelector('code')).toHaveTextContent('claude');
+    expect(within(dialog).queryByLabelText(/API anahtarı/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Base URL')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Yeni secret oluştur' })).toBeNull();
+  });
+
+  it('warns that Codex may run commands in its read-only sandbox', async () => {
+    const user = userEvent.setup();
+    const { dialog } = await openForm();
+
+    await user.selectOptions(within(dialog).getByLabelText('Sağlayıcı'), 'codex_cli');
+
+    const note = within(dialog).getByRole('note');
+    expect(note).toHaveTextContent('Codex CLI’ını (codex)');
+    expect(note).toHaveTextContent('ChatGPT aboneliğinizin limitlerinden düşer');
+    expect(note).toHaveTextContent(
+      'Codex, kendi read-only sandbox’ında komut çalıştırabilir ve dosya okuyabilir; dosya yazamaz.',
+    );
+  });
+
+  it('sends a CLI profile without a secret or an endpoint', async () => {
+    const user = userEvent.setup();
+    const { dialog } = await openForm();
+
+    await user.selectOptions(within(dialog).getByLabelText('Sağlayıcı'), 'claude_cli');
+    await user.type(within(dialog).getByLabelText('Görünen ad'), 'Claude subscription');
+    await user.click(within(dialog).getByRole('button', { name: 'sonnet' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Kaydet' }));
+
+    await waitFor(() =>
+      expect(commands.upsertProviderProfile).toHaveBeenCalledWith({
+        id: null,
+        kind: 'claude_cli',
+        displayName: 'Claude subscription',
+        model: 'sonnet',
+        baseUrl: null,
+        secretRef: null,
+        supportsVision: false,
+      }),
+    );
+  });
+
+  it('drops a picked secret and a typed endpoint when switching to a CLI provider', async () => {
+    const user = userEvent.setup();
+    const { dialog } = await openForm();
+
+    await user.type(within(dialog).getByLabelText('Görünen ad'), 'Mixed');
+    await user.type(within(dialog).getByLabelText('Model'), 'gpt-4o');
+    await waitFor(() =>
+      expect(within(dialog).getByRole('option', { name: 'OPENAI_KEY' })).toBeInTheDocument(),
+    );
+    await user.selectOptions(within(dialog).getByLabelText(/API anahtarı/), 's1');
+    await user.type(within(dialog).getByLabelText('Base URL'), 'https://proxy.example.com/v1');
+    await user.selectOptions(within(dialog).getByLabelText('Sağlayıcı'), 'codex_cli');
+    await user.click(within(dialog).getByRole('button', { name: 'Kaydet' }));
+
+    await waitFor(() =>
+      expect(commands.upsertProviderProfile).toHaveBeenCalledWith({
+        id: null,
+        kind: 'codex_cli',
+        displayName: 'Mixed',
+        model: 'gpt-4o',
+        baseUrl: null,
+        secretRef: null,
+        supportsVision: false,
+      }),
+    );
+
+    // Going back to an API provider shows the fields again, empty.
+    await user.selectOptions(within(dialog).getByLabelText('Sağlayıcı'), 'openai');
+    expect(within(dialog).queryByRole('note')).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Base URL')).toHaveValue('');
+    expect(within(dialog).getByLabelText(/API anahtarı/)).toHaveValue('');
+  });
+
+  it('falls back to the generic CLI note when a kind has no wording of its own', async () => {
+    const user = userEvent.setup();
+    const { dialog } = await openForm();
+    // Drop the Claude-specific wording, as if a new CLI kind had been added without it.
+    const original = i18n.getResourceBundle('tr', 'translation') as Record<string, unknown>;
+    const stripped = structuredClone(original) as {
+      providers: { form: { cliNote: Record<string, string> } };
+    };
+    delete stripped.providers.form.cliNote.claude_cli;
+    i18n.removeResourceBundle('tr', 'translation');
+    i18n.addResourceBundle('tr', 'translation', stripped);
+
+    try {
+      await user.selectOptions(within(dialog).getByLabelText('Sağlayıcı'), 'claude_cli');
+
+      const note = within(dialog).getByRole('note');
+      expect(note).toHaveTextContent('giriş yapılmış bir CLI kullanır');
+      expect(note).not.toHaveTextContent('providers.form.cliNote');
+    } finally {
+      i18n.removeResourceBundle('tr', 'translation');
+      i18n.addResourceBundle('tr', 'translation', original);
+    }
+  });
+
+  it('keeps the UI list of CLI kinds in line with the requiresCli flag of the kind infos', () => {
+    for (const info of kindInfos) {
+      expect(isCliKind(info.kind), info.kind).toBe(info.requiresCli);
+    }
+    expect([...PROVIDER_KINDS].sort()).toEqual(
+      kindInfos.map((info) => info.kind as ProviderKind).sort(),
+    );
+  });
+
+  it('shows an existing CLI profile with the note and no key field', async () => {
+    const { dialog } = await openForm(codexCliProfile);
+
+    expect(within(dialog).getByLabelText('Sağlayıcı')).toBeDisabled();
+    expect(within(dialog).getByRole('note')).toHaveTextContent('Codex CLI’ını');
+    expect(within(dialog).queryByLabelText(/API anahtarı/)).not.toBeInTheDocument();
   });
 
   it('shows an existing Ollama profile with its default endpoint filled in', async () => {

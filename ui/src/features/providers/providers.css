@@ -226,3 +226,19 @@
     padding: var(--space-5) var(--space-4);
   }
 }
+
+/* Notice shown for the CLI providers: they run a program on this machine, not a hosted API. */
+.cli-note {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.cli-note code {
+  font-family: var(--font-mono);
+}

@@ -29,24 +29,43 @@ export type { AiErrorCode };
 
 export const TASKS: readonly TaskKind[] = ['transcription', 'vision', 'summary'];
 
-/** Provider names are brand names; they read the same in every UI language. */
+/**
+ * Brand names of the providers. The two CLI kinds are labelled with a localised "(subscription)"
+ * suffix by {@link kindLabel}; the plain name here is what screens without a translator show.
+ */
 export const KIND_LABELS: Record<ProviderKind, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   gemini: 'Google Gemini',
   deepseek: 'DeepSeek',
   ollama: 'Ollama',
-  claude_cli: 'Claude Code CLI',
+  claude_cli: 'Claude CLI',
   codex_cli: 'Codex CLI',
 };
 
+/** The kinds the profile form offers. */
+export const PROVIDER_KINDS = Object.keys(KIND_LABELS) as ProviderKind[];
+
 /**
- * The kinds the profile form offers. The two CLI kinds (ADR-013) are labelled above so the
- * types compile, but stay out of the form until the CLI provider UI lands.
+ * What a CLI kind is called in a terminal: its binary and the command that signs it in. This map
+ * is the UI's only list of CLI kinds (label, error wording, slow-test hint); the form itself follows
+ * the backend's `requiresCli`. A new CLI kind must be added here, to `KIND_LABELS`, to
+ * `providers.kinds` and `providers.form.cliNote`; a test checks the two sources agree.
  */
-export const PROVIDER_KINDS = (Object.keys(KIND_LABELS) as ProviderKind[]).filter(
-  (kind) => kind !== 'claude_cli' && kind !== 'codex_cli',
-);
+const CLI_COMMANDS: Partial<Record<ProviderKind, { binary: string; login: string }>> = {
+  claude_cli: { binary: 'claude', login: 'claude' },
+  codex_cli: { binary: 'codex', login: 'codex login' },
+};
+
+/** Whether the kind is a CLI installed on this machine (ADR-013) rather than an API. */
+export function isCliKind(kind: ProviderKind | undefined): boolean {
+  return kind !== undefined && kind in CLI_COMMANDS;
+}
+
+/** The name shown for a provider kind; CLI kinds come from the translations. */
+export function kindLabel(kind: ProviderKind, t: TFunction): string {
+  return isCliKind(kind) ? t(`providers.kinds.${kind}`) : KIND_LABELS[kind];
+}
 
 export const providerKeys = {
   profiles: ['provider-profiles'] as const,
@@ -82,10 +101,25 @@ export interface DescribedAiError {
   detail?: string;
 }
 
-/** Turns any thrown value into text for the user. Raw non-IPC errors are never echoed. */
-export function describeAiError(error: unknown, t: TFunction): DescribedAiError {
+/**
+ * Turns any thrown value into text for the user. Raw non-IPC errors are never echoed. `kind` is the
+ * provider the failing call was made for; it picks the wording that only makes sense for a CLI.
+ */
+export function describeAiError(
+  error: unknown,
+  t: TFunction,
+  kind?: ProviderKind,
+): DescribedAiError {
   if (error instanceof AiCommandError) {
-    const message = t(`providers.errors.${error.code}`, { defaultValue: error.message });
+    const cli = kind ? CLI_COMMANDS[kind] : undefined;
+    let key = `providers.errors.${error.code}`;
+    if (error.code === 'provider_auth' && cli) key = 'providers.errors.provider_auth_cli';
+    if (error.code === 'cli_unavailable' && !cli) key = 'providers.errors.cli_unavailable_generic';
+    const message = t(key, {
+      defaultValue: error.message,
+      cli: cli?.binary,
+      login: cli?.login,
+    });
     return message === error.message || !error.message
       ? { message }
       : { message, detail: error.message };

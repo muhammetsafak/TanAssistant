@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../components/ui/Button';
 import { CheckIcon, WarningIcon } from '../../components/ui/Icons';
-import { describeAiError, useTestProvider, type ProviderProfile } from './api';
+import { describeAiError, isCliKind, useTestProvider, type ProviderProfile } from './api';
 
 import '../../components/ui/ui.css';
 import './providers.css';
@@ -43,12 +43,15 @@ function TestOutcome({
     return (
       <p className="test-result" role="status">
         {t('providers.test.running')}
+        {isCliKind(profile.kind) ? (
+          <span className="test-result__detail">{t('providers.test.cliSlow')}</span>
+        ) : null}
       </p>
     );
   }
 
   if (test.isError) {
-    const { message, detail } = describeAiError(test.error, t);
+    const { message, detail } = describeAiError(test.error, t, profile.kind);
     return (
       <p className="test-result test-result--error" role="alert">
         <WarningIcon className="test-result__icon" />

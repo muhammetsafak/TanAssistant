@@ -6,7 +6,7 @@ import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/toast-context';
 import { refocusIfLost } from '../credentials/focus';
 import {
-  KIND_LABELS,
+  kindLabel,
   useAiErrorHandler,
   useDeleteProfile,
   useProfiles,
@@ -94,7 +94,7 @@ export function ProfilesList() {
                   <th scope="row" className="cell-name">
                     {profile.displayName}
                   </th>
-                  <td>{KIND_LABELS[profile.kind]}</td>
+                  <td>{kindLabel(profile.kind, t)}</td>
                   <td className="cell-model">
                     {profile.model}
                     <DeprecationBadge kind={profile.kind} model={profile.model} />

@@ -46,6 +46,22 @@ export const kindInfos: ProviderKindInfo[] = [
     capabilities: { chat: true, vision: false, transcription: false },
     suggestedModels: { chat: 'llama3.1', vision: 'llava', transcription: null },
   },
+  {
+    kind: 'claude_cli',
+    defaultBaseUrl: '',
+    requiresApiKey: false,
+    requiresCli: true,
+    capabilities: { chat: true, vision: true, transcription: false },
+    suggestedModels: { chat: 'sonnet', vision: 'sonnet', transcription: null },
+  },
+  {
+    kind: 'codex_cli',
+    defaultBaseUrl: '',
+    requiresApiKey: false,
+    requiresCli: true,
+    capabilities: { chat: true, vision: true, transcription: false },
+    suggestedModels: { chat: 'gpt-5-codex', vision: 'gpt-5-codex', transcription: null },
+  },
 ];
 
 export const openAiProfile: ProviderProfile = {
@@ -90,6 +106,28 @@ export const ollamaProfile: ProviderProfile = {
   secretRef: null,
   supportsVision: false,
   capabilities: { chat: true, vision: false, transcription: false },
+};
+
+export const claudeCliProfile: ProviderProfile = {
+  id: 'p-claude-cli',
+  kind: 'claude_cli',
+  displayName: 'Claude subscription',
+  model: 'sonnet',
+  baseUrl: null,
+  secretRef: null,
+  supportsVision: false,
+  capabilities: { chat: true, vision: true, transcription: false },
+};
+
+export const codexCliProfile: ProviderProfile = {
+  id: 'p-codex-cli',
+  kind: 'codex_cli',
+  displayName: 'Codex subscription',
+  model: 'gpt-5-codex',
+  baseUrl: null,
+  secretRef: null,
+  supportsVision: false,
+  capabilities: { chat: true, vision: true, transcription: false },
 };
 
 export const openAiSecret = { id: 's1', name: 'OPENAI_KEY', description: '', createdAt: 1 };

@@ -6,7 +6,15 @@ import i18n from '../../i18n';
 import { commands } from '../../ipc/bindings';
 import { fail, ok, renderWithProviders } from '../../test-utils';
 import ProvidersPage from '../../pages/ProvidersPage';
-import { deepSeekProfile, kindInfos, ollamaProfile, openAiProfile, secrets } from './fixtures';
+import {
+  claudeCliProfile,
+  codexCliProfile,
+  deepSeekProfile,
+  kindInfos,
+  ollamaProfile,
+  openAiProfile,
+  secrets,
+} from './fixtures';
 
 vi.mock('../../ipc/bindings', () => ({
   commands: {
@@ -44,6 +52,19 @@ describe('ProvidersPage', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('labels the CLI profiles from the translations', async () => {
+    vi.mocked(commands.listProviderProfiles).mockResolvedValue(
+      ok([claudeCliProfile, codexCliProfile]),
+    );
+    renderWithProviders(<ProvidersPage />);
+
+    const table = await screen.findByRole('table');
+    const claudeRow = within(table).getByRole('row', { name: /Claude subscription/ });
+    expect(within(claudeRow).getByText('Claude CLI (abonelik)')).toBeInTheDocument();
+    const codexRow = within(table).getByRole('row', { name: /Codex subscription/ });
+    expect(within(codexRow).getByText('Codex CLI (abonelik)')).toBeInTheDocument();
   });
 
   it('lists profiles with provider, model and capability badges', async () => {

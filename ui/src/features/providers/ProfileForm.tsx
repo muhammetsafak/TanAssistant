@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import { Button } from '../../components/ui/Button';
@@ -12,8 +12,8 @@ import { ipc } from '../../ipc/client';
 import { credentialKeys, useSecrets, useVaultStatus } from '../credentials/api';
 import { SecretDialog } from '../credentials/SecretDialog';
 import {
-  KIND_LABELS,
   PROVIDER_KINDS,
+  kindLabel,
   useAiErrorHandler,
   useProviderKinds,
   useUpsertProfile,
@@ -117,7 +117,7 @@ function FormBody({
   kinds: ProviderKindInfo[];
   onClose: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
   const handleError = useAiErrorHandler();
@@ -141,7 +141,12 @@ function FormBody({
   const knownSecretIds = useRef<Set<string> | null>(null);
 
   const info = infoOf(kind);
-  const requiresApiKey = info?.requiresApiKey ?? true;
+  const requiresCli = info?.requiresCli ?? false;
+  // A CLI kind without its own wording falls back to the generic note instead of a raw key.
+  const cliNoteKey = i18n.exists(`providers.form.cliNote.${kind}`)
+    ? `providers.form.cliNote.${kind}`
+    : 'providers.form.cliNoteGeneric';
+  const requiresApiKey = !requiresCli && (info?.requiresApiKey ?? true);
   const isOllama = kind === 'ollama';
 
   const vaultStatus = vault.data;
@@ -167,6 +172,12 @@ function FormBody({
     // An endpoint the user has not touched follows the provider; a typed one is kept.
     if (baseUrl === prefilledBaseUrl(info)) setBaseUrl(prefilledBaseUrl(infoOf(next)));
     if (next !== 'ollama') setSupportsVision(false);
+    if (infoOf(next)?.requiresCli) {
+      // A CLI profile has neither an endpoint nor a key: whatever was typed or picked is dropped.
+      setBaseUrl('');
+      setSecretRef('');
+      setErrors((current) => ({ ...current, baseUrl: undefined, secret: undefined }));
+    }
     setKind(next);
   }
 
@@ -197,7 +208,9 @@ function FormBody({
       displayName: displayName.trim() ? undefined : t('providers.form.displayNameRequired'),
       model: model.trim() ? undefined : t('providers.form.modelRequired'),
       baseUrl:
-        trimmedUrl && !isHttpUrl(trimmedUrl) ? t('providers.form.baseUrlInvalid') : undefined,
+        !requiresCli && trimmedUrl && !isHttpUrl(trimmedUrl)
+          ? t('providers.form.baseUrlInvalid')
+          : undefined,
       secret: requiresApiKey && !secretRef ? t('providers.form.secretRequired') : undefined,
     };
     setErrors(next);
@@ -213,8 +226,9 @@ function FormBody({
         displayName: displayName.trim(),
         model: model.trim(),
         // The provider's own default needs no override.
-        baseUrl: trimmedUrl && trimmedUrl !== info?.defaultBaseUrl ? trimmedUrl : null,
-        secretRef: secretRef || null,
+        baseUrl:
+          !requiresCli && trimmedUrl && trimmedUrl !== info?.defaultBaseUrl ? trimmedUrl : null,
+        secretRef: requiresCli ? null : secretRef || null,
         supportsVision: isOllama ? supportsVision : false,
       },
       {
@@ -255,10 +269,16 @@ function FormBody({
           >
             {PROVIDER_KINDS.map((entry) => (
               <option key={entry} value={entry}>
-                {KIND_LABELS[entry]}
+                {kindLabel(entry, t)}
               </option>
             ))}
           </SelectField>
+
+          {requiresCli ? (
+            <p className="cli-note" role="note">
+              <Trans i18nKey={cliNoteKey} components={{ code: <code /> }} />
+            </p>
+          ) : null}
 
           <TextField
             label={t('providers.form.displayName')}
@@ -311,84 +331,90 @@ function FormBody({
             </div>
           ) : null}
 
-          <TextField
-            type="url"
-            label={t('providers.form.baseUrl')}
-            value={baseUrl}
-            onChange={(event) => setBaseUrl(event.target.value)}
-            error={errors.baseUrl}
-            hint={t('providers.form.baseUrlHint', { url: info?.defaultBaseUrl ?? '' })}
-            placeholder={info?.defaultBaseUrl}
-            autoComplete="off"
-            spellCheck={false}
-          />
+          {requiresCli ? null : (
+            <>
+              <TextField
+                type="url"
+                label={t('providers.form.baseUrl')}
+                value={baseUrl}
+                onChange={(event) => setBaseUrl(event.target.value)}
+                error={errors.baseUrl}
+                hint={t('providers.form.baseUrlHint', { url: info?.defaultBaseUrl ?? '' })}
+                placeholder={info?.defaultBaseUrl}
+                autoComplete="off"
+                spellCheck={false}
+              />
 
-          <div className="field">
-            <SelectField
-              label={
-                requiresApiKey
-                  ? t('providers.form.secret')
-                  : `${t('providers.form.secret')} (${t('providers.form.optional')})`
-              }
-              value={secretRef}
-              onChange={(event) => setSecretRef(event.target.value)}
-              error={errors.secret}
-              hint={secretHint}
-              disabled={vault.isPending}
-            >
-              <option value="">
-                {requiresApiKey ? t('providers.form.secretChoose') : t('providers.form.secretNone')}
-              </option>
-              {secretList.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.name}
-                </option>
-              ))}
-              {secretRef !== '' && (secretMissing || !secretsReady) ? (
-                <option value={secretRef}>
-                  {secretMissing
-                    ? t('providers.form.secretGone')
-                    : t('providers.form.secretUnlistable')}
-                </option>
-              ) : null}
-            </SelectField>
-            {secretMissing ? (
-              <p className="field__error" role="alert">
-                <WarningIcon className="field__error-icon" />
-                {t('providers.form.secretGoneWarning')}
-              </p>
-            ) : null}
-            {vault.isError ? (
-              <div className="alert" role="alert">
-                <span>{t('providers.form.vaultStatusFailed')}</span>
-                <Button size="sm" onClick={() => void vault.refetch()}>
-                  {t('common.retry')}
-                </Button>
+              <div className="field">
+                <SelectField
+                  label={
+                    requiresApiKey
+                      ? t('providers.form.secret')
+                      : `${t('providers.form.secret')} (${t('providers.form.optional')})`
+                  }
+                  value={secretRef}
+                  onChange={(event) => setSecretRef(event.target.value)}
+                  error={errors.secret}
+                  hint={secretHint}
+                  disabled={vault.isPending}
+                >
+                  <option value="">
+                    {requiresApiKey
+                      ? t('providers.form.secretChoose')
+                      : t('providers.form.secretNone')}
+                  </option>
+                  {secretList.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.name}
+                    </option>
+                  ))}
+                  {secretRef !== '' && (secretMissing || !secretsReady) ? (
+                    <option value={secretRef}>
+                      {secretMissing
+                        ? t('providers.form.secretGone')
+                        : t('providers.form.secretUnlistable')}
+                    </option>
+                  ) : null}
+                </SelectField>
+                {secretMissing ? (
+                  <p className="field__error" role="alert">
+                    <WarningIcon className="field__error-icon" />
+                    {t('providers.form.secretGoneWarning')}
+                  </p>
+                ) : null}
+                {vault.isError ? (
+                  <div className="alert" role="alert">
+                    <span>{t('providers.form.vaultStatusFailed')}</span>
+                    <Button size="sm" onClick={() => void vault.refetch()}>
+                      {t('common.retry')}
+                    </Button>
+                  </div>
+                ) : null}
+                {needsUnlock ? (
+                  <p className="field__hint">
+                    {t('providers.form.vaultLocked')}{' '}
+                    <Link to="/credentials" onClick={onClose}>
+                      {t('providers.form.openCredentials')}
+                    </Link>
+                  </p>
+                ) : null}
+                <div>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      knownSecretIds.current = secrets.data
+                        ? new Set(secrets.data.map((entry) => entry.id))
+                        : null;
+                      setNewSecretOpen(true);
+                    }}
+                    disabled={vault.isPending || vault.isError || vaultUnavailable || needsUnlock}
+                  >
+                    {t('providers.form.newSecret')}
+                  </Button>
+                </div>
               </div>
-            ) : null}
-            {needsUnlock ? (
-              <p className="field__hint">
-                {t('providers.form.vaultLocked')}{' '}
-                <Link to="/credentials" onClick={onClose}>
-                  {t('providers.form.openCredentials')}
-                </Link>
-              </p>
-            ) : null}
-            <div>
-              <Button
-                size="sm"
-                onClick={() => {
-                  knownSecretIds.current = secrets.data
-                    ? new Set(secrets.data.map((entry) => entry.id))
-                    : null;
-                  setNewSecretOpen(true);
-                }}
-                disabled={vault.isPending || vault.isError || vaultUnavailable || needsUnlock}
-              >
-                {t('providers.form.newSecret')}
-              </Button>
-            </div>
-          </div>
+            </>
+          )}
 
           <div className="dialog__footer">
             <Button onClick={onClose} disabled={pending}>

@@ -148,6 +148,10 @@
       "vision": "Vision",
       "transcription": "Transcription"
     },
+    "kinds": {
+      "claude_cli": "Claude CLI (subscription)",
+      "codex_cli": "Codex CLI (subscription)"
+    },
     "list": {
       "title": "Profiles",
       "hint": "A profile combines a provider, a model and (when needed) an API key.",
@@ -171,6 +175,11 @@
       "kind": "Provider",
       "kindLocked": "The provider of an existing profile cannot be changed; add a new profile instead.",
       "kindsFailed": "Could not load the provider information.",
+      "cliNoteGeneric": "This provider uses a CLI installed and signed in on this computer. Installing it and signing in is your responsibility; usage counts against your subscription limits.",
+      "cliNote": {
+        "claude_cli": "This provider uses the Claude Code CLI (<code>claude</code>) installed and signed in on this computer. Installing it and signing in is your responsibility; usage counts against your Claude subscription limits.",
+        "codex_cli": "This provider uses the Codex CLI (<code>codex</code>) installed and signed in on this computer. Installing it and signing in is your responsibility; usage counts against your ChatGPT subscription limits. Codex can run commands and read files inside its own read-only sandbox; it cannot write files."
+      },
       "displayName": "Display name",
       "displayNameRequired": "Display name is required.",
       "model": "Model",
@@ -211,7 +220,8 @@
       "modelMissingTitle": "Server reached, but the model is missing.",
       "modelMissing": "The model “{{model}}” is not installed on this server.",
       "availableModels": "Installed models: {{models}}.",
-      "reply": "Model reply: “{{text}}”"
+      "reply": "Model reply: “{{text}}”",
+      "cliSlow": "For this provider the test makes a full call through the CLI and can take up to 10 minutes."
     },
     "assign": {
       "title": "Task assignments",
@@ -239,6 +249,9 @@
       "conflict": "This conflicts with the current state of the profiles.",
       "capability_missing": "This provider cannot do that job.",
       "provider_auth": "The API key was rejected. Check that the selected secret holds the right key.",
+      "provider_auth_cli": "The CLI is not signed in. Sign in from a terminal with “{{login}}”.",
+      "cli_unavailable": "“{{cli}}” was not found. Install the CLI and restart the app.",
+      "cli_unavailable_generic": "The required CLI was not found. Install the CLI and restart the app.",
       "provider_rate_limited": "The provider is rate limiting. Wait a moment and try again.",
       "provider_timeout": "The provider did not answer in time. Try again later.",
       "provider_invalid_request": "The provider refused the request. Check the model name and the base URL.",
@@ -617,7 +630,8 @@
       "no_chat_model": "No AI provider is assigned to the summary. Assign a profile to the “Summary” task on the AI Providers page and try again.",
       "invalid_model_output": "The model did not produce a valid note. Try again or assign another model.",
       "nothing_to_summarize": "There is no transcript or screen content to write a note from.",
-      "provider_auth": "The API key was rejected. Check that the selected secret holds the right key.",
+      "provider_auth": "The provider rejected the credentials. Check that the API key is right or, for CLI providers, that the CLI is signed in.",
+      "provider_cli_unavailable": "The provider’s CLI was not found. Install the CLI and restart the app.",
       "provider_rate_limited": "The provider is rate limiting. Wait a bit and try again.",
       "provider_timeout": "The provider did not answer in time. Try again later.",
       "provider_invalid_request": "The provider refused the request. Check the model name and the base URL.",

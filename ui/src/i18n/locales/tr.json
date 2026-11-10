@@ -148,6 +148,10 @@
       "vision": "Görsel",
       "transcription": "Transkripsiyon"
     },
+    "kinds": {
+      "claude_cli": "Claude CLI (abonelik)",
+      "codex_cli": "Codex CLI (abonelik)"
+    },
     "list": {
       "title": "Profiller",
       "hint": "Her profil bir sağlayıcı, model ve (gerekiyorsa) API anahtarı birleşimidir.",
@@ -171,6 +175,11 @@
       "kind": "Sağlayıcı",
       "kindLocked": "Mevcut bir profilin sağlayıcısı değiştirilemez; yeni bir profil ekleyin.",
       "kindsFailed": "Sağlayıcı bilgileri yüklenemedi.",
+      "cliNoteGeneric": "Bu sağlayıcı, bilgisayarınızda kurulu ve giriş yapılmış bir CLI kullanır. Kurulum ve giriş sizin sorumluluğunuzdadır; kullanım aboneliğinizin limitlerinden düşer.",
+      "cliNote": {
+        "claude_cli": "Bu sağlayıcı, bilgisayarınızda kurulu ve giriş yapılmış Claude Code CLI’ını (<code>claude</code>) kullanır. Kurulum ve giriş sizin sorumluluğunuzdadır; kullanım Claude aboneliğinizin limitlerinden düşer.",
+        "codex_cli": "Bu sağlayıcı, bilgisayarınızda kurulu ve giriş yapılmış Codex CLI’ını (<code>codex</code>) kullanır. Kurulum ve giriş sizin sorumluluğunuzdadır; kullanım ChatGPT aboneliğinizin limitlerinden düşer. Codex, kendi read-only sandbox’ında komut çalıştırabilir ve dosya okuyabilir; dosya yazamaz."
+      },
       "displayName": "Görünen ad",
       "displayNameRequired": "Görünen ad zorunludur.",
       "model": "Model",
@@ -211,7 +220,8 @@
       "modelMissingTitle": "Sunucuya ulaşıldı ama model yok.",
       "modelMissing": "“{{model}}” modeli bu sunucuda kurulu değil.",
       "availableModels": "Kurulu modeller: {{models}}.",
-      "reply": "Modelin yanıtı: “{{text}}”"
+      "reply": "Modelin yanıtı: “{{text}}”",
+      "cliSlow": "Bu sağlayıcıda test, CLI üzerinden tam bir çağrı yapar ve 10 dakikaya kadar sürebilir."
     },
     "assign": {
       "title": "Görev atamaları",
@@ -239,6 +249,9 @@
       "conflict": "Bu işlem profillerin mevcut durumuyla çakışıyor.",
       "capability_missing": "Bu sağlayıcı bu işi yapamıyor.",
       "provider_auth": "API anahtarı reddedildi. Seçili secret’ın doğru anahtarı içerdiğini kontrol edin.",
+      "provider_auth_cli": "CLI’da giriş yapılmamış. Terminalde “{{login}}” komutuyla giriş yapın.",
+      "cli_unavailable": "“{{cli}}” bulunamadı. CLI’ı kurup uygulamayı yeniden başlatın.",
+      "cli_unavailable_generic": "Gerekli CLI bulunamadı. CLI’ı kurup uygulamayı yeniden başlatın.",
       "provider_rate_limited": "Sağlayıcı istek sınırına ulaştı. Biraz bekleyip yeniden deneyin.",
       "provider_timeout": "Sağlayıcı zamanında yanıt vermedi. Daha sonra yeniden deneyin.",
       "provider_invalid_request": "Sağlayıcı isteği reddetti. Model adını ve base URL’yi kontrol edin.",
@@ -617,7 +630,8 @@
       "no_chat_model": "Özet için atanmış bir AI sağlayıcı yok. AI Sağlayıcıları sayfasında “Özet” görevine bir profil atayıp tekrar deneyin.",
       "invalid_model_output": "Model geçerli bir not üretemedi. Tekrar deneyin ya da başka bir model atayın.",
       "nothing_to_summarize": "Not üretilecek transkript ya da ekran içeriği yok.",
-      "provider_auth": "API anahtarı reddedildi. Seçili secret’ın doğru anahtarı içerdiğini kontrol edin.",
+      "provider_auth": "Sağlayıcı kimlik bilgilerini reddetti. API anahtarının doğru olduğunu, CLI sağlayıcılarında ise CLI’da giriş yapıldığını kontrol edin.",
+      "provider_cli_unavailable": "Sağlayıcının CLI’ı bulunamadı. CLI’ı kurup uygulamayı yeniden başlatın.",
       "provider_rate_limited": "Sağlayıcı istek sınırına ulaştı. Biraz bekleyip yeniden deneyin.",
       "provider_timeout": "Sağlayıcı zamanında yanıt vermedi. Daha sonra yeniden deneyin.",
       "provider_invalid_request": "Sağlayıcı isteği reddetti. Model adını ve base URL’yi kontrol edin.",
