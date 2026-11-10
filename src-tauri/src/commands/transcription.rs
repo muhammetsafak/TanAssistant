@@ -93,7 +93,10 @@ const fn ai_error_code(error: &AiError) -> TranscriptionErrorCode {
         AiError::RateLimited { .. } => TranscriptionErrorCode::ProviderRateLimited,
         AiError::Timeout => TranscriptionErrorCode::ProviderTimeout,
         AiError::InvalidRequest(_) => TranscriptionErrorCode::ProviderInvalidRequest,
-        AiError::Unsupported(_) => TranscriptionErrorCode::ProviderUnsupported,
+        // A CLI provider cannot transcribe, so `CliUnavailable` is not reachable in practice.
+        AiError::Unsupported(_) | AiError::CliUnavailable(_) => {
+            TranscriptionErrorCode::ProviderUnsupported
+        }
         AiError::Network(_) => TranscriptionErrorCode::ProviderNetwork,
         AiError::Provider { .. } => TranscriptionErrorCode::ProviderError,
         AiError::SecretUnavailable(_) => TranscriptionErrorCode::SecretUnavailable,

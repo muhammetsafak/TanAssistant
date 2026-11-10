@@ -295,3 +295,57 @@ async fn ollama_vision_follows_the_profile_flag() {
     ollama.supports_vision = true;
     assert!(fixture.factory.vision(&ollama).await.is_ok());
 }
+
+#[tokio::test]
+async fn cli_providers_build_without_a_key_and_refuse_transcription() {
+    let fixture = fixture().await;
+    for kind in [ProviderKind::ClaudeCli, ProviderKind::CodexCli] {
+        let cli = profile(kind, None, None);
+        let chat = fixture.factory.chat(&cli).await.unwrap();
+        assert!(fixture.factory.vision(&cli).await.is_ok());
+        assert!(matches!(
+            fixture.factory.transcription(&cli).await,
+            Err(AiError::Unsupported(_))
+        ));
+        assert!(matches!(
+            fixture.factory.catalog(&cli).await,
+            Err(AiError::Unsupported(_))
+        ));
+        let request = TranscriptionRequest {
+            audio: tan_application::ports::AudioSource::Path("x.wav".into()),
+            language: None,
+            duration_ms: None,
+            prompt: None,
+        };
+        assert!(matches!(
+            chat.transcribe(request).await,
+            Err(AiError::Unsupported(_))
+        ));
+
+        // A key or an endpoint on such a profile is refused, and no secret is read for it.
+        *fixture.store.locked.lock().unwrap() = true;
+        assert!(matches!(
+            fixture
+                .factory
+                .chat(&profile(kind, None, Some("key-1")))
+                .await,
+            Err(AiError::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            fixture
+                .factory
+                .chat(&profile(
+                    kind,
+                    Some("https://proxy.example.com".to_owned()),
+                    None
+                ))
+                .await,
+            Err(AiError::InvalidRequest(_))
+        ));
+        assert!(
+            fixture.factory.chat(&cli).await.is_ok(),
+            "the locked vault is irrelevant"
+        );
+        *fixture.store.locked.lock().unwrap() = false;
+    }
+}

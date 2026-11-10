@@ -12,7 +12,7 @@ use std::error::Error;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tan_application::ai::{AiUseCaseError, ProviderTestReport, UpsertProviderProfileInput};
-use tan_application::ports::{requires_api_key, AiError, Capabilities};
+use tan_application::ports::{is_cli_provider, requires_api_key, AiError, Capabilities};
 use tan_domain::{
     ProviderKind, ProviderProfile, ProviderProfileId, SecretId, TaskAssignment, TaskKind,
 };
@@ -39,6 +39,12 @@ pub enum ProviderKindDto {
     /// A local or remote Ollama server.
     #[serde(rename = "ollama")]
     Ollama,
+    /// The Claude Code CLI installed on this machine (runs on the user's Claude subscription).
+    #[serde(rename = "claude_cli")]
+    ClaudeCli,
+    /// The Codex CLI installed on this machine (runs on the user's `ChatGPT` subscription).
+    #[serde(rename = "codex_cli")]
+    CodexCli,
 }
 
 impl From<ProviderKind> for ProviderKindDto {
@@ -49,6 +55,8 @@ impl From<ProviderKind> for ProviderKindDto {
             ProviderKind::Gemini => Self::Gemini,
             ProviderKind::DeepSeek => Self::DeepSeek,
             ProviderKind::Ollama => Self::Ollama,
+            ProviderKind::ClaudeCli => Self::ClaudeCli,
+            ProviderKind::CodexCli => Self::CodexCli,
         }
     }
 }
@@ -61,6 +69,8 @@ impl From<ProviderKindDto> for ProviderKind {
             ProviderKindDto::Gemini => Self::Gemini,
             ProviderKindDto::DeepSeek => Self::DeepSeek,
             ProviderKindDto::Ollama => Self::Ollama,
+            ProviderKindDto::ClaudeCli => Self::ClaudeCli,
+            ProviderKindDto::CodexCli => Self::CodexCli,
         }
     }
 }
@@ -269,6 +279,9 @@ pub struct ProviderKindInfoDto {
     pub default_base_url: String,
     /// Whether a profile needs an API key secret.
     pub requires_api_key: bool,
+    /// Whether the provider is a CLI that must be installed and signed in on this machine
+    /// (such a profile has neither a key nor a base URL).
+    pub requires_cli: bool,
     /// What the provider can do. For Ollama `vision` is `false` here: it is the profile's
     /// `supportsVision` flag that turns it on.
     pub capabilities: CapabilitiesDto,
@@ -309,6 +322,8 @@ pub enum AiErrorCode {
     ProviderError,
     /// The API key could not be read from the secret store (locked, missing...).
     SecretUnavailable,
+    /// The CLI of a CLI provider is not installed or could not be started.
+    CliUnavailable,
     /// Anything else; details are in the log.
     Internal,
 }
@@ -339,6 +354,7 @@ impl From<AiUseCaseError> for AiIpcError {
                 AiError::Network(_) => AiErrorCode::ProviderNetwork,
                 AiError::Provider { .. } => AiErrorCode::ProviderError,
                 AiError::SecretUnavailable(_) => AiErrorCode::SecretUnavailable,
+                AiError::CliUnavailable(_) => AiErrorCode::CliUnavailable,
             },
             AiUseCaseError::Storage(_) => {
                 log_source("AI operation failed", &error);
@@ -440,6 +456,7 @@ pub fn list_provider_kinds() -> Vec<ProviderKindInfoDto> {
                 kind: kind.into(),
                 default_base_url: default_base_url(kind).to_owned(),
                 requires_api_key: requires_api_key(kind),
+                requires_cli: is_cli_provider(kind),
                 capabilities: Capabilities::for_provider(kind).into(),
                 suggested_models: SuggestedModelsDto {
                     chat: models.chat.map(str::to_owned),

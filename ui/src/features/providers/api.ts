@@ -36,9 +36,17 @@ export const KIND_LABELS: Record<ProviderKind, string> = {
   gemini: 'Google Gemini',
   deepseek: 'DeepSeek',
   ollama: 'Ollama',
+  claude_cli: 'Claude Code CLI',
+  codex_cli: 'Codex CLI',
 };
 
-export const PROVIDER_KINDS = Object.keys(KIND_LABELS) as ProviderKind[];
+/**
+ * The kinds the profile form offers. The two CLI kinds (ADR-013) are labelled above so the
+ * types compile, but stay out of the form until the CLI provider UI lands.
+ */
+export const PROVIDER_KINDS = (Object.keys(KIND_LABELS) as ProviderKind[]).filter(
+  (kind) => kind !== 'claude_cli' && kind !== 'codex_cli',
+);
 
 export const providerKeys = {
   profiles: ['provider-profiles'] as const,

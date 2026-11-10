@@ -9,8 +9,9 @@ use super::{
 };
 use crate::credentials::{check_text, clean_line};
 use crate::ports::{
-    requires_api_key, Capabilities, ChatMessage, ChatModel, ChatRequest, Clock, IdGenerator,
-    ModelCatalog, ProviderFactory, ProviderProfileRepository, TaskAssignmentRepository,
+    is_cli_provider, requires_api_key, Capabilities, ChatMessage, ChatModel, ChatRequest, Clock,
+    IdGenerator, ModelCatalog, ProviderFactory, ProviderProfileRepository,
+    TaskAssignmentRepository,
 };
 
 const DANGLING_SECRET: &str = "the referenced secret does not exist";
@@ -92,6 +93,26 @@ where
     ) -> AiUseCaseResult<ProviderProfile> {
         let display_name = clean_line("display name", &input.display_name, MAX_DISPLAY_NAME_LEN)?;
         let model = clean_line("model", &input.model, MAX_MODEL_LEN)?;
+        if is_cli_provider(input.kind) {
+            // A CLI provider runs on the sign-in of the installed binary (ADR-013): there is
+            // no key to reference and no endpoint to point at.
+            if input.secret_ref.is_some() {
+                return Err(AiUseCaseError::Invalid(format!(
+                    "{} does not take an API key",
+                    input.kind
+                )));
+            }
+            if input
+                .base_url
+                .as_deref()
+                .is_some_and(|u| !u.trim().is_empty())
+            {
+                return Err(AiUseCaseError::Invalid(format!(
+                    "{} does not take a base URL",
+                    input.kind
+                )));
+            }
+        }
         // Whenever a key will be sent, the endpoint must be encrypted, whatever the provider.
         let sends_key = requires_api_key(input.kind) || input.secret_ref.is_some();
         let base_url = clean_base_url(sends_key, input.base_url.as_deref())?;

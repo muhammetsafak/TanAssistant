@@ -31,7 +31,10 @@ impl TokenBudget {
     #[must_use]
     pub const fn for_provider(kind: ProviderKind) -> Self {
         match kind {
-            ProviderKind::OpenAi | ProviderKind::Anthropic => Self {
+            ProviderKind::OpenAi
+            | ProviderKind::Anthropic
+            | ProviderKind::ClaudeCli
+            | ProviderKind::CodexCli => Self {
                 input_tokens: 48_000,
                 reply_tokens: 4_096,
             },

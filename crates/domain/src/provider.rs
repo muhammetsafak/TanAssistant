@@ -17,6 +17,10 @@ string_enum! {
         DeepSeek => "deepseek",
         /// Local Ollama server.
         Ollama => "ollama",
+        /// The Claude Code CLI (`claude`) installed and signed in on this machine (ADR-013).
+        ClaudeCli => "claude_cli",
+        /// The `OpenAI` Codex CLI (`codex`) installed and signed in on this machine (ADR-013).
+        CodexCli => "codex_cli",
     }
 }
 

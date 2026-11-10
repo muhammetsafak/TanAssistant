@@ -90,6 +90,7 @@ pub fn is_transient(error: &AiError) -> bool {
         AiError::RateLimited { .. } | AiError::Timeout | AiError::Network(_) => true,
         AiError::Provider { status, .. } => *status >= 500 || *status == 200,
         AiError::Auth
+        | AiError::CliUnavailable(_)
         | AiError::InvalidRequest(_)
         | AiError::Unsupported(_)
         | AiError::SecretUnavailable(_) => false,

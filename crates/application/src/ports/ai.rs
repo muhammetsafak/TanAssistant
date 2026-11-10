@@ -40,7 +40,7 @@ impl Capabilities {
                 vision: true,
                 transcription: true,
             },
-            ProviderKind::Anthropic => Self {
+            ProviderKind::Anthropic | ProviderKind::ClaudeCli | ProviderKind::CodexCli => Self {
                 chat: true,
                 vision: true,
                 transcription: false,
@@ -75,10 +75,21 @@ impl Capabilities {
     }
 }
 
-/// Whether the provider needs an API key. Ollama does not (a key is optional there).
+/// Whether the provider needs an API key. Ollama does not (a key is optional there) and the CLI
+/// providers never take one: they run on the sign-in of the installed binary (ADR-013).
 #[must_use]
 pub const fn requires_api_key(kind: ProviderKind) -> bool {
-    !matches!(kind, ProviderKind::Ollama)
+    !matches!(
+        kind,
+        ProviderKind::Ollama | ProviderKind::ClaudeCli | ProviderKind::CodexCli
+    )
+}
+
+/// Whether the provider is a locally installed CLI run as a child process (ADR-013) rather than
+/// a service reached over the network. Such a profile has neither an API key nor a base URL.
+#[must_use]
+pub const fn is_cli_provider(kind: ProviderKind) -> bool {
+    matches!(kind, ProviderKind::ClaudeCli | ProviderKind::CodexCli)
 }
 
 /// Failure of an AI call. Messages never contain an API key.
@@ -101,13 +112,17 @@ pub enum AiError {
     Network(String),
     /// The provider answered with another error.
     Provider {
-        /// HTTP status.
+        /// HTTP status; for a CLI provider the exit code of the process when it is below 100
+        /// (larger ones are written into the message so they cannot pass for an HTTP status),
+        /// and `0` when the provider has neither (local whisper, a signal).
         status: u16,
         /// Provider message, truncated and redacted.
         message: String,
     },
     /// The API key could not be read from the secret store.
     SecretUnavailable(String),
+    /// The CLI of a CLI provider (ADR-013) is not installed or could not be started.
+    CliUnavailable(String),
 }
 
 impl fmt::Display for AiError {
@@ -128,10 +143,16 @@ impl fmt::Display for AiError {
             Self::InvalidRequest(why) => write!(f, "the provider refused the request: {why}"),
             Self::Unsupported(what) => write!(f, "not supported: {what}"),
             Self::Network(why) => write!(f, "network error: {why}"),
-            Self::Provider { status, message } => {
-                write!(f, "provider error (HTTP {status}): {message}")
-            }
+            // HTTP statuses are 100 and up; below that the number is a CLI exit code (0: none).
+            Self::Provider { status, message } => match status {
+                0 => write!(f, "provider error: {message}"),
+                1..=99 => write!(f, "provider error (exit code {status}): {message}"),
+                _ => write!(f, "provider error (HTTP {status}): {message}"),
+            },
             Self::SecretUnavailable(why) => write!(f, "the API key is unavailable: {why}"),
+            Self::CliUnavailable(why) => {
+                write!(f, "the CLI is not installed or could not be started: {why}")
+            }
         }
     }
 }
@@ -385,7 +406,7 @@ pub trait ProviderFactory: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{requires_api_key, AiError, Capabilities};
+    use super::{is_cli_provider, requires_api_key, AiError, Capabilities};
     use tan_domain::{ProviderKind, TaskKind};
 
     #[test]
@@ -407,10 +428,44 @@ mod tests {
     }
 
     #[test]
-    fn only_ollama_works_without_a_key() {
+    fn only_ollama_and_the_cli_providers_work_without_a_key() {
         for &kind in ProviderKind::ALL {
-            assert_eq!(requires_api_key(kind), kind != ProviderKind::Ollama);
+            assert_eq!(
+                requires_api_key(kind),
+                kind != ProviderKind::Ollama && !is_cli_provider(kind)
+            );
         }
+    }
+
+    #[test]
+    fn cli_providers_chat_and_see_but_do_not_transcribe() {
+        for kind in [ProviderKind::ClaudeCli, ProviderKind::CodexCli] {
+            assert!(is_cli_provider(kind));
+            let caps = Capabilities::for_provider(kind);
+            assert!(caps.chat && caps.vision && !caps.transcription);
+        }
+        assert!(!is_cli_provider(ProviderKind::Anthropic));
+        assert!(!is_cli_provider(ProviderKind::Ollama));
+    }
+
+    #[test]
+    fn provider_errors_name_an_http_status_or_an_exit_code() {
+        let error = |status| AiError::Provider {
+            status,
+            message: "boom".to_owned(),
+        };
+        assert_eq!(error(503).to_string(), "provider error (HTTP 503): boom");
+        assert_eq!(error(7).to_string(), "provider error (exit code 7): boom");
+        assert_eq!(error(0).to_string(), "provider error: boom");
+    }
+
+    #[test]
+    fn cli_unavailable_message_names_the_cause() {
+        let text = AiError::CliUnavailable("claude was not found".to_owned()).to_string();
+        assert_eq!(
+            text,
+            "the CLI is not installed or could not be started: claude was not found"
+        );
     }
 
     #[test]

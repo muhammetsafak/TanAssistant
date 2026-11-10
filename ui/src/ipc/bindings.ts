@@ -292,6 +292,8 @@ export type AiErrorCode =
 "provider_error" | 
 /**  The API key could not be read from the secret store (locked, missing...). */
 "secret_unavailable" | 
+/**  The CLI of a CLI provider is not installed or could not be started. */
+"cli_unavailable" | 
 /**  Anything else; details are in the log. */
 "internal";
 
@@ -740,6 +742,8 @@ export type ProcessingErrorCode =
 "provider_error" | 
 /**  The API key could not be read from the secret store. */
 "secret_unavailable" | 
+/**  The CLI of a CLI provider (ADR-013) is not installed or could not be started. */
+"provider_cli_unavailable" | 
 /**
  *  An update is being installed (or waits for the restart): no processing run can start
  *  until the application restarts.
@@ -859,7 +863,11 @@ export type ProviderKindDto =
 /**  `DeepSeek`. */
 "deepseek" | 
 /**  A local or remote Ollama server. */
-"ollama";
+"ollama" | 
+/**  The Claude Code CLI installed on this machine (runs on the user's Claude subscription). */
+"claude_cli" | 
+/**  The Codex CLI installed on this machine (runs on the user's `ChatGPT` subscription). */
+"codex_cli";
 
 /**  Static facts about a provider kind, to pre-fill the profile form. */
 export type ProviderKindInfoDto = ProviderKindInfoDto_Serialize | ProviderKindInfoDto_Deserialize;
@@ -872,6 +880,11 @@ export type ProviderKindInfoDto_Deserialize = {
 	defaultBaseUrl: string,
 	/**  Whether a profile needs an API key secret. */
 	requiresApiKey: boolean,
+	/**
+	 *  Whether the provider is a CLI that must be installed and signed in on this machine
+	 *  (such a profile has neither a key nor a base URL).
+	 */
+	requiresCli: boolean,
 	/**
 	 *  What the provider can do. For Ollama `vision` is `false` here: it is the profile's
 	 *  `supportsVision` flag that turns it on.
@@ -894,6 +907,11 @@ export type ProviderKindInfoDto_Serialize = {
 	defaultBaseUrl: string,
 	/**  Whether a profile needs an API key secret. */
 	requiresApiKey: boolean,
+	/**
+	 *  Whether the provider is a CLI that must be installed and signed in on this machine
+	 *  (such a profile has neither a key nor a base URL).
+	 */
+	requiresCli: boolean,
 	/**
 	 *  What the provider can do. For Ollama `vision` is `false` here: it is the profile's
 	 *  `supportsVision` flag that turns it on.

@@ -9,10 +9,10 @@ pub mod secrets;
 use tan_domain::EpochMs;
 
 pub use ai::{
-    requires_api_key, AiError, AiResult, AudioSource, Capabilities, ChatMessage, ChatModel,
-    ChatRequest, ChatResponse, ChatRole, ImageInput, JsonSchema, ModelCatalog, ProviderFactory,
-    TokenUsage, TranscriptSegmentDto, TranscriptionModel, TranscriptionRequest, VisionModel,
-    VisionRequest,
+    is_cli_provider, requires_api_key, AiError, AiResult, AudioSource, Capabilities, ChatMessage,
+    ChatModel, ChatRequest, ChatResponse, ChatRole, ImageInput, JsonSchema, ModelCatalog,
+    ProviderFactory, TokenUsage, TranscriptSegmentDto, TranscriptionModel, TranscriptionRequest,
+    VisionModel, VisionRequest,
 };
 pub use capture::{
     AudioCapture, AudioDevice, AudioFileInfo, AudioFormat, AudioSink, AudioStream,

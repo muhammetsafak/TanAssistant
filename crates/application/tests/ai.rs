@@ -526,6 +526,44 @@ fn an_ollama_profile_with_a_key_must_use_https_for_remote_hosts() {
 }
 
 #[test]
+fn cli_profiles_take_neither_a_secret_nor_a_base_url() {
+    let store = MemStore::new(&["key-1"]);
+    for kind in [ProviderKind::ClaudeCli, ProviderKind::CodexCli] {
+        // `input` carries a secret reference.
+        let mut with_secret = input(kind);
+        with_secret.secret_ref = Some(SecretId::new("key-1"));
+        assert!(matches!(
+            block_on(upsert_use_case(&store).execute(with_secret)),
+            Err(AiUseCaseError::Invalid(_))
+        ));
+
+        let mut with_url = input(kind);
+        with_url.secret_ref = None;
+        with_url.base_url = Some("https://proxy.example.com".to_owned());
+        assert!(matches!(
+            block_on(upsert_use_case(&store).execute(with_url)),
+            Err(AiUseCaseError::Invalid(_))
+        ));
+
+        // A blank URL counts as none; the profile is stored and can serve chat and vision.
+        let mut plain = input(kind);
+        plain.secret_ref = None;
+        plain.base_url = Some("  ".to_owned());
+        plain.supports_vision = false;
+        let profile = block_on(upsert_use_case(&store).execute(plain)).unwrap();
+        assert_eq!(profile.base_url, None);
+        assert_eq!(profile.secret_ref, None);
+        assert!(profile.supports_vision, "the matrix decides, not the input");
+        assign(&store, TaskKind::Summary, &profile).unwrap();
+        assign(&store, TaskKind::Vision, &profile).unwrap();
+        assert!(matches!(
+            assign(&store, TaskKind::Transcription, &profile),
+            Err(AiUseCaseError::CapabilityMissing { .. })
+        ));
+    }
+}
+
+#[test]
 fn ollama_needs_no_key_and_may_use_plain_http() {
     let store = MemStore::new(&[]);
     let mut request = input(ProviderKind::Ollama);

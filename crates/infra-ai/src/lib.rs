@@ -5,8 +5,15 @@
 //! [`factory::AiProviderFactory`] is the entry point: it builds an adapter from a stored
 //! profile and resolves the API key from the secret store. Default endpoints and suggested
 //! model names live in [`defaults`] only.
+//!
+//! Two providers are not HTTP APIs but CLIs installed on the user's machine, run as child
+//! processes on the user's subscription (ADR-013): [`claude_cli`] and [`codex_cli`], on top of
+//! the shared runner in [`cli`].
 
 pub mod anthropic;
+pub mod claude_cli;
+pub mod cli;
+pub mod codex_cli;
 pub mod deepseek;
 pub mod defaults;
 pub mod factory;
@@ -15,6 +22,7 @@ pub mod http;
 pub mod ollama;
 pub mod openai;
 
+pub use cli::CliSettings;
 pub use factory::{AiProvider, AiProviderFactory};
 pub use http::{ClientConfig, HttpClient, HttpSettings};
 

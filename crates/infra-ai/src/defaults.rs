@@ -28,6 +28,8 @@ pub const fn default_base_url(kind: ProviderKind) -> &'static str {
         ProviderKind::Gemini => "https://generativelanguage.googleapis.com/v1beta",
         ProviderKind::DeepSeek => "https://api.deepseek.com",
         ProviderKind::Ollama => "http://localhost:11434",
+        // A CLI provider has no endpoint (ADR-013).
+        ProviderKind::ClaudeCli | ProviderKind::CodexCli => "",
     }
 }
 
@@ -66,6 +68,19 @@ pub const fn suggested_models(kind: ProviderKind) -> SuggestedModels {
         ProviderKind::Ollama => SuggestedModels {
             chat: Some("llama3.2"),
             vision: Some("llama3.2-vision"),
+            transcription: None,
+        },
+        // `claude --model` takes aliases; `sonnet` always means the latest Sonnet.
+        ProviderKind::ClaudeCli => SuggestedModels {
+            chat: Some("sonnet"),
+            vision: Some("sonnet"),
+            transcription: None,
+        },
+        // Taken from the Codex models page (learn.chatgpt.com/docs/models, 2026-11-10); not
+        // tried against a real `codex` because none was installed.
+        ProviderKind::CodexCli => SuggestedModels {
+            chat: Some("gpt-6.1-sol"),
+            vision: Some("gpt-6.1-sol"),
             transcription: None,
         },
     }
@@ -122,7 +137,9 @@ pub fn deprecated_models(kind: ProviderKind) -> &'static [ModelDeprecation] {
         ProviderKind::Anthropic
         | ProviderKind::Gemini
         | ProviderKind::DeepSeek
-        | ProviderKind::Ollama => &[],
+        | ProviderKind::Ollama
+        | ProviderKind::ClaudeCli
+        | ProviderKind::CodexCli => &[],
     }
 }
 
@@ -156,6 +173,11 @@ mod tests {
                 caps.supports(TaskKind::Transcription)
             );
             assert!(!default_base_url(kind).ends_with('/'));
+            assert_eq!(
+                default_base_url(kind).is_empty(),
+                tan_application::ports::is_cli_provider(kind),
+                "only the CLI providers have no endpoint"
+            );
         }
     }
 

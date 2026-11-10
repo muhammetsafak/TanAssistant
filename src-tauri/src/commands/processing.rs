@@ -57,6 +57,8 @@ pub enum ProcessingErrorCode {
     ProviderError,
     /// The API key could not be read from the secret store.
     SecretUnavailable,
+    /// The CLI of a CLI provider (ADR-013) is not installed or could not be started.
+    ProviderCliUnavailable,
     /// An update is being installed (or waits for the restart): no processing run can start
     /// until the application restarts.
     UpdateInProgress,
@@ -108,6 +110,7 @@ const fn ai_error_code(error: &AiError) -> ProcessingErrorCode {
         AiError::Network(_) => ProcessingErrorCode::ProviderNetwork,
         AiError::Provider { .. } => ProcessingErrorCode::ProviderError,
         AiError::SecretUnavailable(_) => ProcessingErrorCode::SecretUnavailable,
+        AiError::CliUnavailable(_) => ProcessingErrorCode::ProviderCliUnavailable,
     }
 }
 
