@@ -8,6 +8,29 @@ both, and the tag) and `src-tauri/tauri.conf.json` has no `version` of its own.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-10
+
+### Added
+
+- Claude and ChatGPT subscriptions as AI providers: the new Claude Code CLI and Codex CLI
+  providers run the `claude` or `codex` command installed and signed in on this computer, so
+  summaries and screen descriptions count against the subscription instead of an API key. They
+  handle summaries and images, not transcription. Installing and signing in to the CLI is up to
+  the user; the provider form says so, and for Codex adds that it can run commands and read files
+  inside its read-only sandbox. The app never reads the CLI's sign-in token.
+
+### Changed
+
+- Short audio dropouts reported by the capture backend (on Windows: "A buffer underrun or
+  overrun occurred.") no longer raise a warning each time. They are counted per track; only
+  when five fall within a minute does a single translated notice appear ("The microphone audio
+  had short dropouts; recording continues."), and the end-of-recording toast for it is
+  informational rather than an error. The gaps were already filled with silence, so the tracks
+  stay in sync.
+- A session started without a title is named after its local start time as
+  `YYYY-MM-DD-HH-MM-SS` (for example `2026-11-10-09-32-05`) instead of the UTC time. Existing
+  titles do not change.
+
 ## [0.2.0] - 2026-11-09
 
 ### Added
