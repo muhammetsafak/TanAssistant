@@ -50,6 +50,8 @@ tracing.workspace = true
 # The diagnostic log: daily files under `<data>/logs/` (see `logging.rs`).
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
+# The local UTC offset of a recording's start time, for its default title.
+chrono.workspace = true
 # Pre-release crates: the `=` pins are required (specta APIs break between rcs).
 specta = "=2.0.0-rc.26"
 specta-typescript = "=0.0.13"

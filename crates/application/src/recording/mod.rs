@@ -321,14 +321,16 @@ impl From<io::Error> for RecordingError {
     }
 }
 
-/// A language-neutral default title for a session started without one: the start time in
-/// UTC, e.g. `2026-11-05 11:32 UTC` (the domain has no time zone database; the UI renames
-/// sessions anyway).
+/// A language-neutral default title for a session started without one: the local start time
+/// as `YYYY-MM-DD-HH-MM-SS`, e.g. `2026-11-10-09-32-05`.
+///
+/// The application layer has no time zone database, so the caller passes the local offset
+/// from UTC that was in force at `started_at` (`0` gives UTC).
 #[must_use]
-pub fn default_session_title(started_at: EpochMs) -> String {
-    let seconds = started_at.get().div_euclid(1_000);
+pub fn default_session_title(started_at: EpochMs, utc_offset_seconds: i32) -> String {
+    let seconds = started_at.get().div_euclid(1_000) + i64::from(utc_offset_seconds);
     let days = seconds.div_euclid(86_400);
-    let minute_of_day = seconds.rem_euclid(86_400) / 60;
+    let second_of_day = seconds.rem_euclid(86_400);
 
     // Civil-from-days (Howard Hinnant's algorithm), valid for the whole i64 range we meet.
     let z = days + 719_468;
@@ -347,9 +349,10 @@ pub fn default_session_title(started_at: EpochMs) -> String {
     let year = year_of_era + era * 400 + i64::from(month <= 2);
 
     format!(
-        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
-        minute_of_day / 60,
-        minute_of_day % 60
+        "{year:04}-{month:02}-{day:02}-{:02}-{:02}-{:02}",
+        second_of_day / 3_600,
+        second_of_day % 3_600 / 60,
+        second_of_day % 60
     )
 }
 
@@ -358,32 +361,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_title_is_the_utc_start_time() {
+    fn default_title_is_the_start_time_at_the_given_offset() {
         // 2023-11-14 22:13:20 UTC
+        let at = EpochMs::new(1_700_000_000_000);
+        assert_eq!(default_session_title(at, 0), "2023-11-14-22-13-20");
+        // Istanbul (UTC+3) is already on the next day.
+        assert_eq!(default_session_title(at, 3 * 3_600), "2023-11-15-01-13-20");
+        // New York in winter (UTC-5), and a half-hour zone (India, UTC+5:30).
+        assert_eq!(default_session_title(at, -5 * 3_600), "2023-11-14-17-13-20");
+        assert_eq!(default_session_title(at, 19_800), "2023-11-15-03-43-20");
         assert_eq!(
-            default_session_title(EpochMs::new(1_700_000_000_000)),
-            "2023-11-14 22:13 UTC"
+            default_session_title(EpochMs::new(0), 0),
+            "1970-01-01-00-00-00"
+        );
+    }
+
+    #[test]
+    fn default_title_rolls_over_days_months_and_leap_days() {
+        // The second before midnight on a leap day, and midnight after it.
+        assert_eq!(
+            default_session_title(EpochMs::new(1_709_251_199_000), 0),
+            "2024-02-29-23-59-59"
         );
         assert_eq!(
-            default_session_title(EpochMs::new(0)),
-            "1970-01-01 00:00 UTC"
+            default_session_title(EpochMs::new(1_709_251_200_000), 0),
+            "2024-03-01-00-00-00"
         );
-        // Leap day, and the second before midnight.
+        // A negative offset moves back across the month boundary.
         assert_eq!(
-            default_session_title(EpochMs::new(1_709_251_199_000)),
-            "2024-02-29 23:59 UTC"
-        );
-        assert_eq!(
-            default_session_title(EpochMs::new(1_709_251_200_000)),
-            "2024-03-01 00:00 UTC"
+            default_session_title(EpochMs::new(1_709_251_200_000), -3_600),
+            "2024-02-29-23-00-00"
         );
     }
 
     #[test]
     fn default_title_handles_times_before_the_epoch() {
         assert_eq!(
-            default_session_title(EpochMs::new(-1)),
-            "1969-12-31 23:59 UTC"
+            default_session_title(EpochMs::new(-1), 0),
+            "1969-12-31-23-59-59"
         );
     }
 }

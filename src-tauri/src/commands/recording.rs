@@ -147,12 +147,25 @@ pub struct StartRecordingOptionsDto {
     pub display_id: Option<String>,
 }
 
+/// The local offset from UTC, in seconds, in force at `at` (daylight saving included). Falls
+/// back to `0` (UTC) when the system time zone cannot be read.
+fn local_utc_offset_seconds(at: tan_domain::EpochMs) -> i32 {
+    use chrono::{Local, Offset as _, TimeZone as _};
+    Local
+        .timestamp_millis_opt(at.get())
+        .earliest()
+        .map_or(0, |time| time.offset().fix().local_minus_utc())
+}
+
 impl StartRecordingOptionsDto {
     fn into_options(self, clock: &dyn Clock) -> Result<StartOptions, RecordingIpcError> {
         let title = self
             .title
             .filter(|t| !t.trim().is_empty())
-            .unwrap_or_else(|| default_session_title(clock.now()));
+            .unwrap_or_else(|| {
+                let now = clock.now();
+                default_session_title(now, local_utc_offset_seconds(now))
+            });
         let speech_language = self
             .speech_language
             .as_deref()
