@@ -2,6 +2,8 @@ import { createContext, useContext } from 'react';
 
 export interface ToastApi {
   success: (message: string) => void;
+  /** A calm, already-localised notice: neither a success nor an error. */
+  info: (message: string) => void;
   /** Accepts any thrown value; IPC errors are localised by their code. */
   error: (error: unknown) => void;
   /** A plain, already-localised error text (no thrown value involved). */

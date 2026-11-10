@@ -8,7 +8,7 @@ import {
   type DisplayThumbnailDto_Serialize,
   type RecordingStatusDto_Serialize,
   type RecordingCapabilitiesDto_Serialize,
-  type RecordingSummaryDto,
+  type RecordingSummaryDto_Serialize,
   type StartRecordingOptionsDto_Deserialize,
 } from '../../ipc/bindings';
 import { unwrapRecording } from '../../ipc/errors';
@@ -19,7 +19,7 @@ export type AudioDevice = AudioDeviceDto;
 export type Display = DisplayDto;
 export type DisplayThumbnail = DisplayThumbnailDto_Serialize;
 export type RecordingCapabilities = RecordingCapabilitiesDto_Serialize;
-export type RecordingSummary = RecordingSummaryDto;
+export type RecordingSummary = RecordingSummaryDto_Serialize;
 export type StartOptions = StartRecordingOptionsDto_Deserialize;
 
 export const recordingKeys = {

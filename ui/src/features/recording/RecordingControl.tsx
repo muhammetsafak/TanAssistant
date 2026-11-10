@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useNavigate } from 'react-router';
 
 import { Button } from '../../components/ui/Button';
@@ -27,7 +28,7 @@ import {
 import { PauseControlIcon, PlayIcon, RecordIcon, StopIcon } from './ControlIcons';
 import { DisplayPicker } from './DisplayPicker';
 import { LevelMeter } from './LevelMeter';
-import { useRecordingEvents } from './useRecordingEvents';
+import { useRecordingEvents, warningKey, type RecordingWarning } from './useRecordingEvents';
 
 import '../../components/ui/ui.css';
 import './recording.css';
@@ -267,6 +268,14 @@ function silentTracks(summary: RecordingSummary): string[] {
   return summary.tracks.filter((track) => track.peak === 0).map((track) => track.kind);
 }
 
+/** The text of a warning: its own wording for known codes, the backend message otherwise. */
+function warningText(warning: RecordingWarning, t: TFunction, afterStop: boolean): string {
+  if (warning.code !== 'audio_dropouts') return warning.message;
+  const track =
+    warning.track === 'microphone' || warning.track === 'system' ? warning.track : 'generic';
+  return t(`recording.warnings.${afterStop ? 'audioDropoutsAfterStop' : 'audioDropouts'}.${track}`);
+}
+
 function ActiveRecordingView({ active, paused }: { active: ActiveRecording; paused: boolean }) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -297,9 +306,17 @@ function ActiveRecordingView({ active, paused }: { active: ActiveRecording; paus
         toast.errorText(t('recording.silentTrack', { track: t(`recording.track.${kind}`) }));
       }
       if (summary.warnings.length > 0) {
-        toast.errorText(
-          `${t('recording.warningsAfterStop')} ${summary.warnings.map((w) => w.message).join(' · ')}`,
-        );
+        const texts = [
+          ...new Map(
+            summary.warnings.map((w) => [warningKey(w), warningText(w, t, true)] as const),
+          ).values(),
+        ];
+        if (summary.warnings.every((w) => w.code === 'audio_dropouts')) {
+          // Short dropouts do not spoil the recording: a calm notice, not an error.
+          toast.info(texts.join(' '));
+        } else {
+          toast.errorText(`${t('recording.warningsAfterStop')} ${texts.join(' · ')}`);
+        }
       }
       void navigate(`/recordings/${summary.sessionId}`);
     } catch (error) {
@@ -365,8 +382,8 @@ function ActiveRecordingView({ active, paused }: { active: ActiveRecording; paus
             <div>
               <p className="recording-warnings__title">{t('recording.warningsTitle')}</p>
               <ul>
-                {warnings.map((message) => (
-                  <li key={message}>{message}</li>
+                {warnings.map((warning) => (
+                  <li key={warningKey(warning)}>{warningText(warning, t, false)}</li>
                 ))}
               </ul>
             </div>

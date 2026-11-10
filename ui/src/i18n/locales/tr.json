@@ -372,6 +372,18 @@
     "meterPaused": "duraklatıldı",
     "warningsTitle": "Kayıt uyarıları",
     "warningsAfterStop": "Kayıt sırasında uyarılar oluştu:",
+    "warnings": {
+      "audioDropouts": {
+        "microphone": "Mikrofon sesinde kısa kesintiler oldu; kayıt devam ediyor.",
+        "system": "Sistem sesinde kısa kesintiler oldu; kayıt devam ediyor.",
+        "generic": "Seste kısa kesintiler oldu; kayıt devam ediyor."
+      },
+      "audioDropoutsAfterStop": {
+        "microphone": "Kayıt sırasında mikrofon sesinde kısa kesintiler oldu.",
+        "system": "Kayıt sırasında sistem sesinde kısa kesintiler oldu.",
+        "generic": "Kayıt sırasında seste kısa kesintiler oldu."
+      }
+    },
     "nothingCaptured": "Kayıttan hiçbir şey yakalanamadı. Mikrofon ve ekran izinlerini kontrol edin.",
     "silentTrack": "{{track}} kanalında hiç ses alınmadı; kaynak sessiz ya da yanlış cihaz seçilmiş olabilir.",
     "statusFailed": "Kayıt durumu okunamadı.",

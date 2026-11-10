@@ -41,6 +41,17 @@ export function CheckIcon({ className }: { className?: string }) {
   );
 }
 
+/** Circled "i": notices that need no action. */
+export function InfoIcon({ className }: { className?: string }) {
+  return (
+    <svg {...COMMON} className={className}>
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M8 7.2v3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="8" cy="5.2" r="0.9" fill="currentColor" />
+    </svg>
+  );
+}
+
 /** Two bars: paused. */
 export function PauseIcon({ className }: { className?: string }) {
   return (

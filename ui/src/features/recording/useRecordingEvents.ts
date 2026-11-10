@@ -1,21 +1,39 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { events, type RecordingProgressEvent, type RecordingStateEvent } from '../../ipc/bindings';
+import {
+  events,
+  type RecordingProgressEvent,
+  type RecordingStateEvent,
+  type RecordingWarningCodeDto,
+} from '../../ipc/bindings';
 import { useTauriEvent } from '../../ipc/useTauriEvent';
 import { sessionKeys } from '../sessions/keys';
 import { recordingKeys } from './api';
 
-export interface RecordingWarnings {
+/** One non-fatal problem; `code` tells the UI which wording to use, `message` is the fallback. */
+export interface RecordingWarning {
+  code: RecordingWarningCodeDto;
+  /** `microphone` or `system` when the warning concerns one audio track. */
+  track: string | null;
+  message: string;
+}
+
+interface SessionWarnings {
   sessionId: string;
-  messages: string[];
+  items: RecordingWarning[];
+}
+
+/** Two warnings with the same code, track and message are the same problem. */
+export function warningKey(warning: RecordingWarning): string {
+  return `${warning.code}|${warning.track ?? ''}|${warning.message}`;
 }
 
 export interface RecordingEvents {
   /** The latest progress tick of the running recording; `null` before the first one. */
   live: RecordingProgressEvent | null;
   /** Non-fatal problems reported by the capture sources of the running recording. */
-  warnings: string[];
+  warnings: RecordingWarning[];
 }
 
 /**
@@ -25,7 +43,7 @@ export interface RecordingEvents {
 export function useRecordingEvents(): RecordingEvents {
   const queryClient = useQueryClient();
   const [live, setLive] = useState<RecordingProgressEvent | null>(null);
-  const [warnings, setWarnings] = useState<RecordingWarnings | null>(null);
+  const [warnings, setWarnings] = useState<SessionWarnings | null>(null);
 
   useTauriEvent(events.recordingProgressEvent, (progress) => setLive(progress));
 
@@ -40,13 +58,15 @@ export function useRecordingEvents(): RecordingEvents {
     void queryClient.invalidateQueries({ queryKey: sessionKeys.all });
   });
 
-  useTauriEvent(events.recordingWarningEvent, ({ sessionId, message }) =>
+  useTauriEvent(events.recordingWarningEvent, ({ sessionId, code, track, message }) => {
+    const warning: RecordingWarning = { code, track: track ?? null, message };
     setWarnings((current) => {
-      if (current?.sessionId !== sessionId) return { sessionId, messages: [message] };
-      if (current.messages.includes(message)) return current;
-      return { sessionId, messages: [...current.messages, message] };
-    }),
-  );
+      if (current?.sessionId !== sessionId) return { sessionId, items: [warning] };
+      const key = warningKey(warning);
+      if (current.items.some((item) => warningKey(item) === key)) return current;
+      return { sessionId, items: [...current.items, warning] };
+    });
+  });
 
-  return { live, warnings: warnings?.messages ?? [] };
+  return { live, warnings: warnings?.items ?? [] };
 }

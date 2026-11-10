@@ -372,6 +372,18 @@
     "meterPaused": "paused",
     "warningsTitle": "Recording warnings",
     "warningsAfterStop": "Warnings came up while recording:",
+    "warnings": {
+      "audioDropouts": {
+        "microphone": "The microphone audio had short dropouts; recording continues.",
+        "system": "The system audio had short dropouts; recording continues.",
+        "generic": "The audio had short dropouts; recording continues."
+      },
+      "audioDropoutsAfterStop": {
+        "microphone": "The microphone audio had short dropouts during the recording.",
+        "system": "The system audio had short dropouts during the recording.",
+        "generic": "The audio had short dropouts during the recording."
+      }
+    },
     "nothingCaptured": "Nothing could be captured. Check the microphone and screen permissions.",
     "silentTrack": "No sound at all was received on the {{track}} track; the source may be silent or the wrong device may be selected.",
     "statusFailed": "The recording status could not be read.",

@@ -4,12 +4,12 @@ import { useTranslation } from 'react-i18next';
 
 import { describeError } from '../../ipc/client';
 import { Button } from './Button';
-import { CheckIcon, WarningIcon } from './Icons';
+import { CheckIcon, InfoIcon, WarningIcon } from './Icons';
 import { ToastContext, type ToastApi } from './toast-context';
 
 import './ui.css';
 
-type ToastKind = 'success' | 'error';
+type ToastKind = 'success' | 'error' | 'info';
 
 interface ToastEntry {
   id: number;
@@ -39,6 +39,8 @@ function ToastItem({ toast, onDismiss }: { toast: ToastEntry; onDismiss: (id: nu
     >
       {toast.kind === 'error' ? (
         <WarningIcon className="toast__icon" />
+      ) : toast.kind === 'info' ? (
+        <InfoIcon className="toast__icon" />
       ) : (
         <CheckIcon className="toast__icon" />
       )}
@@ -76,6 +78,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const api = useMemo<ToastApi>(
     () => ({
       success: (message) => push({ kind: 'success', message }),
+      info: (message) => push({ kind: 'info', message }),
       error: (error) => push({ kind: 'error', ...describeError(error, t) }),
       errorText: (message) => push({ kind: 'error', message }),
     }),

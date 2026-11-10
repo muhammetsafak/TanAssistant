@@ -216,9 +216,105 @@ describe('RecordingControl', () => {
     expect(screen.queryByText('sinyal yok')).not.toBeInTheDocument();
 
     act(() => {
-      emitEvent('recordingWarningEvent', { sessionId: 's9', message: 'Loopback device changed' });
+      emitEvent('recordingWarningEvent', {
+        sessionId: 's9',
+        code: 'other',
+        track: null,
+        message: 'Loopback device changed',
+      });
     });
     expect(screen.getByText('Loopback device changed')).toBeInTheDocument();
+  });
+
+  it('shows an audio dropout warning in Turkish, without the raw English message', async () => {
+    vi.mocked(commands.recordingStatus).mockResolvedValue(ok({ state: 'recording', active }));
+    renderControl();
+    await screen.findByText('Kayıt sürüyor');
+
+    act(() => {
+      emitEvent('recordingWarningEvent', {
+        sessionId: 's9',
+        code: 'audio_dropouts',
+        track: 'microphone',
+        message: 'microphone audio had repeated dropouts',
+      });
+    });
+
+    expect(
+      screen.getByText('Mikrofon sesinde kısa kesintiler oldu; kayıt devam ediyor.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/repeated dropouts/)).not.toBeInTheDocument();
+  });
+
+  it('falls back to the generic dropout wording when the track is missing or unknown', async () => {
+    vi.mocked(commands.recordingStatus).mockResolvedValue(ok({ state: 'recording', active }));
+    renderControl();
+    await screen.findByText('Kayıt sürüyor');
+
+    act(() => {
+      emitEvent('recordingWarningEvent', {
+        sessionId: 's9',
+        code: 'audio_dropouts',
+        track: null,
+        message: 'audio had repeated dropouts',
+      });
+    });
+
+    expect(screen.getByText('Seste kısa kesintiler oldu; kayıt devam ediyor.')).toBeInTheDocument();
+  });
+
+  it('does not raise an error toast when the summary only has dropout warnings', async () => {
+    const user = userEvent.setup();
+    vi.mocked(commands.recordingStatus).mockResolvedValue(ok({ state: 'recording', active }));
+    vi.mocked(commands.stopRecording).mockResolvedValue(
+      ok({
+        sessionId: 's9',
+        status: 'recorded',
+        durationMs: 60_000,
+        tracks: [],
+        frameCount: 3,
+        droppedFrames: 0,
+        warnings: [
+          {
+            code: 'audio_dropouts',
+            track: 'system',
+            message: 'system audio had repeated dropouts',
+          },
+        ],
+      }),
+    );
+    renderControl();
+
+    await user.click(await screen.findByRole('button', { name: 'Kaydı durdur' }));
+
+    await waitFor(() => expect(screen.getByText('detail page')).toBeInTheDocument());
+    const toast = screen
+      .getByText('Kayıt sırasında sistem sesinde kısa kesintiler oldu.')
+      .closest('.toast');
+    expect(toast).toHaveClass('toast--info');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(/repeated dropouts/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the error toast when the summary has a warning of another kind', async () => {
+    const user = userEvent.setup();
+    vi.mocked(commands.recordingStatus).mockResolvedValue(ok({ state: 'recording', active }));
+    vi.mocked(commands.stopRecording).mockResolvedValue(
+      ok({
+        sessionId: 's9',
+        status: 'recorded',
+        durationMs: 60_000,
+        tracks: [],
+        frameCount: 3,
+        droppedFrames: 0,
+        warnings: [{ code: 'other', track: null, message: 'Loopback device changed' }],
+      }),
+    );
+    renderControl();
+
+    await user.click(await screen.findByRole('button', { name: 'Kaydı durdur' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Loopback device changed');
   });
 
   it('stops the recording and opens its session', async () => {
@@ -328,7 +424,12 @@ describe('RecordingControl', () => {
       renderControl();
       await screen.findByText('Kayıt sürüyor');
       act(() => {
-        emitEvent('recordingWarningEvent', { sessionId: 's9', message: 'Loopback device changed' });
+        emitEvent('recordingWarningEvent', {
+          sessionId: 's9',
+          code: 'other',
+          track: null,
+          message: 'Loopback device changed',
+        });
       });
       act(() => {
         emitEvent('recordingStateEvent', { state: 'recording', sessionId: 's9' });

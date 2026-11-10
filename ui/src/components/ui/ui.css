@@ -343,6 +343,15 @@ select.field__input,
   color: var(--color-success-text);
 }
 
+.toast--info {
+  border-color: var(--color-link);
+  background: var(--color-surface-muted);
+}
+
+.toast--info .toast__icon {
+  color: var(--color-link);
+}
+
 .toast__text {
   flex: 1;
   min-width: 0;
