@@ -1,5 +1,6 @@
 //! SQLite implementations of the repository ports.
 
+mod briefs;
 mod frames;
 mod notes;
 mod people;
@@ -20,6 +21,7 @@ use tan_application::RepositoryError;
 
 use crate::db::DbError;
 
+pub use briefs::SqliteActionBriefRepository;
 pub use frames::SqliteFrameRepository;
 pub use notes::SqliteNoteRepository;
 pub use people::SqlitePersonRepository;

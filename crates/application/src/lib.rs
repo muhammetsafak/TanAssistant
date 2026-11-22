@@ -1,6 +1,7 @@
 //! Application layer: use cases and ports (traits). Depends only on `tan-domain`.
 
 pub mod ai;
+pub mod briefs;
 pub mod credentials;
 pub mod error;
 pub mod people;

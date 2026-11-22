@@ -40,9 +40,13 @@ pub use chunking::{
     build_timeline, estimate_tokens, format_offset, frame_alias, split_into_chunks, TimelineEntry,
     TokenBudget, CHARS_PER_TOKEN, PROMPT_OVERHEAD_TOKENS,
 };
-pub use job::{ProcessPorts, ProcessSession};
+pub use job::{NoBriefs, ProcessPorts, ProcessSession};
 
-pub(crate) use chunking::{utc_date_string, utc_datetime_string};
+pub(crate) use chunking::{join_entries, span_of, utc_date_string, utc_datetime_string};
+pub(crate) use synthesize::{
+    ask, clean, extract_json, language_name, render, working_notes, Prompter, MAX_MERGE_ROUNDS,
+    MAX_PROBLEM_CHARS, MAX_REPAIR_REPLY_TOKENS, REPAIR_USER,
+};
 
 /// Persistence of processing jobs.
 pub trait ProcessingJobRepository: Send + Sync {

@@ -9,6 +9,7 @@ use tan_application::ai::{
     ClearTaskAssignment, DeleteProviderProfile, GetTaskAssignments, ListProviderProfiles,
     SetTaskAssignment, TestProvider, UpsertProviderProfile,
 };
+use tan_application::briefs::{ActionBriefService, BriefPorts};
 use tan_application::credentials::{
     CreateSecret, DeleteSecret, DeleteVariable, GetSecretStoreStatus, ListSecrets, ListVariables,
     ResolveSecret, RevealSecret, SetMasterPassword, UnlockSecretStore, UpdateSecret,
@@ -34,7 +35,7 @@ use tan_infra_ai::AiProviderFactory;
 use tan_infra_capture::{DHasher, FileMediaStore, PlatformAudioCapture, PlatformScreenCapture};
 use tan_infra_secrets::{open_secret_store, SelectedSecretStore};
 use tan_infra_storage::repositories::{
-    DataDirFiles, SqlitePersonRepository, SqliteProcessingRepository,
+    DataDirFiles, SqliteActionBriefRepository, SqlitePersonRepository, SqliteProcessingRepository,
 };
 use tan_infra_storage::{
     new_id, DataLayout, Database, SqliteFrameRepository, SqliteNoteRepository,
@@ -169,6 +170,20 @@ pub type Process = ProcessSession<
     DataDirFiles,
     SessionTranscription,
     SqlitePersonRepository,
+    SqliteActionBriefRepository,
+>;
+
+/// The action brief use case wired to SQLite and the AI providers.
+pub type ActionBriefs = ActionBriefService<
+    SqliteSessionRepository,
+    SqliteFrameRepository,
+    SqliteTranscriptRepository,
+    SqliteNoteRepository,
+    Assignments,
+    Profiles,
+    AiFactory,
+    SqliteActionBriefRepository,
+    SqlitePersonRepository,
 >;
 
 /// The retention policy wired to SQLite and the data directory.
@@ -242,6 +257,8 @@ pub struct AppState {
     pub transcribe_session: Arc<Transcribe>,
     /// Turns a recorded session into a structured note (transcript, frame descriptions, note).
     pub process_session: Arc<Process>,
+    /// Writes, stores, reads and exports the brief of an action item.
+    pub action_briefs: Arc<ActionBriefs>,
     /// Lists sessions.
     pub list_sessions: ListSessions<SqliteSessionRepository, SqliteNoteRepository>,
     /// Full-text search over transcripts and notes.
@@ -312,6 +329,7 @@ impl AppState {
         let transcripts = Arc::new(SqliteTranscriptRepository::new(database.clone()));
         let notes = Arc::new(SqliteNoteRepository::new(database.clone()));
         let people = Arc::new(SqlitePersonRepository::new(database.clone()));
+        let action_brief_store = Arc::new(SqliteActionBriefRepository::new(database.clone()));
         // Owners written before the person directory existed are free text; move them to
         // people (idempotent). A failure only postpones it to the next start.
         match people.backfill_legacy_owners(clock.now()) {
@@ -353,7 +371,26 @@ impl AppState {
             chunker: Arc::new(WavAudioChunker),
             files: session_files.clone(),
         }));
-        let process_session = Arc::new(ProcessSession::new(ProcessPorts {
+        let process_session = Arc::new(
+            ProcessSession::new(ProcessPorts {
+                sessions: sessions.clone(),
+                frames: frames.clone(),
+                transcripts: transcripts.clone(),
+                notes: notes.clone(),
+                assignments: assignments.clone(),
+                profiles: profiles.clone(),
+                factory: ai_factory.clone(),
+                jobs: processing.clone(),
+                files: files.clone(),
+                transcriber: Arc::new(SessionTranscription(transcribe_session.clone())),
+                people: people.clone(),
+                ids: ids.clone(),
+                clock: clock.clone(),
+            })
+            // A regenerated note keeps the briefs of the action items it keeps.
+            .with_briefs(action_brief_store.clone()),
+        );
+        let action_briefs = Arc::new(ActionBriefService::new(BriefPorts {
             sessions: sessions.clone(),
             frames: frames.clone(),
             transcripts: transcripts.clone(),
@@ -361,9 +398,7 @@ impl AppState {
             assignments: assignments.clone(),
             profiles: profiles.clone(),
             factory: ai_factory.clone(),
-            jobs: processing.clone(),
-            files: files.clone(),
-            transcriber: Arc::new(SessionTranscription(transcribe_session.clone())),
+            briefs: action_brief_store,
             people: people.clone(),
             ids: ids.clone(),
             clock: clock.clone(),
@@ -430,6 +465,7 @@ impl AppState {
             whisper_models,
             transcribe_session,
             process_session,
+            action_briefs,
             list_sessions: ListSessions::new(sessions.clone(), notes.clone()),
             search_sessions: SearchSessions::new(sessions.clone(), search_index),
             get_session_detail: GetSessionDetail::new(

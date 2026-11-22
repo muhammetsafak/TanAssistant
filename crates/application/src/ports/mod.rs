@@ -23,9 +23,10 @@ pub use capture::{
 };
 pub use media::{AudioMixError, AudioMixer};
 pub use repositories::{
-    FrameRepository, NoteRepository, PersonRepository, ProviderProfileRepository, SearchHit,
-    SearchIndex, SearchSource, SecretMetadataRepository, SessionRepository, SettingsRepository,
-    TaskAssignmentRepository, TranscriptRepository, VariableRepository,
+    ActionBriefRepository, FrameRepository, NoteRepository, PersonRepository,
+    ProviderProfileRepository, SearchHit, SearchIndex, SearchSource, SecretMetadataRepository,
+    SessionRepository, SettingsRepository, TaskAssignmentRepository, TranscriptRepository,
+    VariableRepository,
 };
 pub use secrets::{
     SecretBackend, SecretStore, SecretStoreControl, SecretStoreError, SecretStoreResult,

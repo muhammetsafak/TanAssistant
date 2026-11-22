@@ -760,11 +760,11 @@ mod pipeline_tests {
 
     use futures_executor::block_on;
     use tan_application::ports::{
-        AiError, AiResult, ChatModel, ChatRequest, ChatResponse, Clock, FrameRepository,
-        IdGenerator, ModelCatalog, NoteRepository, PersonRepository, ProviderFactory,
-        ProviderProfileRepository, SearchIndex, SessionRepository, SettingsRepository,
-        TaskAssignmentRepository, TranscriptRepository, TranscriptSegmentDto, TranscriptionModel,
-        TranscriptionRequest, VisionModel, VisionRequest,
+        ActionBriefRepository, AiError, AiResult, ChatModel, ChatRequest, ChatResponse, Clock,
+        FrameRepository, IdGenerator, ModelCatalog, NoteRepository, PersonRepository,
+        ProviderFactory, ProviderProfileRepository, SearchIndex, SessionRepository,
+        SettingsRepository, TaskAssignmentRepository, TranscriptRepository, TranscriptSegmentDto,
+        TranscriptionModel, TranscriptionRequest, VisionModel, VisionRequest,
     };
     use tan_application::processing::{
         ProcessError, ProcessPorts, ProcessSession, ProcessSummary, SessionTranscriber,
@@ -776,17 +776,17 @@ mod pipeline_tests {
         TranscribeProgress, TranscribeResult, TranscribeSummary, TranscriptionEngine,
     };
     use tan_domain::{
-        ActionItem, ActionItemId, AudioTrack, Frame, FrameId, LanguageCode, LanguageSetting, Note,
-        NoteId, ParticipantSource, Person, PersonId, ProviderKind, ProviderProfile,
-        ProviderProfileId, Session, SessionKind, SessionParticipant, SessionStatus, SettingsPatch,
-        TaskAssignment, TaskKind, TranscriptSegment,
+        ActionBrief, ActionItem, ActionItemId, AudioTrack, Frame, FrameId, LanguageCode,
+        LanguageSetting, Note, NoteId, ParticipantSource, Person, PersonId, ProviderKind,
+        ProviderProfile, ProviderProfileId, Session, SessionKind, SessionParticipant,
+        SessionStatus, SettingsPatch, TaskAssignment, TaskKind, TranscriptSegment,
     };
 
     use super::*;
     use crate::repositories::{
-        SqliteFrameRepository, SqliteNoteRepository, SqlitePersonRepository,
-        SqliteProviderProfileRepository, SqliteSessionRepository, SqliteSettingsRepository,
-        SqliteTaskAssignmentRepository, SqliteTranscriptRepository,
+        SqliteActionBriefRepository, SqliteFrameRepository, SqliteNoteRepository,
+        SqlitePersonRepository, SqliteProviderProfileRepository, SqliteSessionRepository,
+        SqliteSettingsRepository, SqliteTaskAssignmentRepository, SqliteTranscriptRepository,
     };
     use crate::search::SqliteSearchIndex;
 
@@ -945,6 +945,7 @@ mod pipeline_tests {
         DataDirFiles,
         Transcriber,
         SqlitePersonRepository,
+        SqliteActionBriefRepository,
     >;
 
     struct Rig {
@@ -1052,7 +1053,8 @@ mod pipeline_tests {
             people: Arc::new(SqlitePersonRepository::new(db.clone())),
             ids: Arc::new(Ids::default()),
             clock: clock.clone(),
-        });
+        })
+        .with_briefs(Arc::new(SqliteActionBriefRepository::new(db.clone())));
         Rig {
             _dir: dir,
             layout,
@@ -1220,6 +1222,107 @@ mod pipeline_tests {
         names.sort_unstable();
         assert_eq!(names, ["Ayşe", "Can", "Deniz"], "the manual one is kept");
         assert_eq!(directory(&rig).len(), 4, "nobody is created twice");
+    }
+
+    fn note_with_tasks(tasks: &[&str]) -> String {
+        let items: Vec<String> = tasks
+            .iter()
+            .map(|task| format!(r#"{{"task": "{task}", "owner": null, "due": null}}"#))
+            .collect();
+        format!(
+            r#"{{"summary": "Özet.", "decisions": [], "participants": [],
+               "action_items": [{}], "open_questions": [], "key_frames": []}}"#,
+            items.join(",")
+        )
+    }
+
+    #[test]
+    fn reprocessing_carries_the_brief_of_a_kept_action_item_and_drops_the_others() {
+        let rig = rig();
+        let first = note_with_tasks(&["Raporu hazırla", "Sunumu yap"]);
+        // The second run keeps one task (spelled differently) and replaces the other.
+        let second = note_with_tasks(&["raporu   HAZIRLA", "Yeni iş"]);
+        rig.script(&[&first, &second], &[VISION, VISION, VISION, VISION]);
+        rig.run().unwrap();
+
+        let briefs = SqliteActionBriefRepository::new(rig.db.clone());
+        let old_items = rig.detail().note.unwrap().action_items;
+        assert_eq!(old_items.len(), 2);
+        for (index, item) in old_items.iter().enumerate() {
+            block_on(briefs.save(&ActionBrief {
+                action_item_id: item.id.clone(),
+                language: LanguageCode::turkish(),
+                content_json: format!(r#"{{"context": "brief {index}"}}"#),
+                provider_profile_id: Some(ProviderProfileId::new("chat")),
+                created_at: EpochMs::new(77),
+            }))
+            .unwrap();
+        }
+
+        rig.clock.0.fetch_add(1_000, Ordering::SeqCst);
+        rig.run().unwrap();
+
+        let items = rig.detail().note.unwrap().action_items;
+        assert_eq!(items.len(), 2);
+        assert!(items
+            .iter()
+            .all(|new| old_items.iter().all(|old| old.id != new.id)));
+        let kept = block_on(briefs.get(&items[0].id))
+            .unwrap()
+            .expect("the kept item has its brief");
+        assert_eq!(kept.content_json, r#"{"context": "brief 0"}"#);
+        assert_eq!(
+            kept.created_at,
+            EpochMs::new(77),
+            "it is the old brief, not a new one"
+        );
+        assert_eq!(
+            kept.provider_profile_id,
+            Some(ProviderProfileId::new("chat"))
+        );
+        assert!(
+            block_on(briefs.get(&items[1].id)).unwrap().is_none(),
+            "a new task starts without a brief"
+        );
+        let count: i64 = rig
+            .db
+            .with_conn(|c| Ok(c.query_row("SELECT count(*) FROM action_briefs", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(count, 1, "the brief of the replaced task went with it");
+    }
+
+    #[test]
+    fn a_damaged_brief_does_not_fail_reprocessing_and_is_simply_not_carried() {
+        let rig = rig();
+        let note_json = note_with_tasks(&["Raporu hazırla"]);
+        rig.script(&[&note_json, &note_json], &[VISION, VISION, VISION, VISION]);
+        rig.run().unwrap();
+
+        let briefs = SqliteActionBriefRepository::new(rig.db.clone());
+        let item = rig.detail().note.unwrap().action_items[0].id.clone();
+        block_on(briefs.save(&ActionBrief {
+            action_item_id: item.clone(),
+            language: LanguageCode::turkish(),
+            content_json: "{}".to_owned(),
+            provider_profile_id: None,
+            created_at: EpochMs::new(1),
+        }))
+        .unwrap();
+        // The stored language no longer parses, so reading the row fails.
+        rig.db
+            .with_conn(|c| {
+                c.execute("UPDATE action_briefs SET language = '!!'", [])?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(block_on(briefs.get(&item)).is_err());
+
+        rig.clock.0.fetch_add(1_000, Ordering::SeqCst);
+        rig.run().expect("the run does not fail because of a brief");
+        assert_eq!(rig.status(), SessionStatus::Processed);
+        let new_item = rig.detail().note.unwrap().action_items[0].id.clone();
+        assert_ne!(new_item, item);
+        assert!(block_on(briefs.get(&new_item)).unwrap().is_none());
     }
 
     #[test]

@@ -11,8 +11,8 @@
 use std::future::Future;
 
 use tan_domain::{
-    ActionItem, ActionItemId, AppSettings, AudioTrack, Frame, FrameId, Note, NoteId, Person,
-    PersonId, ProviderProfile, ProviderProfileId, SecretId, SecretRef, Session, SessionId,
+    ActionBrief, ActionItem, ActionItemId, AppSettings, AudioTrack, Frame, FrameId, Note, NoteId,
+    Person, PersonId, ProviderProfile, ProviderProfileId, SecretId, SecretRef, Session, SessionId,
     SessionParticipant, SettingsPatch, TaskAssignment, TaskKind, TrackKind, TrackMute,
     TranscriptSegment, Variable, VariableId,
 };
@@ -188,6 +188,19 @@ pub trait NoteRepository: Send + Sync {
         id: &ActionItemId,
         owner: Option<&PersonId>,
     ) -> impl Future<Output = RepositoryResult<()>> + Send;
+}
+
+/// Persistence of the briefs written for action items. A brief goes with its action item.
+pub trait ActionBriefRepository: Send + Sync {
+    /// The brief of an action item, if one was generated.
+    fn get(
+        &self,
+        action_item_id: &ActionItemId,
+    ) -> impl Future<Output = RepositoryResult<Option<ActionBrief>>> + Send;
+
+    /// Stores the brief, replacing the action item's earlier one. An action item that does not
+    /// exist (any more) is a conflict.
+    fn save(&self, brief: &ActionBrief) -> impl Future<Output = RepositoryResult<()>> + Send;
 }
 
 /// Persistence of the person directory and of the participants of sessions.

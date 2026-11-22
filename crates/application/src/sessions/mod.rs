@@ -21,9 +21,9 @@ use crate::ports::{NoteRepository, SessionRepository};
 
 pub use audio_export::ExportSessionAudio;
 pub use export::{
-    render_markdown, resolve_export_destination, resolve_export_destination_as, ExportDestination,
-    ExportDestinationProblem, ExportExtension, ExportSessionMarkdown, EXPORT_FILE_NAME,
-    FRAMES_DIR_SUFFIX,
+    render_action_brief_markdown, render_markdown, resolve_export_destination,
+    resolve_export_destination_as, ExportDestination, ExportDestinationProblem, ExportExtension,
+    ExportSessionMarkdown, EXPORT_FILE_NAME, FRAMES_DIR_SUFFIX,
 };
 pub use queries::{
     AudioTrackState, GetSessionDetail, ListSessions, NoteWithItems, Page, ParticipantDetail,

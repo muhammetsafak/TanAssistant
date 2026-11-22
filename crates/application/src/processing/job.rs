@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Poll, Waker};
 
 use tan_domain::{
-    ActionItem, ActionItemId, EpochMs, Note, NoteId, Person, PersonId, ProcessingJob,
+    ActionBrief, ActionItem, ActionItemId, EpochMs, Note, NoteId, Person, PersonId, ProcessingJob,
     ProcessingStep, ProviderProfile, ProviderProfileId, Session, SessionId, SessionStatus,
     TaskKind,
 };
@@ -20,11 +20,12 @@ use super::{
     ProcessError, ProcessProgress, ProcessResult, ProcessSummary, ProcessingJobRepository,
     SessionTranscriber,
 };
+use crate::error::RepositoryResult;
 use crate::people::{normalize_task, resolve_person};
 use crate::ports::{
-    AiError, Capabilities, Clock, FrameRepository, IdGenerator, NoteRepository, PersonRepository,
-    ProviderFactory, ProviderProfileRepository, SessionRepository, TaskAssignmentRepository,
-    TranscriptRepository,
+    ActionBriefRepository, AiError, Capabilities, Clock, FrameRepository, IdGenerator,
+    NoteRepository, PersonRepository, ProviderFactory, ProviderProfileRepository,
+    SessionRepository, TaskAssignmentRepository, TranscriptRepository,
 };
 use crate::sessions::SessionFileStore;
 use crate::transcription::TranscribeError;
@@ -173,13 +174,35 @@ fn internal(error: impl std::fmt::Display) -> ProcessError {
     ProcessError::Internal(error.to_string())
 }
 
+/// The briefs of action items when none are kept (the default of [`ProcessSession`]): nothing
+/// is stored and nothing is found, so regenerating a note carries no brief over. Wire the real
+/// repository with [`ProcessSession::with_briefs`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoBriefs;
+
+// Nothing is awaited: the fake has nothing to wait for.
+#[allow(clippy::unused_async_trait_impl)]
+impl ActionBriefRepository for NoBriefs {
+    async fn get(&self, _action_item_id: &ActionItemId) -> RepositoryResult<Option<ActionBrief>> {
+        Ok(None)
+    }
+
+    async fn save(&self, _brief: &ActionBrief) -> RepositoryResult<()> {
+        Ok(())
+    }
+}
+
 /// Turns a recorded session into a structured note (see the module docs).
 ///
 /// At most one run per session at a time. A run can be cancelled; a cancelled or failed run
 /// leaves the session `Failed` with the job recording how far it got, and
 /// [`ProcessSession::retry`] continues from there.
-pub struct ProcessSession<S, Fr, T, N, A, P, F, J, W, Q, D> {
+///
+/// The briefs of action items (`B`) are only needed to carry them over when a regenerated note
+/// keeps an action item: see [`ProcessSession::with_briefs`].
+pub struct ProcessSession<S, Fr, T, N, A, P, F, J, W, Q, D, B = NoBriefs> {
     ports: ProcessPorts<S, Fr, T, N, A, P, F, J, W, Q, D>,
+    briefs: Arc<B>,
     active: Mutex<HashMap<SessionId, Arc<CancelState>>>,
     budget_for: fn(&ProviderProfile) -> TokenBudget,
 }
@@ -203,11 +226,14 @@ where
     pub fn new(ports: ProcessPorts<S, Fr, T, N, A, P, F, J, W, Q, D>) -> Self {
         Self {
             ports,
+            briefs: Arc::new(NoBriefs),
             active: Mutex::new(HashMap::new()),
             budget_for: TokenBudget::for_profile,
         }
     }
+}
 
+impl<S, Fr, T, N, A, P, F, J, W, Q, D, B> ProcessSession<S, Fr, T, N, A, P, F, J, W, Q, D, B> {
     /// Replaces how the token budget is chosen for a profile (provider/model specific tuning).
     #[must_use]
     pub fn with_budget(mut self, budget_for: fn(&ProviderProfile) -> TokenBudget) -> Self {
@@ -215,6 +241,38 @@ where
         self
     }
 
+    /// Keeps the briefs of action items across regenerating a note: an action item that the new
+    /// note keeps (same normalized task text) gets the brief of its predecessor, so the user
+    /// does not lose it. Without this the briefs of the old action items go with them.
+    #[must_use]
+    pub fn with_briefs<B2: ActionBriefRepository>(
+        self,
+        briefs: Arc<B2>,
+    ) -> ProcessSession<S, Fr, T, N, A, P, F, J, W, Q, D, B2> {
+        ProcessSession {
+            ports: self.ports,
+            briefs,
+            active: self.active,
+            budget_for: self.budget_for,
+        }
+    }
+}
+
+impl<S, Fr, T, N, A, P, F, J, W, Q, D, B> ProcessSession<S, Fr, T, N, A, P, F, J, W, Q, D, B>
+where
+    S: SessionRepository,
+    Fr: FrameRepository,
+    T: TranscriptRepository,
+    N: NoteRepository,
+    A: TaskAssignmentRepository,
+    P: ProviderProfileRepository,
+    F: ProviderFactory,
+    J: ProcessingJobRepository,
+    W: SessionFileStore,
+    Q: SessionTranscriber,
+    D: PersonRepository,
+    B: ActionBriefRepository,
+{
     /// Processes the session from scratch, replacing any earlier job and note.
     pub async fn execute(
         &self,
@@ -696,19 +754,25 @@ where
                 None => Vec::new(),
             };
         let mut action_items: Vec<ActionItem> = Vec::with_capacity(draft.action_items.len());
+        // The kept action items as (old id, new id): the old one's brief goes to the new one.
+        let mut kept_items: Vec<(ActionItemId, ActionItemId)> = Vec::new();
         for (item, owner) in draft.action_items.into_iter().zip(owners) {
             let key = normalize_task(&item.task);
             let kept = earlier
                 .iter()
                 .position(|(old_key, _)| *old_key == key)
                 .map(|index| earlier.remove(index).1);
+            let item_id = ActionItemId::new(ids.new_id());
+            if let Some(old) = &kept {
+                kept_items.push((old.id.clone(), item_id.clone()));
+            }
             let (done, owner_person_id, owner_edited) = match kept {
                 Some(old) if old.owner_edited => (old.done, old.owner_person_id, true),
                 Some(old) => (old.done, owner, false),
                 None => (false, owner, false),
             };
             action_items.push(ActionItem {
-                id: ActionItemId::new(ids.new_id()),
+                id: item_id,
                 note_id: note.id.clone(),
                 task: item.task,
                 owner_person_id,
@@ -724,10 +788,36 @@ where
         // (the user's are kept), so a session never shows a new note with the old people. The
         // people created above are directory entries only: if this fails they stay unattached
         // and a retry finds them again by name.
+        //
+        // The briefs to carry are read just before that, because deleting the old note deletes
+        // its action items and their briefs along with them. A read that fails only loses that
+        // one brief (it can be generated again): a damaged row must not fail a run that is
+        // otherwise done, and a retry would meet the same row again. A brief generated for an
+        // old item in the instant between this read and the replacement is replaced by the
+        // older one that was read (the generation and a reprocessing run are not serialized).
+        let mut carried: Vec<(ActionItemId, ActionBrief)> = Vec::new();
+        for (old_id, new_id) in kept_items {
+            if let Ok(Some(brief)) = self.briefs.get(&old_id).await {
+                carried.push((new_id, brief));
+            }
+        }
         self.ports
             .notes
             .replace_for_session(&note, &action_items, &participants)
             .await?;
+
+        // Hand the briefs over to the new action items. This is best effort and happens after
+        // the note is stored: a brief can be generated again, so failing to keep one must not
+        // fail a run whose note is already stored.
+        for (action_item_id, brief) in carried {
+            let _ = self
+                .briefs
+                .save(&ActionBrief {
+                    action_item_id,
+                    ..brief
+                })
+                .await;
+        }
         Ok(())
     }
 

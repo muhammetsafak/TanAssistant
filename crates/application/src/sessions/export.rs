@@ -4,9 +4,10 @@ use std::fmt::{self, Write as _};
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::Arc;
 
-use tan_domain::{Frame, LanguageCode, ProcessingStep, StepState};
+use tan_domain::{ActionItem, Frame, LanguageCode, Person, ProcessingStep, Session, StepState};
 
 use super::{NoteWithItems, SessionDetail, SessionFileStore, SessionsError, SessionsResult};
+use crate::briefs::ActionBriefContent;
 use crate::processing::{format_offset, utc_date_string, utc_datetime_string};
 use crate::transcription::{SPEAKER_ME, SPEAKER_OTHERS};
 
@@ -38,6 +39,16 @@ struct Labels {
     others: &'static str,
     owner: &'static str,
     due: &'static str,
+    brief_session: &'static str,
+    brief_owner: &'static str,
+    brief_due: &'static str,
+    brief_context: &'static str,
+    brief_details: &'static str,
+    brief_decisions: &'static str,
+    brief_frames: &'static str,
+    brief_quotes: &'static str,
+    brief_suggestion: &'static str,
+    brief_suggestion_note: &'static str,
 }
 
 const TURKISH: Labels = Labels {
@@ -57,6 +68,16 @@ const TURKISH: Labels = Labels {
     others: "Diğerleri",
     owner: "sorumlu",
     due: "tarih",
+    brief_session: "Oturum",
+    brief_owner: "Sorumlu",
+    brief_due: "Tarih",
+    brief_context: "Bağlam",
+    brief_details: "Detaylar",
+    brief_decisions: "İlgili kararlar",
+    brief_frames: "İlgili ekran görüntüleri",
+    brief_quotes: "Alıntılar",
+    brief_suggestion: "Öneri",
+    brief_suggestion_note: "Bu adımlar toplantıda kararlaştırılmadı; yapay zekânın önerisidir.",
 };
 
 const ENGLISH: Labels = Labels {
@@ -76,6 +97,17 @@ const ENGLISH: Labels = Labels {
     others: "Others",
     owner: "owner",
     due: "due",
+    brief_session: "Meeting",
+    brief_owner: "Owner",
+    brief_due: "Due",
+    brief_context: "Context",
+    brief_details: "Details",
+    brief_decisions: "Related decisions",
+    brief_frames: "Related frames",
+    brief_quotes: "Quotes",
+    brief_suggestion: "Suggestion",
+    brief_suggestion_note:
+        "These steps were not agreed in the meeting; they are the AI's suggestion.",
 };
 
 fn labels_for(language: &LanguageCode) -> &'static Labels {
@@ -276,6 +308,142 @@ fn write_note(
             );
         }
     }
+}
+
+/// A list under a heading, or "None" when it is empty.
+fn section_list(heading: &str, items: &[String], labels: &Labels, out: &mut String) {
+    let _ = write!(
+        out,
+        "
+## {heading}
+
+"
+    );
+    bullet_list(items, labels, out);
+}
+
+/// Renders the brief of an action item as Markdown: the task as the title, who owns it and
+/// when it is due, the context, details, related decisions and open questions, the frames and
+/// quotes with their time stamps, and the suggested steps under the heading "Öneri"
+/// ("Suggestion") with a line saying that nobody agreed to them. Headings follow the language
+/// the brief was written in (Turkish or English); quotes keep the spoken language. A frame that
+/// is no longer in `frames` is listed by its reason only.
+#[must_use]
+pub fn render_action_brief_markdown(
+    session: &Session,
+    item: &ActionItem,
+    owner: Option<&Person>,
+    language: &LanguageCode,
+    content: &ActionBriefContent,
+    frames: &[Frame],
+) -> String {
+    let labels = labels_for(language);
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "# {}
+
+",
+        one_line(&item.task)
+    );
+    let _ = writeln!(
+        out,
+        "- **{}:** {} ({})",
+        labels.brief_session,
+        one_line(&session.title),
+        utc_date_string(session.started_at)
+    );
+    if let Some(owner) = owner {
+        let name = if owner.is_self {
+            labels.me.to_owned()
+        } else {
+            one_line(&owner.display_name)
+        };
+        let _ = writeln!(out, "- **{}:** {name}", labels.brief_owner);
+    }
+    if let Some(due) = item.due {
+        let _ = writeln!(out, "- **{}:** {}", labels.brief_due, utc_date_string(due));
+    }
+
+    let _ = write!(
+        out,
+        "
+## {}
+
+{}
+",
+        labels.brief_context,
+        content.context.trim()
+    );
+    section_list(labels.brief_details, &content.details, labels, &mut out);
+    section_list(
+        labels.brief_decisions,
+        &content.related_decisions,
+        labels,
+        &mut out,
+    );
+    section_list(
+        labels.open_questions,
+        &content.open_questions,
+        labels,
+        &mut out,
+    );
+
+    let frame_lines: Vec<String> = content
+        .frames
+        .iter()
+        .map(|brief_frame| {
+            let reason = one_line(&brief_frame.reason);
+            match frames.iter().find(|frame| frame.id == brief_frame.frame_id) {
+                Some(frame) => format!("[{}] {reason}", format_offset(frame.timestamp_ms)),
+                None => reason,
+            }
+        })
+        .collect();
+    section_list(labels.brief_frames, &frame_lines, labels, &mut out);
+
+    let _ = write!(
+        out,
+        "
+## {}
+
+",
+        labels.brief_quotes
+    );
+    if content.quotes.is_empty() {
+        let _ = writeln!(out, "_{}_", labels.nothing);
+    }
+    for quote in &content.quotes {
+        let _ = write!(
+            out,
+            "> **[{}] {}:** {}
+
+",
+            format_offset(quote.at_ms),
+            speaker_name(Some(&quote.speaker), labels),
+            one_line(&quote.text)
+        );
+    }
+
+    let _ = write!(
+        out,
+        "
+## {}
+
+_{}_
+
+",
+        labels.brief_suggestion, labels.brief_suggestion_note
+    );
+    if content.suggested_steps.is_empty() {
+        let _ = writeln!(out, "_{}_", labels.nothing);
+    }
+    for (number, step) in content.suggested_steps.iter().enumerate() {
+        let _ = writeln!(out, "{}. {}", number + 1, one_line(step));
+    }
+    out.trim_end().to_owned()
+        + "
+"
 }
 
 /// Renders the session as Markdown: title, date, speakers, summary, decisions, the action list

@@ -27,21 +27,21 @@ const MAP_SYSTEM: &str = include_str!("prompts/map_chunk.md");
 const MAP_USER: &str = include_str!("prompts/chunk_user.md");
 const MERGE_SYSTEM: &str = include_str!("prompts/merge_partials.md");
 const MERGE_USER: &str = include_str!("prompts/merge_user.md");
-const REPAIR_USER: &str = include_str!("prompts/repair.md");
+pub(crate) const REPAIR_USER: &str = include_str!("prompts/repair.md");
 
 /// Merge rounds before giving up on shrinking the working notes further.
-const MAX_MERGE_ROUNDS: usize = 4;
+pub(crate) const MAX_MERGE_ROUNDS: usize = 4;
 /// Longest problem description quoted back to the model in a repair request, in characters.
-const MAX_PROBLEM_CHARS: usize = 300;
+pub(crate) const MAX_PROBLEM_CHARS: usize = 300;
 /// Largest reply a repair request asks for when the first reply was cut off by the length
 /// limit (twice the normal bound, but never more than this).
-const MAX_REPAIR_REPLY_TOKENS: u32 = 16_384;
+pub(crate) const MAX_REPAIR_REPLY_TOKENS: u32 = 16_384;
 /// Sampling temperature: notes should be faithful, not creative.
 const TEMPERATURE: f32 = 0.2;
 
 /// Replaces every `{{key}}` in `template` with its value. Values are substituted verbatim and
 /// are never re-scanned, so content cannot inject a placeholder.
-pub(super) fn render(template: &str, values: &[(&str, &str)]) -> String {
+pub(crate) fn render(template: &str, values: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(start) = rest.find("{{") {
@@ -66,7 +66,7 @@ pub(super) fn render(template: &str, values: &[(&str, &str)]) -> String {
 }
 
 /// The English name of a language code for use in prompts (the code itself when unknown).
-pub(super) fn language_name(code: &LanguageCode) -> String {
+pub(crate) fn language_name(code: &LanguageCode) -> String {
     let primary = code.as_str().split('-').next().unwrap_or("");
     match primary {
         "tr" => "Turkish",
@@ -212,7 +212,7 @@ struct RawKeyFrame {
 }
 
 /// The JSON object inside a reply: tolerates a code fence or a sentence around it.
-fn extract_json(text: &str) -> &str {
+pub(crate) fn extract_json(text: &str) -> &str {
     let trimmed = text.trim();
     match (trimmed.find('{'), trimmed.rfind('}')) {
         (Some(start), Some(end)) if start < end => &trimmed[start..=end],
@@ -223,7 +223,7 @@ fn extract_json(text: &str) -> &str {
 /// Drops every line that looks like a content delimiter. Working notes are written by a model
 /// that has read untrusted meeting text; one that echoes an injected `END UNTRUSTED ...` line
 /// must not be able to close the block it is later embedded in.
-fn without_marker_lines(text: &str) -> String {
+pub(crate) fn without_marker_lines(text: &str) -> String {
     text.lines()
         .filter(|line| {
             let line = line.trim_start();
@@ -236,7 +236,7 @@ fn without_marker_lines(text: &str) -> String {
         )
 }
 
-fn clean(text: &str) -> Option<String> {
+pub(crate) fn clean(text: &str) -> Option<String> {
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_owned())
 }
@@ -292,21 +292,21 @@ fn parse_note(
     })
 }
 
-struct Prompter<'a> {
-    language: String,
-    code: String,
-    ids: &'a dyn IdGenerator,
+pub(crate) struct Prompter<'a> {
+    pub(crate) language: String,
+    pub(crate) code: String,
+    pub(crate) ids: &'a dyn IdGenerator,
 }
 
 impl Prompter<'_> {
-    fn system(&self, template: &str) -> String {
+    pub(crate) fn system(&self, template: &str) -> String {
         render(
             template,
             &[("language", &self.language), ("language_code", &self.code)],
         )
     }
 
-    fn user(&self, template: &str, values: &[(&str, &str)]) -> String {
+    pub(crate) fn user(&self, template: &str, values: &[(&str, &str)]) -> String {
         let nonce = self.ids.new_id();
         let mut all = vec![
             ("language", self.language.as_str()),
@@ -318,7 +318,7 @@ impl Prompter<'_> {
     }
 }
 
-async fn ask<M: ChatModel>(
+pub(crate) async fn ask<M: ChatModel>(
     model: &M,
     system: &str,
     messages: Vec<ChatMessage>,
@@ -337,7 +337,7 @@ async fn ask<M: ChatModel>(
 }
 
 /// Working notes of one chunk or one group of working notes (plain text).
-async fn working_notes<M: ChatModel>(
+pub(crate) async fn working_notes<M: ChatModel>(
     model: &M,
     system: &str,
     user: String,

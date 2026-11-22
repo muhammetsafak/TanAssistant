@@ -113,7 +113,7 @@ pub use ids::{
 };
 pub use language::{InvalidLanguageCode, LanguageCode, LanguageSetting, UiLanguage};
 pub use media::{AudioTrack, Frame, TrackKind, TrackMute};
-pub use note::{ActionItem, Note};
+pub use note::{ActionBrief, ActionItem, Note};
 pub use person::{ParticipantSource, Person, SessionParticipant};
 pub use processing::{
     ProcessingError, ProcessingJob, ProcessingJobRecord, ProcessingStep, StepState,

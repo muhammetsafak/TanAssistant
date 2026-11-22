@@ -5,18 +5,18 @@ mod common;
 
 use common::{block_on, segment, session, test_db, TestDb};
 use tan_application::ports::{
-    FrameRepository, NoteRepository, PersonRepository, ProviderProfileRepository,
-    SecretMetadataRepository, SessionRepository, TaskAssignmentRepository, TranscriptRepository,
-    VariableRepository,
+    ActionBriefRepository, FrameRepository, NoteRepository, PersonRepository,
+    ProviderProfileRepository, SecretMetadataRepository, SessionRepository,
+    TaskAssignmentRepository, TranscriptRepository, VariableRepository,
 };
 use tan_application::RepositoryError;
 use tan_domain::{
-    ActionItem, ActionItemId, AudioTrack, EpochMs, Frame, FrameId, LanguageCode, LanguageSetting,
-    Note, NoteId, ParticipantSource, Person, PersonId, ProviderKind, ProviderProfile,
-    ProviderProfileId, SecretId, SecretRef, SessionId, SessionParticipant, SessionStatus,
-    TaskAssignment, TaskKind, TrackKind, TrackMute, Variable, VariableId,
+    ActionBrief, ActionItem, ActionItemId, AudioTrack, EpochMs, Frame, FrameId, LanguageCode,
+    LanguageSetting, Note, NoteId, ParticipantSource, Person, PersonId, ProviderKind,
+    ProviderProfile, ProviderProfileId, SecretId, SecretRef, SessionId, SessionParticipant,
+    SessionStatus, TaskAssignment, TaskKind, TrackKind, TrackMute, Variable, VariableId,
 };
-use tan_infra_storage::repositories::SqlitePersonRepository;
+use tan_infra_storage::repositories::{SqliteActionBriefRepository, SqlitePersonRepository};
 use tan_infra_storage::{
     new_id, SqliteFrameRepository, SqliteNoteRepository, SqliteProviderProfileRepository,
     SqliteSecretMetadataRepository, SqliteSessionRepository, SqliteTaskAssignmentRepository,
@@ -923,4 +923,134 @@ fn minted_ids_work_as_primary_keys() {
     block_on(repo.create(&a)).unwrap();
     block_on(repo.create(&b)).unwrap();
     assert_eq!(block_on(repo.list()).unwrap().len(), 2);
+}
+
+// ---------------------------------------------------------------------------------------------
+// action briefs
+// ---------------------------------------------------------------------------------------------
+
+fn brief(item_id: &str, profile: Option<&str>, json: &str, created_at: i64) -> ActionBrief {
+    ActionBrief {
+        action_item_id: ActionItemId::new(item_id),
+        language: LanguageCode::turkish(),
+        content_json: json.to_owned(),
+        provider_profile_id: profile.map(ProviderProfileId::new),
+        created_at: EpochMs::new(created_at),
+    }
+}
+
+fn brief_count(t: &TestDb) -> i64 {
+    let conn = rusqlite::Connection::open(&t.path).unwrap();
+    conn.query_row("SELECT count(*) FROM action_briefs", [], |r| r.get(0))
+        .unwrap()
+}
+
+fn brief_profile(id: &str) -> ProviderProfile {
+    ProviderProfile {
+        id: ProviderProfileId::new(id),
+        kind: ProviderKind::OpenAi,
+        display_name: id.to_owned(),
+        model: "m".to_owned(),
+        base_url: None,
+        secret_ref: None,
+        supports_vision: false,
+    }
+}
+
+#[test]
+fn an_action_brief_round_trips_and_is_replaced_by_the_next_one() {
+    let t = test_db();
+    with_session(&t, "s1");
+    let notes = SqliteNoteRepository::new(t.db.clone());
+    let profiles = SqliteProviderProfileRepository::new(t.db.clone());
+    let briefs = SqliteActionBriefRepository::new(t.db.clone());
+    block_on(notes.save(&note("n1", "s1", 1), &[item("a1", "n1", "İş")])).unwrap();
+    block_on(profiles.upsert(&brief_profile("p1"))).unwrap();
+
+    assert_eq!(
+        block_on(briefs.get(&ActionItemId::new("a1"))).unwrap(),
+        None
+    );
+
+    let first = brief("a1", Some("p1"), r#"{"context":"ilk"}"#, 100);
+    block_on(briefs.save(&first)).unwrap();
+    assert_eq!(
+        block_on(briefs.get(&ActionItemId::new("a1"))).unwrap(),
+        Some(first)
+    );
+
+    // Saving again overwrites: one brief per action item.
+    let second = brief("a1", None, r#"{"context":"yeni"}"#, 200);
+    block_on(briefs.save(&second)).unwrap();
+    assert_eq!(
+        block_on(briefs.get(&ActionItemId::new("a1"))).unwrap(),
+        Some(second)
+    );
+    assert_eq!(brief_count(&t), 1);
+}
+
+#[test]
+fn a_brief_for_a_missing_action_item_or_profile_is_a_conflict() {
+    let t = test_db();
+    with_session(&t, "s1");
+    let notes = SqliteNoteRepository::new(t.db.clone());
+    let briefs = SqliteActionBriefRepository::new(t.db.clone());
+    block_on(notes.save(&note("n1", "s1", 1), &[item("a1", "n1", "İş")])).unwrap();
+
+    assert!(matches!(
+        block_on(briefs.save(&brief("ghost", None, "{}", 1))),
+        Err(RepositoryError::Conflict(_))
+    ));
+    assert!(matches!(
+        block_on(briefs.save(&brief("a1", Some("no-such-profile"), "{}", 1))),
+        Err(RepositoryError::Conflict(_))
+    ));
+    assert_eq!(brief_count(&t), 0);
+}
+
+#[test]
+fn a_brief_goes_with_its_action_item_note_and_session_but_not_with_its_profile() {
+    let t = test_db();
+    with_session(&t, "s1");
+    with_session(&t, "s2");
+    let notes = SqliteNoteRepository::new(t.db.clone());
+    let profiles = SqliteProviderProfileRepository::new(t.db.clone());
+    let briefs = SqliteActionBriefRepository::new(t.db.clone());
+    let sessions = SqliteSessionRepository::new(t.db.clone());
+    block_on(profiles.upsert(&brief_profile("p1"))).unwrap();
+    block_on(notes.save(
+        &note("n1", "s1", 1),
+        &[item("a1", "n1", "Bir"), item("a2", "n1", "İki")],
+    ))
+    .unwrap();
+    block_on(notes.save(&note("n2", "s2", 1), &[item("a3", "n2", "Üç")])).unwrap();
+    for id in ["a1", "a2", "a3"] {
+        block_on(briefs.save(&brief(id, Some("p1"), "{}", 5))).unwrap();
+    }
+
+    // Deleting the profile keeps the brief and forgets who wrote it.
+    block_on(profiles.delete(&ProviderProfileId::new("p1"))).unwrap();
+    let kept = block_on(briefs.get(&ActionItemId::new("a1")))
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept.provider_profile_id, None);
+
+    // Deleting one action item deletes only its brief.
+    block_on(notes.delete_action_item(&ActionItemId::new("a2"))).unwrap();
+    assert!(block_on(briefs.get(&ActionItemId::new("a2")))
+        .unwrap()
+        .is_none());
+    assert!(block_on(briefs.get(&ActionItemId::new("a1")))
+        .unwrap()
+        .is_some());
+
+    // Replacing the session's note deletes the old note's briefs.
+    block_on(notes.replace_for_session(&note("n1b", "s1", 9), &[], &[])).unwrap();
+    assert!(block_on(briefs.get(&ActionItemId::new("a1")))
+        .unwrap()
+        .is_none());
+
+    // Deleting the session deletes the rest.
+    block_on(sessions.delete(&sid("s2"))).unwrap();
+    assert_eq!(brief_count(&t), 0);
 }

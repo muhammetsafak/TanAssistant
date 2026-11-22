@@ -145,6 +145,27 @@ export const commands = {
 	cancelProcessing: (sessionId: string) => typedError<boolean, ProcessingIpcError_Serialize>(__TAURI_INVOKE("cancel_processing", { sessionId })),
 	/**  Whether a session is being processed and how far its job got. */
 	processingStatus: (sessionId: string) => typedError<ProcessingStatusDto_Serialize, ProcessingIpcError_Serialize>(__TAURI_INVOKE("processing_status", { sessionId })),
+	/**
+	 *  The stored brief of an action item, or `null` when none was generated yet. An action item
+	 *  that does not exist is a `not_found` error.
+	 */
+	getActionBrief: (actionItemId: string) => typedError<ActionBriefDto_Serialize | null, BriefIpcError>(__TAURI_INVOKE("get_action_brief", { actionItemId })),
+	/**
+	 *  Writes the brief of an action item with the AI provider assigned to the summary task, in the
+	 *  language of the note, stores it (replacing an earlier brief) and returns it. The call returns
+	 *  when the brief is stored; it can take a minute for a long meeting.
+	 * 
+	 *  It works while the session is still recording or being processed, from what exists at that
+	 *  moment. A second call for the same action item while one is running is refused
+	 *  (`already_running`); without an assigned provider the error is `no_provider`.
+	 */
+	generateActionBrief: (actionItemId: string) => typedError<ActionBriefDto_Serialize, BriefIpcError>(__TAURI_INVOKE("generate_action_brief", { actionItemId })),
+	/**
+	 *  The stored brief as Markdown text, in the language it was written in, for the UI to copy or
+	 *  save. The suggested steps sit under the heading "Öneri" ("Suggestion" in English). An action
+	 *  item without a brief is a `not_found` error.
+	 */
+	exportActionBriefMarkdown: (actionItemId: string) => typedError<string, BriefIpcError>(__TAURI_INVOKE("export_action_brief_markdown", { actionItemId })),
 	/**  Lists sessions, newest first, with an optional filter and page. */
 	listSessions: (filter: SessionFilterDto_Deserialize | null, page: PageDto_Deserialize | null) => typedError<SessionPageDto_Serialize, SessionsIpcError_Serialize>(__TAURI_INVOKE("list_sessions", { filter, page })),
 	/**
@@ -243,6 +264,61 @@ export const events = {
 };
 
 /* Types */
+/**  The brief of an action item. It is read-only: the user can regenerate it, never edit it. */
+export type ActionBriefDto = ActionBriefDto_Serialize | ActionBriefDto_Deserialize;
+
+/**  The brief of an action item. It is read-only: the user can regenerate it, never edit it. */
+export type ActionBriefDto_Deserialize = {
+	/**  The action item the brief is about. */
+	actionItemId: string,
+	/**  The language it was written in (the note's). */
+	language: string,
+	/**  Why the task exists and what it is about. */
+	context: string,
+	/**  What the meeting said about how, with whom, by when or under which constraints. */
+	details: string[],
+	/**  The note's decisions that bear on the task. */
+	relatedDecisions: string[],
+	/**  The note's open questions that bear on the task. */
+	openQuestions: string[],
+	/**  Frames that matter for the task. */
+	frames: BriefFrameDto[],
+	/**  Quotes with their time stamps, in time order. */
+	quotes: BriefQuoteDto[],
+	/**  Steps the AI suggests. Nobody agreed to them in the meeting: show them as suggestions. */
+	suggestedSteps: string[],
+	/**  The provider profile whose model wrote it; `null` when that profile was deleted since. */
+	providerProfileId?: string | null,
+	/**  When it was generated, milliseconds since the Unix epoch. */
+	createdAt: number | null,
+};
+
+/**  The brief of an action item. It is read-only: the user can regenerate it, never edit it. */
+export type ActionBriefDto_Serialize = {
+	/**  The action item the brief is about. */
+	actionItemId: string,
+	/**  The language it was written in (the note's). */
+	language: string,
+	/**  Why the task exists and what it is about. */
+	context: string,
+	/**  What the meeting said about how, with whom, by when or under which constraints. */
+	details: string[],
+	/**  The note's decisions that bear on the task. */
+	relatedDecisions: string[],
+	/**  The note's open questions that bear on the task. */
+	openQuestions: string[],
+	/**  Frames that matter for the task. */
+	frames: BriefFrameDto[],
+	/**  Quotes with their time stamps, in time order. */
+	quotes: BriefQuoteDto[],
+	/**  Steps the AI suggests. Nobody agreed to them in the meeting: show them as suggestions. */
+	suggestedSteps: string[],
+	/**  The provider profile whose model wrote it; `null` when that profile was deleted since. */
+	providerProfileId: string | null,
+	/**  When it was generated, milliseconds since the Unix epoch. */
+	createdAt: number | null,
+};
+
 /**  A task from the note. */
 export type ActionItemDto = ActionItemDto_Serialize | ActionItemDto_Deserialize;
 
@@ -439,6 +515,75 @@ export type AudioTrackDto_Serialize = {
 	durationMs: number,
 	/**  When the retention policy deleted the file; `null` while it is kept. */
 	deletedAt: number | null,
+};
+
+/**  Machine-readable failure class of the action brief commands. */
+export type BriefErrorCode = 
+/**  The input was rejected. */
+"validation" | 
+/**
+ *  The action item (or, for the export, its brief) does not exist. It also means that the
+ *  note was regenerated while the brief was being written: its action items are new.
+ */
+"not_found" | 
+/**  A brief for this action item is already being generated. */
+"already_running" | 
+/**  No AI provider is assigned to the summary task. */
+"no_provider" | 
+/**  The model's reply was not a valid brief, even after a repair request. */
+"invalid_model_output" | 
+/**  The session has no transcript or screen content to write a brief from. */
+"nothing_to_summarize" | 
+/**  The provider rejected the API key. */
+"provider_auth" | 
+/**  The provider is rate limiting. */
+"provider_rate_limited" | 
+/**  The provider did not answer in time. */
+"provider_timeout" | 
+/**  The provider refused the request. */
+"provider_invalid_request" | 
+/**  The provider cannot do what was asked. */
+"provider_unsupported" | 
+/**  The provider could not be reached. */
+"provider_network" | 
+/**  The provider answered with another error. */
+"provider_error" | 
+/**  The API key could not be read from the secret store. */
+"secret_unavailable" | 
+/**  The CLI of a CLI provider is not installed or could not be started. */
+"cli_unavailable" | 
+/**
+ *  An update is being installed (or waits for the restart): no generation can start until
+ *  the application restarts.
+ */
+"update_in_progress" | 
+/**  Anything else; details are in the log. */
+"internal";
+
+/**  A frame a brief points at. */
+export type BriefFrameDto = {
+	/**  The frame (one of the session's frames). */
+	frameId: string,
+	/**  Why it matters for the task. */
+	reason: string,
+};
+
+/**  Error returned by the action brief commands. */
+export type BriefIpcError = {
+	/**  Failure class. */
+	code: BriefErrorCode,
+	/**  Human-readable, key-free description (English; the UI localises by `code`). */
+	message: string,
+};
+
+/**  A moment of the conversation a brief quotes. */
+export type BriefQuoteDto = {
+	/**  Offset into the meeting, in milliseconds (whole seconds). */
+	atMs: number,
+	/**  Who spoke: `me`, `others` or a name. */
+	speaker: string,
+	/**  The words, in the spoken language. */
+	text: string,
 };
 
 /**  What a provider can do. */

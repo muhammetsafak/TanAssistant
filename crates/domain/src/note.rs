@@ -1,6 +1,6 @@
 //! Note artifacts: the generated summary and its action items.
 
-use crate::ids::{ActionItemId, FrameId, NoteId, PersonId, SessionId};
+use crate::ids::{ActionItemId, FrameId, NoteId, PersonId, ProviderProfileId, SessionId};
 use crate::language::LanguageCode;
 use crate::EpochMs;
 
@@ -43,4 +43,22 @@ pub struct ActionItem {
     pub due: Option<EpochMs>,
     /// Whether the user marked it completed.
     pub done: bool,
+}
+
+/// A work brief the AI wrote for one action item: context, details, the decisions and open
+/// questions that bear on it, the frames and quotes that matter, and suggested steps. It is
+/// read-only for the user (it can be regenerated, never edited) and goes with its action item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionBrief {
+    /// The action item the brief is about; a brief is unique per action item.
+    pub action_item_id: ActionItemId,
+    /// Language the brief was written in (the note's language).
+    pub language: LanguageCode,
+    /// The brief's content as JSON. Its shape belongs to the application layer (the domain has
+    /// no serializer), so the domain and the storage only carry it.
+    pub content_json: String,
+    /// The profile whose model wrote it; `None` when that profile has been deleted since.
+    pub provider_profile_id: Option<ProviderProfileId>,
+    /// When it was generated.
+    pub created_at: EpochMs,
 }

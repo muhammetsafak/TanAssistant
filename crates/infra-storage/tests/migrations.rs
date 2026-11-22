@@ -473,3 +473,103 @@ fn people_migration_reverts_to_version_five_and_keeps_the_owners_as_text() {
     migrate_up(&mut conn).unwrap();
     assert_eq!(schema_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
 }
+
+/// A database at schema version 6 with a session, a note and an action item, as an installed
+/// app would have.
+fn version_six_database() -> Connection {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_up(&mut conn).unwrap();
+    migrate_down_to(&mut conn, 6).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), 6);
+    conn.execute_batch(
+        "INSERT INTO sessions (id, kind, title, started_at, language, note_language, status)
+         VALUES ('s1', 'meeting', 'Old meeting', 1000, 'auto', 'tr', 'processed');
+         INSERT INTO notes (id, session_id, language, summary, created_at)
+         VALUES ('n1', 's1', 'tr', 'Summary', 1000);
+         INSERT INTO action_items (id, note_id, position, task, due, done)
+         VALUES ('a1', 'n1', 0, 'Raporu hazırla', 5, 1);",
+    )
+    .unwrap();
+    conn
+}
+
+#[test]
+fn action_briefs_migration_adds_the_table_and_keeps_existing_rows() {
+    let mut conn = version_six_database();
+    assert!(columns(&conn, "action_briefs").is_empty());
+
+    migrate_up(&mut conn).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
+    assert_eq!(
+        columns(&conn, "action_briefs"),
+        [
+            "action_item_id",
+            "language",
+            "content_json",
+            "provider_profile_id",
+            "created_at"
+        ]
+    );
+    let items: i64 = conn
+        .query_row("SELECT count(*) FROM action_items", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(items, 1, "existing rows are untouched");
+}
+
+#[test]
+fn action_briefs_are_one_per_item_and_cascade_with_it() {
+    let mut conn = version_six_database();
+    migrate_up(&mut conn).unwrap();
+    conn.pragma_update(None, "foreign_keys", true).unwrap();
+    conn.execute(
+        "INSERT INTO action_briefs (action_item_id, language, content_json, created_at)
+         VALUES ('a1', 'tr', '{}', 1)",
+        [],
+    )
+    .unwrap();
+    // The item is the primary key; an unknown item is rejected.
+    assert!(conn
+        .execute(
+            "INSERT INTO action_briefs (action_item_id, language, content_json, created_at)
+             VALUES ('a1', 'tr', '{}', 2)",
+            [],
+        )
+        .is_err());
+    assert!(conn
+        .execute(
+            "INSERT INTO action_briefs (action_item_id, language, content_json, created_at)
+             VALUES ('ghost', 'tr', '{}', 2)",
+            [],
+        )
+        .is_err());
+
+    conn.execute("DELETE FROM notes WHERE id = 'n1'", [])
+        .unwrap();
+    let briefs: i64 = conn
+        .query_row("SELECT count(*) FROM action_briefs", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(briefs, 0, "the brief goes with its note's action items");
+}
+
+#[test]
+fn action_briefs_migration_reverts_to_version_six_without_touching_notes() {
+    let mut conn = version_six_database();
+    migrate_up(&mut conn).unwrap();
+    conn.execute(
+        "INSERT INTO action_briefs (action_item_id, language, content_json, created_at)
+         VALUES ('a1', 'tr', '{}', 1)",
+        [],
+    )
+    .unwrap();
+
+    migrate_down_to(&mut conn, 6).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), 6);
+    assert!(columns(&conn, "action_briefs").is_empty());
+    let items: i64 = conn
+        .query_row("SELECT count(*) FROM action_items", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(items, 1);
+
+    migrate_up(&mut conn).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
+}
