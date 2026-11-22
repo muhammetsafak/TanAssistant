@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Button } from '../../components/ui/Button';
 import { useCommandErrorHandler } from '../../ipc/errors';
 import {
   usePeople,
@@ -8,7 +9,9 @@ import {
   useSetActionItemOwner,
   useToggleActionItem,
   type ActionItem,
+  type Frame,
 } from './api';
+import { ActionBriefPanel } from './ActionBriefPanel';
 import { formatUtcDate } from './format';
 import { OwnerPicker } from './OwnerPicker';
 
@@ -16,14 +19,21 @@ import './sessions.css';
 
 /**
  * The note's tasks. Ticking one, or changing its owner, saves at once and puts the old state back
- * if the save fails.
+ * if the save fails. "Detail" opens the task's brief in a drawer.
  */
 export function ActionItems({
   sessionId,
+  sessionDir,
+  frames,
   items,
+  onSeek,
 }: {
   sessionId: string;
+  sessionDir: string;
+  frames: readonly Frame[];
   items: readonly ActionItem[];
+  /** Given when there is audio to play; a quote of the brief moves the player to its time. */
+  onSeek?: (ms: number) => void;
 }) {
   const { t, i18n } = useTranslation();
   const handleError = useCommandErrorHandler();
@@ -36,6 +46,10 @@ export function ActionItems({
     () => new Set((participants.data ?? []).map((participant) => participant.person.id)),
     [participants.data],
   );
+
+  const [briefItemId, setBriefItemId] = useState<string | null>(null);
+  // Looked up by id so a refetch that changes the task text updates the open panel too.
+  const briefItem = items.find((item) => item.id === briefItemId);
 
   const done = items.filter((item) => item.done).length;
 
@@ -94,11 +108,29 @@ export function ActionItems({
                     {t('sessions.actions.due', { date: formatUtcDate(item.due, i18n.language) })}
                   </p>
                 ) : null}
+                <Button
+                  size="sm"
+                  className="action-item__detail"
+                  onClick={() => setBriefItemId(item.id)}
+                  aria-label={t('sessions.actions.detailFor', { task: item.task })}
+                >
+                  {t('sessions.actions.detail')}
+                </Button>
               </div>
             </li>
           ))}
         </ul>
       )}
+      {briefItem ? (
+        <ActionBriefPanel
+          key={briefItem.id}
+          item={briefItem}
+          sessionDir={sessionDir}
+          frames={frames}
+          onSeek={onSeek}
+          onClose={() => setBriefItemId(null)}
+        />
+      ) : null}
     </section>
   );
 }

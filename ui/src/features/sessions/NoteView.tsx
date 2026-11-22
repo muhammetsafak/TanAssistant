@@ -2,14 +2,27 @@ import { useTranslation } from 'react-i18next';
 
 import { TanIllustration } from '../../components/ui/TanIllustration';
 import { ActionItems } from './ActionItems';
-import type { Note } from './api';
+import type { Frame, Note } from './api';
 import { formatDateTime } from './format';
 import { Participants } from './Participants';
 
 import './sessions.css';
 
 /** The generated note: summary, decisions, action items and open questions. */
-export function NoteView({ note, sessionId }: { note: Note; sessionId: string }) {
+export function NoteView({
+  note,
+  sessionId,
+  sessionDir,
+  frames,
+  onSeek,
+}: {
+  note: Note;
+  sessionId: string;
+  sessionDir: string;
+  frames: readonly Frame[];
+  /** Given when there is audio to play; a quote of an action brief moves the player there. */
+  onSeek?: (ms: number) => void;
+}) {
   const { t, i18n } = useTranslation();
 
   return (
@@ -41,7 +54,13 @@ export function NoteView({ note, sessionId }: { note: Note; sessionId: string })
         )}
       </section>
 
-      <ActionItems sessionId={sessionId} items={note.actionItems} />
+      <ActionItems
+        sessionId={sessionId}
+        sessionDir={sessionDir}
+        frames={frames}
+        items={note.actionItems}
+        onSeek={onSeek}
+      />
 
       <section className="note__section" aria-labelledby="note-questions">
         <h2 id="note-questions">{t('sessions.note.openQuestions')}</h2>

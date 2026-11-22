@@ -10,8 +10,11 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 
 import {
   commands,
+  type ActionBriefDto_Serialize,
   type ActionItemDto_Serialize,
   type AudioTrackDto_Serialize,
+  type BriefErrorCode,
+  type BriefIpcError,
   type FrameDto_Serialize,
   type NoteDto_Serialize,
   type ParticipantDto,
@@ -46,6 +49,7 @@ export type Frame = FrameDto_Serialize;
 export type AudioTrack = AudioTrackDto_Serialize;
 export type Note = NoteDto_Serialize;
 export type ActionItem = ActionItemDto_Serialize;
+export type ActionBrief = ActionBriefDto_Serialize;
 export type Person = PersonDto;
 export type PersonRef = PersonRefInput;
 export type Participant = ParticipantDto;
@@ -275,6 +279,76 @@ export function useDeleteSession() {
         queryClient.invalidateQueries({ queryKey: sessionKeys.storage }),
       ]);
     },
+  });
+}
+
+// ---------------------------------------------------------------------------------------
+// Action briefs
+// ---------------------------------------------------------------------------------------
+
+/** A failure of an action brief command. Carries the machine-readable code. */
+export class BriefCommandError extends Error {
+  readonly code: BriefErrorCode;
+
+  constructor(error: BriefIpcError) {
+    super(error.message);
+    this.name = 'BriefCommandError';
+    this.code = error.code;
+  }
+}
+
+async function unwrapBriefs<T>(
+  pending: Promise<{ status: 'ok'; data: T } | { status: 'error'; error: BriefIpcError }>,
+): Promise<T> {
+  const result = await pending;
+  if (result.status === 'error') throw new BriefCommandError(result.error);
+  return result.data;
+}
+
+/** Query key of one action item's brief. */
+export const actionBriefKey = (actionItemId: string) => ['action-brief', actionItemId] as const;
+
+const generateBriefKey = (actionItemId: string) => ['action-brief-generate', actionItemId] as const;
+
+/** The stored brief of an action item; `null` while none was generated. Read only when `enabled`. */
+export function useActionBrief(actionItemId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: actionBriefKey(actionItemId),
+    queryFn: () => unwrapBriefs(commands.getActionBrief(actionItemId)),
+    enabled,
+  });
+}
+
+/**
+ * Asks the AI for the brief (or a new one, which replaces the old). The result goes straight into
+ * the cache from the hook's own callbacks, so it is kept even if the panel was closed meanwhile.
+ */
+export function useGenerateActionBrief(actionItemId: string, onError: (error: unknown) => void) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: generateBriefKey(actionItemId),
+    mutationFn: () => unwrapBriefs(commands.generateActionBrief(actionItemId)),
+    onSuccess: (brief) => {
+      queryClient.setQueryData(actionBriefKey(actionItemId), brief);
+    },
+    onError,
+  });
+}
+
+/** Whether a brief for this action item is being generated now (also from a closed panel). */
+export function useIsGeneratingBrief(actionItemId: string): boolean {
+  return (
+    useMutationState({
+      filters: { mutationKey: generateBriefKey(actionItemId), status: 'pending' },
+    }).length > 0
+  );
+}
+
+/** The brief as Markdown, as the export writes it. */
+export function useActionBriefMarkdown() {
+  return useMutation({
+    mutationFn: (actionItemId: string) =>
+      unwrapBriefs(commands.exportActionBriefMarkdown(actionItemId)),
   });
 }
 

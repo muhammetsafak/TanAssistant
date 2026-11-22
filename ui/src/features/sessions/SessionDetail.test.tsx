@@ -9,7 +9,7 @@ import { commands } from '../../ipc/bindings';
 import SessionDetailPage from '../../pages/SessionDetailPage';
 import { emitEvent } from '../../test-events';
 import { fail, ok, renderWithProviders } from '../../test-utils';
-import { ayse, caglar, mehmet, people, session, sessionDetail } from './fixtures';
+import { actionBrief, ayse, caglar, mehmet, people, session, sessionDetail } from './fixtures';
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({ save: vi.fn() }));
 
@@ -24,6 +24,9 @@ vi.mock('../../ipc/bindings', async () => {
     commands: {
       getSessionDetail: vi.fn(),
       toggleActionItem: vi.fn(),
+      getActionBrief: vi.fn(),
+      generateActionBrief: vi.fn(),
+      exportActionBriefMarkdown: vi.fn(),
       listPeople: vi.fn(),
       setActionItemOwner: vi.fn(),
       addSessionParticipant: vi.fn(),
@@ -73,6 +76,25 @@ describe('SessionDetailPage', () => {
   });
 
   describe('action items', () => {
+    it('opens the brief of an action item in a panel and puts focus back on its button', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.getActionBrief).mockResolvedValue(ok(actionBrief));
+      renderDetail();
+
+      const button = await screen.findByRole('button', { name: 'Detay: Bütçeyi paylaş' });
+      expect(commands.getActionBrief).not.toHaveBeenCalled();
+      await user.click(button);
+
+      const dialog = await screen.findByRole('dialog', { name: 'Aksiyon özeti' });
+      expect(commands.getActionBrief).toHaveBeenCalledWith('a1');
+      expect(await within(dialog).findByText(actionBrief.context)).toBeInTheDocument();
+
+      await user.keyboard('{Escape}');
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Detay: Bütçeyi paylaş' })).toHaveFocus();
+    });
+
     it('calls toggle_action_item and ticks the box before the call returns', async () => {
       const user = userEvent.setup();
       let finish: (value: unknown) => void = () => undefined;

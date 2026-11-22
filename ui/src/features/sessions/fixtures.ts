@@ -1,4 +1,4 @@
-import type { Person, ProcessingJob, Session, SessionDetail } from './api';
+import type { ActionBrief, Person, ProcessingJob, Session, SessionDetail } from './api';
 
 /** Test data shaped like the backend's answers. */
 export const session: Session = {
@@ -107,3 +107,24 @@ export function sessionDetail(overrides: Partial<SessionDetail> = {}): SessionDe
     ...overrides,
   };
 }
+
+/** The brief of action item `a1`. */
+export const actionBrief: ActionBrief = {
+  actionItemId: 'a1',
+  language: 'tr',
+  context: 'Q4 bütçesi toplantıda onaylandı; Ayşe rakamları ekiple paylaşacak.',
+  details: ['Dosya PDF olarak gönderilecek', 'Cuma gününe kadar bitmeli'],
+  relatedDecisions: ['Bütçe onaylandı'],
+  openQuestions: ['Kim sunacak?'],
+  frames: [
+    { frameId: 'f2', reason: 'Bütçe tablosu bu karede' },
+    { frameId: 'missing', reason: 'Artık olmayan bir kare' },
+  ],
+  quotes: [
+    { atMs: 12_000, speaker: 'Ayşe', text: 'Rakamları ben paylaşırım' },
+    { atMs: 70_000, speaker: 'others', text: 'Bütçeye bakalım' },
+  ],
+  suggestedSteps: ['Taslağı önce Mehmet ile gözden geçir', 'Paylaşım sonrası onay iste'],
+  providerProfileId: 'prov1',
+  createdAt: Date.UTC(2026, 10, 5, 11, 0),
+};

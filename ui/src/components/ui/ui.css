@@ -281,6 +281,43 @@ select.field__input,
   gap: var(--space-4);
 }
 
+/* Drawer: a wide panel from the right edge; the body scrolls between a fixed title and footer. */
+.dialog-overlay--drawer {
+  align-items: stretch;
+  justify-content: flex-end;
+  padding: 0;
+}
+
+.dialog--drawer {
+  width: min(100%, 44rem);
+  height: 100%;
+  max-height: none;
+  overflow: hidden;
+  border-width: 0 0 0 1px;
+  border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+}
+
+.dialog--drawer .dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* Room for the focus ring, which the scroll box would otherwise clip. */
+  padding: var(--space-1);
+}
+
+.dialog--drawer .dialog__footer {
+  flex: none;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+@media (max-width: 720px) {
+  .dialog--drawer {
+    padding: var(--space-4);
+    border-radius: 0;
+  }
+}
+
 .dialog__form {
   display: flex;
   flex-direction: column;

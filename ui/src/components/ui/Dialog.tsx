@@ -29,6 +29,11 @@ export interface DialogProps {
   footer?: ReactNode;
   /** When false, Escape and a backdrop click do nothing (e.g. the consent notice). */
   dismissible?: boolean;
+  /**
+   * `drawer` slides a wide panel in from the right, full height, for reading longer content; the
+   * title stays on top, the body scrolls and the footer stays in view. Focus handling is the same.
+   */
+  variant?: 'center' | 'drawer';
 }
 
 export function Dialog({ open, ...rest }: DialogProps) {
@@ -43,6 +48,7 @@ function DialogPanel({
   children,
   footer,
   dismissible = true,
+  variant = 'center',
 }: Omit<DialogProps, 'open'>) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -99,7 +105,7 @@ function DialogPanel({
 
   return (
     <div
-      className="dialog-overlay"
+      className={variant === 'drawer' ? 'dialog-overlay dialog-overlay--drawer' : 'dialog-overlay'}
       onKeyDown={handleKeyDown}
       onMouseDown={(event) => {
         if (dismissible && event.target === event.currentTarget) onClose();
@@ -107,7 +113,7 @@ function DialogPanel({
     >
       <div
         ref={panelRef}
-        className="dialog"
+        className={variant === 'drawer' ? 'dialog dialog--drawer' : 'dialog'}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

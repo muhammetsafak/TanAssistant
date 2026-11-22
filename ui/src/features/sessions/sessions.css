@@ -578,6 +578,171 @@
   min-height: var(--control-height-sm);
 }
 
+.action-item__detail {
+  margin-left: auto;
+}
+
+/* Action brief drawer */
+.brief {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.brief__meta {
+  color: var(--color-text-faint);
+  font-size: var(--font-size-sm);
+}
+
+.brief__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.brief__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--font-size-md);
+  font-weight: 700;
+}
+
+.brief__text {
+  line-height: 1.65;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.brief__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: var(--space-5);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.brief__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.brief__progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.brief__progress progress {
+  width: 100%;
+  height: 0.5rem;
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-border);
+  accent-color: var(--color-link);
+}
+
+.brief__progress progress::-webkit-progress-bar {
+  border-radius: var(--radius-pill);
+  background: var(--color-border);
+}
+
+.brief__progress progress::-webkit-progress-value {
+  border-radius: var(--radius-pill);
+  background: var(--color-link);
+}
+
+.brief__progress progress:indeterminate::-webkit-progress-bar {
+  background: linear-gradient(
+    90deg,
+    var(--color-border),
+    var(--color-border-strong),
+    var(--color-border)
+  );
+}
+
+/* Suggested steps are the AI's own: a dashed frame and a badge set them apart from the meeting. */
+.brief__suggestion {
+  padding: var(--space-3) var(--space-4);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.brief-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--chip-processing-bg);
+  color: var(--chip-processing-fg);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+.brief-frames {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.brief-frames__reason {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.brief-quotes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.brief-quote {
+  display: grid;
+  grid-template-areas:
+    'time speaker'
+    'time text';
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  column-gap: var(--space-3);
+  row-gap: 2px;
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+}
+
+.brief-quote__time {
+  grid-area: time;
+}
+
+.brief-quote__speaker {
+  grid-area: speaker;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.brief-quote__text {
+  grid-area: text;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 /* Participants */
 .participants__list {
   display: flex;

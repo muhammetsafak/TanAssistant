@@ -164,7 +164,13 @@ function SessionDetailView({ detail }: { detail: SessionDetail }) {
       <div className="session-body">
         <article className="session-body__main session-card">
           {note ? (
-            <NoteView note={note} sessionId={session.id} />
+            <NoteView
+              note={note}
+              sessionId={session.id}
+              sessionDir={detail.sessionDir}
+              frames={detail.frames}
+              onSeek={canSeek ? seekAudio : undefined}
+            />
           ) : (
             <p className="note__none">{t('sessions.note.none')}</p>
           )}
