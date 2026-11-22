@@ -370,6 +370,15 @@
     "meterLabel": "{{name}} seviyesi",
     "noSignal": "sinyal yok",
     "meterPaused": "duraklatıldı",
+    "meterMuted": "kapalı",
+    "mute": {
+      "short": "Sustur",
+      "microphone": "Mikrofonu sustur",
+      "system": "Sistem sesini sustur",
+      "withShortcut": "{{label}} ({{keys}})"
+    },
+    "indicatorMicrophoneMuted": "Mikrofon kapalı",
+    "indicatorSystemMuted": "Sistem sesi kapalı",
     "warningsTitle": "Kayıt uyarıları",
     "warningsAfterStop": "Kayıt sırasında uyarılar oluştu:",
     "warnings": {
@@ -382,6 +391,16 @@
         "microphone": "Kayıt sırasında mikrofon sesinde kısa kesintiler oldu.",
         "system": "Kayıt sırasında sistem sesinde kısa kesintiler oldu.",
         "generic": "Kayıt sırasında seste kısa kesintiler oldu."
+      },
+      "trackUnmuteFailed": {
+        "microphone": "Mikrofon yeniden açılamadı; kapalı kalıyor.",
+        "system": "Sistem sesi yeniden açılamadı; kapalı kalıyor.",
+        "generic": "Ses kanalı yeniden açılamadı; kapalı kalıyor."
+      },
+      "trackUnmuteFailedAfterStop": {
+        "microphone": "Kayıt sırasında mikrofon yeniden açılamadı; kalan süre sessiz kaydedildi.",
+        "system": "Kayıt sırasında sistem sesi yeniden açılamadı; kalan süre sessiz kaydedildi.",
+        "generic": "Kayıt sırasında bir ses kanalı yeniden açılamadı; kalan süre sessiz kaydedildi."
       }
     },
     "nothingCaptured": "Kayıttan hiçbir şey yakalanamadı. Mikrofon ve ekran izinlerini kontrol edin.",
@@ -496,6 +515,17 @@
       "speaker": {
         "me": "Ben",
         "others": "Diğerleri"
+      },
+      "mutesLabel": "Kapalı kalan kanallar",
+      "muted": {
+        "microphone": "Mikrofon kapalıydı ({{from}}–{{to}})",
+        "system": "Sistem sesi kapalıydı ({{from}}–{{to}})",
+        "generic": "Bir ses kanalı kapalıydı ({{from}}–{{to}})"
+      },
+      "mutedOpen": {
+        "microphone": "Mikrofon {{from}} anından itibaren kapalıydı",
+        "system": "Sistem sesi {{from}} anından itibaren kapalıydı",
+        "generic": "Bir ses kanalı {{from}} anından itibaren kapalıydı"
       },
       "seekTo": "{{time}} anına git",
       "seekAndShowFrame": "{{time}} anına git ve en yakın kareyi göster"

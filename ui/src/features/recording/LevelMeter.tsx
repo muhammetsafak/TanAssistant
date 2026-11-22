@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { meterValue } from './levels';
@@ -19,18 +20,40 @@ export interface LevelMeterProps {
    * before a recording starts (decorative: there is nothing to measure yet).
    */
   mode?: 'live' | 'paused' | 'idle';
+  /** The channel is muted: its bars stay empty and the meter says it is off. */
+  muted?: boolean;
+  /** A control that belongs to this channel (its mute button), shown under the bars. */
+  control?: ReactNode;
 }
 
 /** One channel's level: a row of bars, backed by a real `<meter>` for assistive technology. */
-export function LevelMeter({ name, source, tone, level, mode = 'live' }: LevelMeterProps) {
+export function LevelMeter({
+  name,
+  source,
+  tone,
+  level,
+  mode = 'live',
+  muted = false,
+  control,
+}: LevelMeterProps) {
   const { t } = useTranslation();
-  const measuring = mode === 'live';
+  const off = muted && mode !== 'idle';
+  const measuring = mode === 'live' && !off;
   const value = measuring ? meterValue(level) : 0;
   const lit = Math.round(value * BAR_COUNT);
   const label = t('recording.meterLabel', { name: source });
+  const caption = off
+    ? t('recording.meterMuted')
+    : mode === 'paused'
+      ? t('recording.meterPaused')
+      : mode === 'live' && level === null
+        ? t('recording.noSignal')
+        : null;
 
   return (
-    <div className={`level level--${tone}${mode === 'idle' ? ' level--idle' : ''}`}>
+    <div
+      className={`level level--${tone}${mode === 'idle' ? ' level--idle' : ''}${off ? ' level--muted' : ''}`}
+    >
       <div className="level__header">
         <span className="level__name">{name}</span>
         <span className="level__source">{source}</span>
@@ -44,10 +67,11 @@ export function LevelMeter({ name, source, tone, level, mode = 'live' }: LevelMe
       {mode === 'idle' ? null : (
         <meter className="sr-only" min={0} max={1} value={value} aria-label={label} />
       )}
-      {mode === 'paused' ? (
-        <span className="level__idle">{t('recording.meterPaused')}</span>
-      ) : mode === 'live' && level === null ? (
-        <span className="level__idle">{t('recording.noSignal')}</span>
+      {caption || control ? (
+        <div className="level__footer">
+          {caption ? <span className="level__idle">{caption}</span> : null}
+          {control}
+        </div>
       ) : null}
     </div>
   );

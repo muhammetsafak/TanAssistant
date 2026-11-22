@@ -1,8 +1,10 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../components/ui/Button';
+import type { TrackMuteDto_Serialize } from '../../ipc/bindings';
+import { MicOffIcon, SpeakerOffIcon } from '../recording/ControlIcons';
 import type { Frame, TranscriptLine } from './api';
 import { formatClock } from './format';
 import { nearestFrame } from './frames';
@@ -84,6 +86,47 @@ const TranscriptRow = memo(function TranscriptRow({
   );
 });
 
+type TrackMute = TrackMuteDto_Serialize;
+
+const NO_MUTES: readonly TrackMute[] = [];
+
+/** A quiet note between the lines: a channel was off for this span, so nothing was heard on it. */
+function MuteMarker({ mute }: { mute: TrackMute }) {
+  const { t } = useTranslation();
+  const track = mute.track === 'microphone' || mute.track === 'system' ? mute.track : 'generic';
+  const from = formatClock(mute.startMs);
+  const text =
+    mute.endMs === null
+      ? t(`sessions.transcript.mutedOpen.${track}`, { from })
+      : t(`sessions.transcript.muted.${track}`, { from, to: formatClock(mute.endMs) });
+  const Icon = track === 'system' ? SpeakerOffIcon : MicOffIcon;
+  return (
+    <li className="transcript-mute">
+      <Icon className="transcript-mute__icon" />
+      <span>{text}</span>
+    </li>
+  );
+}
+
+type Entry =
+  { kind: 'line'; line: TranscriptLine; index: number } | { kind: 'mute'; mute: TrackMute };
+
+/** The lines in time order with each mute span placed before the first line that starts after it. */
+function withMutes(lines: readonly TranscriptLine[], mutes: readonly TrackMute[]): Entry[] {
+  const sorted = [...mutes].sort((a, b) => a.startMs - b.startMs);
+  const entries: Entry[] = [];
+  let next = 0;
+  lines.forEach((line, index) => {
+    while (next < sorted.length && sorted[next]!.startMs <= line.startMs) {
+      entries.push({ kind: 'mute', mute: sorted[next]! });
+      next += 1;
+    }
+    entries.push({ kind: 'line', line, index });
+  });
+  for (; next < sorted.length; next += 1) entries.push({ kind: 'mute', mute: sorted[next]! });
+  return entries;
+}
+
 /** `me` and `others` are localised; any other label is shown as the transcript has it. */
 function speakerOf(
   line: TranscriptLine,
@@ -105,12 +148,15 @@ export function TranscriptView({
   sessionDir,
   lines,
   frames,
+  mutes = NO_MUTES,
   onSeek,
   playhead,
 }: {
   sessionDir: string;
   lines: readonly TranscriptLine[];
   frames: readonly Frame[];
+  /** The spans during which a channel was muted; each is noted between the lines. */
+  mutes?: readonly TrackMute[];
   /** Given when there is audio to play; the line's start in milliseconds. */
   onSeek?: (startMs: number) => void;
   /** Where the audio is, to mark the line being played. */
@@ -122,6 +168,7 @@ export function TranscriptView({
   const select = useCallback((index: number) => setSelectedIndex(index), []);
   const seek = useCallback((ms: number) => onSeek?.(ms), [onSeek]);
   const playingIndex = useActiveLineIndex(playhead, lines);
+  const entries = useMemo(() => withMutes(lines, mutes), [lines, mutes]);
   const linesRef = useRef<HTMLOListElement>(null);
   const [scrollable, setScrollable] = useState(false);
 
@@ -138,7 +185,23 @@ export function TranscriptView({
   }, [lines.length]);
 
   if (lines.length === 0) {
-    return <p className="note__none">{t('sessions.transcript.empty')}</p>;
+    return (
+      <div className="transcript">
+        <p className="note__none">{t('sessions.transcript.empty')}</p>
+        {mutes.length > 0 ? (
+          <ul className="transcript__marks" aria-label={t('sessions.transcript.mutesLabel')}>
+            {entries.map((entry, position) =>
+              entry.kind === 'mute' ? (
+                <MuteMarker
+                  key={`mute-${entry.mute.track}-${entry.mute.startMs}-${position}`}
+                  mute={entry.mute}
+                />
+              ) : null,
+            )}
+          </ul>
+        ) : null}
+      </div>
+    );
   }
 
   const selectedLine = selectedIndex === null ? undefined : lines[selectedIndex];
@@ -181,7 +244,16 @@ export function TranscriptView({
         aria-label={t('sessions.transcript.listLabel')}
         tabIndex={scrollable ? 0 : undefined}
       >
-        {lines.map((line, index) => {
+        {entries.map((entry, position) => {
+          if (entry.kind === 'mute') {
+            return (
+              <MuteMarker
+                key={`mute-${entry.mute.track}-${entry.mute.startMs}-${position}`}
+                mute={entry.mute}
+              />
+            );
+          }
+          const { line, index } = entry;
           const { label, side } = speakerOf(line, t);
           return (
             <TranscriptRow

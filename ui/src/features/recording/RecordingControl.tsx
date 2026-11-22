@@ -20,12 +20,23 @@ import {
   useRecordingCapabilities,
   useRecordingStatus,
   useResumeRecording,
+  useSetTrackMuted,
   useStartRecording,
   useStopRecording,
   type ActiveRecording,
+  type MutableTrack,
   type RecordingSummary,
 } from './api';
-import { PauseControlIcon, PlayIcon, RecordIcon, StopIcon } from './ControlIcons';
+import {
+  MicIcon,
+  MicOffIcon,
+  PauseControlIcon,
+  PlayIcon,
+  RecordIcon,
+  SpeakerIcon,
+  SpeakerOffIcon,
+  StopIcon,
+} from './ControlIcons';
 import { DisplayPicker } from './DisplayPicker';
 import { LevelMeter } from './LevelMeter';
 import { useRecordingEvents, warningKey, type RecordingWarning } from './useRecordingEvents';
@@ -270,10 +281,66 @@ function silentTracks(summary: RecordingSummary): string[] {
 
 /** The text of a warning: its own wording for known codes, the backend message otherwise. */
 function warningText(warning: RecordingWarning, t: TFunction, afterStop: boolean): string {
-  if (warning.code !== 'audio_dropouts') return warning.message;
   const track =
     warning.track === 'microphone' || warning.track === 'system' ? warning.track : 'generic';
-  return t(`recording.warnings.${afterStop ? 'audioDropoutsAfterStop' : 'audioDropouts'}.${track}`);
+  if (warning.code === 'audio_dropouts') {
+    return t(
+      `recording.warnings.${afterStop ? 'audioDropoutsAfterStop' : 'audioDropouts'}.${track}`,
+    );
+  }
+  if (warning.code === 'track_unmute_failed') {
+    return t(
+      `recording.warnings.${afterStop ? 'trackUnmuteFailedAfterStop' : 'trackUnmuteFailed'}.${track}`,
+    );
+  }
+  return warning.message;
+}
+
+/** The accelerator the backend registers for the microphone mute, as this platform writes it. */
+function microphoneShortcut(): { text: string; aria: string } {
+  const mac = typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent);
+  return mac ? { text: '⌘⌥M', aria: 'Meta+Alt+M' } : { text: 'Ctrl+Alt+M', aria: 'Control+Alt+M' };
+}
+
+/**
+ * The mute toggle of one channel. Its name does not change with the state (`aria-pressed` says
+ * it); the slashed icon and the meter's "off" caption show it to everyone else. Each channel has
+ * its own mutation, so a request in flight on one never hides the outcome or the pending state
+ * of the other.
+ */
+function MuteButton({
+  track,
+  muted,
+  disabled,
+}: {
+  track: MutableTrack;
+  muted: boolean;
+  /** Something else (stopping the recording) holds the controls. */
+  disabled: boolean;
+}) {
+  const { t } = useTranslation();
+  const handleError = useCommandErrorHandler();
+  const setMuted = useSetTrackMuted();
+  const label = t(`recording.mute.${track}`);
+  const shortcut = track === 'microphone' ? microphoneShortcut() : null;
+  const Icon =
+    track === 'microphone' ? (muted ? MicOffIcon : MicIcon) : muted ? SpeakerOffIcon : SpeakerIcon;
+  return (
+    <Button
+      size="sm"
+      className="mute-toggle"
+      aria-label={label}
+      aria-pressed={muted}
+      aria-keyshortcuts={shortcut?.aria}
+      title={shortcut ? t('recording.mute.withShortcut', { label, keys: shortcut.text }) : label}
+      disabled={disabled || setMuted.isPending}
+      aria-busy={setMuted.isPending}
+      onClick={() => setMuted.mutate({ track, muted: !muted }, { onError: handleError })}
+    >
+      <Icon />
+      {t('recording.mute.short')}
+    </Button>
+  );
 }
 
 function ActiveRecordingView({ active, paused }: { active: ActiveRecording; paused: boolean }) {
@@ -367,6 +434,14 @@ function ActiveRecordingView({ active, paused }: { active: ActiveRecording; paus
             tone="me"
             level={current.microphoneLevel}
             mode={mode}
+            muted={active.microphoneMuted}
+            control={
+              <MuteButton
+                track="microphone"
+                muted={active.microphoneMuted}
+                disabled={stop.isPending}
+              />
+            }
           />
           <LevelMeter
             name={t('recording.meterThem')}
@@ -374,6 +449,10 @@ function ActiveRecordingView({ active, paused }: { active: ActiveRecording; paus
             tone="them"
             level={current.systemLevel}
             mode={mode}
+            muted={active.systemMuted}
+            control={
+              <MuteButton track="system" muted={active.systemMuted} disabled={stop.isPending} />
+            }
           />
         </div>
 

@@ -1,4 +1,4 @@
-import { act, screen } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import i18n from '../../i18n';
@@ -59,6 +59,25 @@ describe('RecordingIndicator', () => {
       });
     });
     expect(link).toHaveTextContent('01:01');
+  });
+
+  it('names a muted microphone and follows the mute event', async () => {
+    vi.mocked(commands.recordingStatus).mockResolvedValue(ok({ state: 'recording', active }));
+    renderWithProviders(<RecordingIndicator />);
+
+    const link = await screen.findByRole('link', { name: /Kayıt sürüyor/ });
+    expect(link).not.toHaveTextContent('Mikrofon kapalı');
+
+    act(() => {
+      emitEvent('recordingTrackMuteEvent', { sessionId: 's1', track: 'microphone', muted: true });
+    });
+    await waitFor(() => expect(link).toHaveTextContent('Mikrofon kapalı'));
+    expect(link).not.toHaveTextContent('Sistem sesi kapalı');
+
+    act(() => {
+      emitEvent('recordingTrackMuteEvent', { sessionId: 's1', track: 'microphone', muted: false });
+    });
+    await waitFor(() => expect(link).not.toHaveTextContent('Mikrofon kapalı'));
   });
 
   it('shows a running recording', async () => {

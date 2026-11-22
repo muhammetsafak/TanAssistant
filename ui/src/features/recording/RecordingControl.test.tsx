@@ -22,6 +22,7 @@ vi.mock('../../ipc/bindings', async () => {
       stopRecording: vi.fn(),
       pauseRecording: vi.fn(),
       resumeRecording: vi.fn(),
+      setTrackMuted: vi.fn(),
       displayThumbnail: vi.fn(),
     },
     events: stubEvents(),
@@ -508,6 +509,181 @@ describe('RecordingControl', () => {
       act(() => finish());
       await screen.findByText('Kayıt duraklatıldı');
       expect(screen.getByRole('button', { name: 'Kaydı durdur' })).toBeEnabled();
+    });
+  });
+
+  describe('muting', () => {
+    const running = ok({ state: 'recording', active });
+
+    it('mutes the microphone with set_track_muted and shows the channel as off', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.recordingStatus).mockResolvedValue(running);
+      const mutedStatus = ok({ state: 'recording', active: { ...active, microphoneMuted: true } });
+      vi.mocked(commands.setTrackMuted).mockImplementation(() => {
+        vi.mocked(commands.recordingStatus).mockResolvedValue(mutedStatus);
+        return Promise.resolve(mutedStatus);
+      });
+      renderControl();
+
+      const button = await screen.findByRole('button', { name: 'Mikrofonu sustur' });
+      expect(button).toHaveAttribute('aria-pressed', 'false');
+      expect(button).toHaveAttribute('title', 'Mikrofonu sustur (Ctrl+Alt+M)');
+      expect(button).toHaveAttribute('aria-keyshortcuts', 'Control+Alt+M');
+
+      await user.click(button);
+
+      expect(commands.setTrackMuted).toHaveBeenCalledWith('microphone', true);
+      await waitFor(() => expect(button).toHaveAttribute('aria-pressed', 'true'));
+      expect(screen.getByText('kapalı')).toBeInTheDocument();
+      expect(screen.getByRole('meter', { name: 'Mikrofon seviyesi' })).toHaveAttribute(
+        'value',
+        '0',
+      );
+      // The other channel is untouched.
+      expect(screen.getByRole('button', { name: 'Sistem sesini sustur' })).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      );
+    });
+
+    it('unmutes a muted channel', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.recordingStatus).mockResolvedValue(
+        ok({ state: 'recording', active: { ...active, systemMuted: true } }),
+      );
+      vi.mocked(commands.setTrackMuted).mockResolvedValue(running);
+      renderControl();
+
+      const button = await screen.findByRole('button', { name: 'Sistem sesini sustur' });
+      expect(button).toHaveAttribute('aria-pressed', 'true');
+      expect(button).not.toHaveAttribute('aria-keyshortcuts');
+
+      await user.click(button);
+
+      expect(commands.setTrackMuted).toHaveBeenCalledWith('system', false);
+    });
+
+    it('follows a mute made from the tray or the shortcut', async () => {
+      vi.mocked(commands.recordingStatus).mockResolvedValue(running);
+      renderControl();
+      const button = await screen.findByRole('button', { name: 'Mikrofonu sustur' });
+      expect(button).toHaveAttribute('aria-pressed', 'false');
+
+      act(() => {
+        emitEvent('recordingTrackMuteEvent', { sessionId: 's9', track: 'microphone', muted: true });
+      });
+      // The query cache tells its observers a tick later.
+      await waitFor(() => expect(button).toHaveAttribute('aria-pressed', 'true'));
+      expect(screen.getByText('kapalı')).toBeInTheDocument();
+
+      act(() => {
+        emitEvent('recordingTrackMuteEvent', {
+          sessionId: 's9',
+          track: 'microphone',
+          muted: false,
+        });
+      });
+      await waitFor(() => expect(button).toHaveAttribute('aria-pressed', 'false'));
+      expect(screen.queryByText('kapalı')).not.toBeInTheDocument();
+    });
+
+    it('ignores a mute event of another session', async () => {
+      vi.mocked(commands.recordingStatus).mockResolvedValue(running);
+      renderControl();
+      const button = await screen.findByRole('button', { name: 'Mikrofonu sustur' });
+      const systemButton = screen.getByRole('button', { name: 'Sistem sesini sustur' });
+
+      act(() => {
+        emitEvent('recordingTrackMuteEvent', {
+          sessionId: 'other',
+          track: 'microphone',
+          muted: true,
+        });
+      });
+      // The event of the running session comes after it; once it shows, the first one has been
+      // handled too, so no timing guess is needed.
+      act(() => {
+        emitEvent('recordingTrackMuteEvent', { sessionId: 's9', track: 'system', muted: true });
+      });
+      await waitFor(() => expect(systemButton).toHaveAttribute('aria-pressed', 'true'));
+      expect(button).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('keeps the two channels apart: the first one still reports its error and stays locked', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.recordingStatus).mockResolvedValue(running);
+      let failMicrophone: () => void = () => undefined;
+      vi.mocked(commands.setTrackMuted).mockImplementation((track) =>
+        track === 'microphone'
+          ? new Promise((resolve) => {
+              failMicrophone = () => resolve(fail('not_recording') as never);
+            })
+          : Promise.resolve(running),
+      );
+      renderControl();
+
+      await user.click(await screen.findByRole('button', { name: 'Mikrofonu sustur' }));
+      await user.click(screen.getByRole('button', { name: 'Sistem sesini sustur' }));
+
+      expect(commands.setTrackMuted).toHaveBeenCalledWith('system', true);
+      // The system request is done; the microphone one is still in flight and its button locked.
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Sistem sesini sustur' })).toBeEnabled(),
+      );
+      expect(screen.getByRole('button', { name: 'Mikrofonu sustur' })).toBeDisabled();
+
+      act(() => failMicrophone());
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Sürmekte olan bir kayıt yok.');
+      expect(screen.getByRole('button', { name: 'Mikrofonu sustur' })).toBeEnabled();
+    });
+
+    it('can be changed while paused and says so in the meter', async () => {
+      vi.mocked(commands.recordingStatus).mockResolvedValue(
+        ok({ state: 'paused', active: { ...active, microphoneMuted: true } }),
+      );
+      renderControl();
+
+      expect(await screen.findByRole('button', { name: 'Mikrofonu sustur' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Mikrofonu sustur' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      expect(screen.getByText('kapalı')).toBeInTheDocument();
+      expect(screen.getAllByText('duraklatıldı')).toHaveLength(1);
+    });
+
+    it('shows the backend error and keeps the state when the command fails', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.recordingStatus).mockResolvedValue(running);
+      vi.mocked(commands.setTrackMuted).mockResolvedValue(fail('not_recording') as never);
+      renderControl();
+
+      await user.click(await screen.findByRole('button', { name: 'Mikrofonu sustur' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Sürmekte olan bir kayıt yok.');
+      expect(screen.getByRole('button', { name: 'Mikrofonu sustur' })).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      );
+    });
+
+    it('explains in Turkish that a channel could not be turned back on', async () => {
+      vi.mocked(commands.recordingStatus).mockResolvedValue(running);
+      renderControl();
+      await screen.findByText('Kayıt sürüyor');
+
+      act(() => {
+        emitEvent('recordingWarningEvent', {
+          sessionId: 's9',
+          code: 'track_unmute_failed',
+          track: 'microphone',
+          message: 'the microphone could not be reopened',
+        });
+      });
+
+      expect(screen.getByText('Mikrofon yeniden açılamadı; kapalı kalıyor.')).toBeInTheDocument();
+      expect(screen.queryByText(/could not be reopened/)).not.toBeInTheDocument();
     });
   });
 });

@@ -129,6 +129,39 @@ describe('SessionDetailPage', () => {
       expect(preview).toHaveTextContent('Slide: Q3 plan');
     });
 
+    it('notes the span a channel was muted between the lines', async () => {
+      const [first, second] = sessionDetail().transcript;
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(
+          sessionDetail({
+            transcript: [
+              { ...first!, startMs: 10_000, endMs: 12_000 },
+              { ...second!, startMs: 430_000, endMs: 432_000 },
+            ],
+            trackMutes: [
+              { track: 'microphone', startMs: 122_000, endMs: 427_000 },
+              { track: 'system', startMs: 500_000, endMs: null },
+            ],
+          }),
+        ),
+      );
+      renderDetail();
+
+      const lines = within(await screen.findByRole('list', { name: 'Transkript satırları' }));
+      const items = lines.getAllByRole('listitem');
+      expect(items).toHaveLength(4);
+      expect(items[1]).toHaveTextContent('Mikrofon kapalıydı (02:02–07:07)');
+      expect(items[1]).toHaveClass('transcript-mute');
+      expect(items[3]).toHaveTextContent('Sistem sesi 08:20 anından itibaren kapalıydı');
+    });
+
+    it('shows no mute note when no channel was muted', async () => {
+      renderDetail();
+
+      const lines = within(await screen.findByRole('list', { name: 'Transkript satırları' }));
+      expect(lines.queryByText(/kapalıydı/)).not.toBeInTheDocument();
+    });
+
     it('labels the speakers of the two tracks', async () => {
       renderDetail();
 

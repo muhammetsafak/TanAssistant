@@ -8,6 +8,7 @@ const EVENT_NAMES = [
   'processingProgressEvent',
   'recordingProgressEvent',
   'recordingStateEvent',
+  'recordingTrackMuteEvent',
   'recordingWarningEvent',
   'transcriptionProgressEvent',
   'updateDownloadProgress',

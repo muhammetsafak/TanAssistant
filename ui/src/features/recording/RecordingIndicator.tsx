@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 
 import { formatClock } from '../sessions/format';
 import { useRecordingStatus } from './api';
+import { MicOffIcon, SpeakerOffIcon } from './ControlIcons';
 import { PauseGlyph } from './PauseGlyph';
 import { useRecordingEvents } from './useRecordingEvents';
 
@@ -29,6 +30,18 @@ export function RecordingIndicator() {
       {paused ? <PauseGlyph /> : <span className="recording-dot" aria-hidden="true" />}
       <span>{paused ? t('recording.indicatorPaused') : t('recording.indicator')}</span>
       <span className="recording-indicator__time">{formatClock(elapsedMs)}</span>
+      {active.microphoneMuted ? (
+        <span className="recording-indicator__muted">
+          <MicOffIcon className="recording-indicator__icon" />
+          {t('recording.indicatorMicrophoneMuted')}
+        </span>
+      ) : null}
+      {active.systemMuted ? (
+        <span className="recording-indicator__muted">
+          <SpeakerOffIcon className="recording-indicator__icon" />
+          {t('recording.indicatorSystemMuted')}
+        </span>
+      ) : null}
     </Link>
   );
 }

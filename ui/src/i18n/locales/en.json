@@ -370,6 +370,15 @@
     "meterLabel": "{{name}} level",
     "noSignal": "no signal",
     "meterPaused": "paused",
+    "meterMuted": "off",
+    "mute": {
+      "short": "Mute",
+      "microphone": "Mute the microphone",
+      "system": "Mute the system audio",
+      "withShortcut": "{{label}} ({{keys}})"
+    },
+    "indicatorMicrophoneMuted": "Microphone off",
+    "indicatorSystemMuted": "System audio off",
     "warningsTitle": "Recording warnings",
     "warningsAfterStop": "Warnings came up while recording:",
     "warnings": {
@@ -382,6 +391,16 @@
         "microphone": "The microphone audio had short dropouts during the recording.",
         "system": "The system audio had short dropouts during the recording.",
         "generic": "The audio had short dropouts during the recording."
+      },
+      "trackUnmuteFailed": {
+        "microphone": "The microphone could not be turned back on; it stays off.",
+        "system": "The system audio could not be turned back on; it stays off.",
+        "generic": "An audio channel could not be turned back on; it stays off."
+      },
+      "trackUnmuteFailedAfterStop": {
+        "microphone": "The microphone could not be turned back on during the recording; the rest was recorded as silence.",
+        "system": "The system audio could not be turned back on during the recording; the rest was recorded as silence.",
+        "generic": "An audio channel could not be turned back on during the recording; the rest was recorded as silence."
       }
     },
     "nothingCaptured": "Nothing could be captured. Check the microphone and screen permissions.",
@@ -496,6 +515,17 @@
       "speaker": {
         "me": "Me",
         "others": "Others"
+      },
+      "mutesLabel": "Channels that were off",
+      "muted": {
+        "microphone": "Microphone was off ({{from}}–{{to}})",
+        "system": "System audio was off ({{from}}–{{to}})",
+        "generic": "An audio channel was off ({{from}}–{{to}})"
+      },
+      "mutedOpen": {
+        "microphone": "Microphone was off from {{from}}",
+        "system": "System audio was off from {{from}}",
+        "generic": "An audio channel was off from {{from}}"
       },
       "seekTo": "Go to {{time}}",
       "seekAndShowFrame": "Go to {{time}} and show the closest frame"

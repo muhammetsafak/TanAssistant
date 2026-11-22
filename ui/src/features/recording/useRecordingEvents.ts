@@ -5,6 +5,7 @@ import {
   events,
   type RecordingProgressEvent,
   type RecordingStateEvent,
+  type RecordingStatusDto_Serialize,
   type RecordingWarningCodeDto,
 } from '../../ipc/bindings';
 import { useTauriEvent } from '../../ipc/useTauriEvent';
@@ -56,6 +57,20 @@ export function useRecordingEvents(): RecordingEvents {
     }
     void queryClient.invalidateQueries({ queryKey: recordingKeys.status });
     void queryClient.invalidateQueries({ queryKey: sessionKeys.all });
+  });
+
+  // A mute from the tray or the global shortcut never passes through this window's buttons: the
+  // event keeps the status (and with it every mute button and the top-bar indicator) in step.
+  useTauriEvent(events.recordingTrackMuteEvent, ({ sessionId, track, muted }) => {
+    if (track !== 'microphone' && track !== 'system') return;
+    queryClient.setQueryData<RecordingStatusDto_Serialize>(recordingKeys.status, (current) => {
+      if (!current?.active || current.active.sessionId !== sessionId) return current;
+      const active =
+        track === 'microphone'
+          ? { ...current.active, microphoneMuted: muted }
+          : { ...current.active, systemMuted: muted };
+      return { ...current, active };
+    });
   });
 
   useTauriEvent(events.recordingWarningEvent, ({ sessionId, code, track, message }) => {

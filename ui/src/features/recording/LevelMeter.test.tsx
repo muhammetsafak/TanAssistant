@@ -44,6 +44,31 @@ describe('LevelMeter', () => {
     expect(screen.getByRole('meter', { name: 'Mikrofon seviyesi' })).toHaveAttribute('value', '0');
   });
 
+  it('is empty and says "kapalı" while muted, even when a level arrives', () => {
+    const { container } = renderWithProviders(
+      <LevelMeter name="Ben" source="Mikrofon" tone="me" level={0.9} muted />,
+    );
+
+    expect(lit(container)).toBe(0);
+    expect(screen.getByText('kapalı')).toBeInTheDocument();
+    expect(screen.getByRole('meter', { name: 'Mikrofon seviyesi' })).toHaveAttribute('value', '0');
+    expect(container.querySelector('.level')).toHaveClass('level--muted');
+  });
+
+  it('shows the control it is given under the bars', () => {
+    renderWithProviders(
+      <LevelMeter
+        name="Ben"
+        source="Mikrofon"
+        tone="me"
+        level={0.2}
+        control={<button type="button">Sustur</button>}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Sustur' })).toBeInTheDocument();
+  });
+
   it('is a decorative, dimmed preview while idle', () => {
     const { container } = renderWithProviders(
       <LevelMeter name="Ben" source="Mikrofon" tone="me" level={0.9} mode="idle" />,

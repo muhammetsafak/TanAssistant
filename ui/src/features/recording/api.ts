@@ -116,7 +116,7 @@ export function useDisplayThumbnail(displayId: string, enabled: boolean) {
   });
 }
 
-function useStatusMutation(run: () => Promise<RecordingStatusDto_Serialize>) {
+function useStatusMutation<V = void>(run: (variables: V) => Promise<RecordingStatusDto_Serialize>) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: run,
@@ -132,4 +132,19 @@ export function usePauseRecording() {
 
 export function useResumeRecording() {
   return useStatusMutation(() => unwrapRecording(commands.resumeRecording()));
+}
+
+/** The two audio channels that can be muted on their own. */
+export type MutableTrack = 'microphone' | 'system';
+
+export interface TrackMuteRequest {
+  track: MutableTrack;
+  muted: boolean;
+}
+
+/** Mutes or unmutes one channel; the returned status carries both mute flags. */
+export function useSetTrackMuted() {
+  return useStatusMutation(({ track, muted }: TrackMuteRequest) =>
+    unwrapRecording(commands.setTrackMuted(track, muted)),
+  );
 }

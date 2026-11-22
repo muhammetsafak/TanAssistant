@@ -683,6 +683,35 @@
   overflow-wrap: anywhere;
 }
 
+/* A muted span between the lines: a calm aside with a thin rule, not a line of speech. */
+.transcript__marks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.transcript-mute {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-top: 1px dashed var(--color-border-strong);
+  border-bottom: 1px dashed var(--color-border-strong);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.transcript-mute__icon {
+  flex: none;
+}
+
+.transcript-mute span {
+  overflow-wrap: anywhere;
+}
+
 /* Audio */
 .audio-player {
   display: flex;

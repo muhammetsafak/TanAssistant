@@ -208,6 +208,7 @@ function SessionDetailView({ detail }: { detail: SessionDetail }) {
               sessionDir={detail.sessionDir}
               lines={detail.transcript}
               frames={detail.frames}
+              mutes={detail.trackMutes}
               onSeek={canSeek ? seekAudio : undefined}
               playhead={canSeek ? playhead : undefined}
             />
