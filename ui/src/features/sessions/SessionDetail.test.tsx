@@ -9,7 +9,7 @@ import { commands } from '../../ipc/bindings';
 import SessionDetailPage from '../../pages/SessionDetailPage';
 import { emitEvent } from '../../test-events';
 import { fail, ok, renderWithProviders } from '../../test-utils';
-import { session, sessionDetail } from './fixtures';
+import { ayse, caglar, mehmet, people, session, sessionDetail } from './fixtures';
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({ save: vi.fn() }));
 
@@ -24,6 +24,10 @@ vi.mock('../../ipc/bindings', async () => {
     commands: {
       getSessionDetail: vi.fn(),
       toggleActionItem: vi.fn(),
+      listPeople: vi.fn(),
+      setActionItemOwner: vi.fn(),
+      addSessionParticipant: vi.fn(),
+      removeSessionParticipant: vi.fn(),
       processingStatus: vi.fn(),
       processSession: vi.fn(),
       setTaskAssignment: vi.fn(),
@@ -57,6 +61,7 @@ describe('SessionDetailPage', () => {
       ok({ running: false, job: sessionDetail().job }),
     );
     vi.mocked(commands.listProviderProfiles).mockResolvedValue(ok([]));
+    vi.mocked(commands.listPeople).mockResolvedValue(ok(people));
     // jsdom has no media pipeline: playing and pausing are stubbed, as is the length of a track.
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
@@ -103,6 +108,197 @@ describe('SessionDetailPage', () => {
       await waitFor(() =>
         expect(screen.getByRole('checkbox', { name: 'Bütçeyi paylaş' })).not.toBeChecked(),
       );
+    });
+  });
+
+  describe('action item owner', () => {
+    it('shows the current owner and picks another person at once', async () => {
+      const user = userEvent.setup();
+      let finish: (value: unknown) => void = () => undefined;
+      vi.mocked(commands.setActionItemOwner).mockReturnValue(
+        new Promise((resolve) => {
+          finish = resolve;
+        }) as never,
+      );
+      renderDetail();
+
+      const picker = await screen.findByRole('combobox', { name: 'Sorumlu: Bütçeyi paylaş' });
+      expect(picker).toHaveValue('Ayşe');
+
+      await user.click(picker);
+      await user.click(await screen.findByRole('option', { name: 'Mehmet' }));
+
+      expect(commands.setActionItemOwner).toHaveBeenCalledWith('a1', { personId: 'p2' });
+      // The call is still pending: the owner shown is the optimistic one.
+      expect(screen.getByRole('combobox', { name: 'Sorumlu: Bütçeyi paylaş' })).toHaveValue(
+        'Mehmet',
+      );
+
+      finish(ok(mehmet));
+      await waitFor(() => expect(commands.getSessionDetail).toHaveBeenCalledTimes(2));
+    });
+
+    it('finds a person by typing without diacritics', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.setActionItemOwner).mockResolvedValue(ok(ayse));
+      renderDetail();
+
+      const picker = await screen.findByRole('combobox', { name: 'Sorumlu: Sunumu hazırla' });
+      expect(picker).toHaveValue('');
+      await user.click(picker);
+      await user.type(picker, 'ayse');
+      await user.click(screen.getByRole('option', { name: 'Ayşe' }));
+
+      expect(commands.setActionItemOwner).toHaveBeenCalledWith('a2', { personId: 'p1' });
+    });
+
+    it('adds a typed name that matches nobody as a new person', async () => {
+      const user = userEvent.setup();
+      // Never answers: what the field shows meanwhile is the optimistic owner.
+      vi.mocked(commands.setActionItemOwner).mockReturnValue(new Promise(() => undefined) as never);
+      renderDetail();
+
+      const picker = await screen.findByRole('combobox', { name: 'Sorumlu: Sunumu hazırla' });
+      await user.click(picker);
+      await user.type(picker, 'Zeynep');
+      await user.click(screen.getByRole('option', { name: '“Zeynep” olarak ekle' }));
+
+      expect(commands.setActionItemOwner).toHaveBeenCalledWith('a2', { newName: 'Zeynep' });
+      expect(screen.getByRole('combobox', { name: 'Sorumlu: Sunumu hazırla' })).toHaveValue(
+        'Zeynep',
+      );
+    });
+
+    it('picks by keyboard alone', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.setActionItemOwner).mockReturnValue(new Promise(() => undefined) as never);
+      renderDetail();
+
+      const picker = await screen.findByRole('combobox', { name: 'Sorumlu: Sunumu hazırla' });
+      picker.focus();
+      // "No owner" is the ticked choice; the next one down is "Ben".
+      await user.keyboard('{ArrowDown}{ArrowDown}{Enter}');
+
+      expect(commands.setActionItemOwner).toHaveBeenCalledWith('a2', { personId: 'me' });
+      expect(screen.getByRole('combobox', { name: 'Sorumlu: Sunumu hazırla' })).toHaveValue('Ben');
+    });
+
+    it('clears the owner with "Sorumlu yok"', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.setActionItemOwner).mockResolvedValue(ok(null));
+      renderDetail();
+
+      await user.click(await screen.findByRole('combobox', { name: 'Sorumlu: Bütçeyi paylaş' }));
+      await user.click(screen.getByRole('option', { name: 'Sorumlu yok' }));
+
+      expect(commands.setActionItemOwner).toHaveBeenCalledWith('a1', null);
+    });
+
+    it('puts the earlier owner back and reports when the backend refuses', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.setActionItemOwner).mockResolvedValue(fail('not_found') as never);
+      renderDetail();
+
+      const picker = await screen.findByRole('combobox', { name: 'Sorumlu: Bütçeyi paylaş' });
+      await user.click(picker);
+      await user.click(screen.getByRole('option', { name: 'Mehmet' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Kayıt bulunamadı.');
+      await waitFor(() =>
+        expect(screen.getByRole('combobox', { name: 'Sorumlu: Bütçeyi paylaş' })).toHaveValue(
+          'Ayşe',
+        ),
+      );
+    });
+
+    it('lists the session participants before the rest of the directory', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(
+        ok(sessionDetail({ participants: [{ person: caglar, source: 'ai' }] })),
+      );
+      renderDetail();
+
+      await user.click(await screen.findByRole('combobox', { name: 'Sorumlu: Sunumu hazırla' }));
+
+      expect(
+        within(screen.getByRole('group', { name: 'Katılımcılar' })).getByRole('option'),
+      ).toHaveTextContent('Çağlar');
+    });
+  });
+
+  describe('participants', () => {
+    const withAyse = () => sessionDetail({ participants: [{ person: ayse, source: 'ai' }] });
+
+    it('lists the participants as chips', async () => {
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(ok(withAyse()));
+      renderDetail();
+
+      const list = await screen.findByRole('list', { name: 'Katılımcılar' });
+
+      expect(within(list).getByText('Ayşe')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Katılımcılardan çıkar: Ayşe' })).toBeEnabled();
+    });
+
+    it('says so when nobody took part', async () => {
+      renderDetail();
+
+      expect(await screen.findByText('Bu kayıtta katılımcı yok.')).toBeInTheDocument();
+    });
+
+    it('removes a participant', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.getSessionDetail).mockResolvedValueOnce(ok(withAyse()));
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(ok(sessionDetail()));
+      vi.mocked(commands.removeSessionParticipant).mockResolvedValue(ok(null));
+      renderDetail();
+
+      await user.click(await screen.findByRole('button', { name: 'Katılımcılardan çıkar: Ayşe' }));
+
+      expect(commands.removeSessionParticipant).toHaveBeenCalledWith('s1', 'p1');
+      await waitFor(() =>
+        expect(screen.getByText('Bu kayıtta katılımcı yok.')).toBeInTheDocument(),
+      );
+    });
+
+    it('adds a person of the directory that is not a participant yet', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(ok(withAyse()));
+      vi.mocked(commands.addSessionParticipant).mockResolvedValue(ok(mehmet));
+      renderDetail();
+
+      const field = await screen.findByRole('combobox', { name: 'Katılımcı ekle' });
+      await user.click(field);
+      // Ayşe is in already, so she is not offered again.
+      expect(screen.queryByRole('option', { name: 'Ayşe' })).not.toBeInTheDocument();
+      await user.type(field, 'meh');
+      await user.click(screen.getByRole('option', { name: 'Mehmet' }));
+
+      expect(commands.addSessionParticipant).toHaveBeenCalledWith('s1', { personId: 'p2' });
+    });
+
+    it('adds a new name', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.addSessionParticipant).mockResolvedValue(
+        ok({ id: 'p9', displayName: 'Zeynep', isSelf: false }),
+      );
+      renderDetail();
+
+      const field = await screen.findByRole('combobox', { name: 'Katılımcı ekle' });
+      await user.click(field);
+      await user.type(field, 'Zeynep{Enter}');
+
+      expect(commands.addSessionParticipant).toHaveBeenCalledWith('s1', { newName: 'Zeynep' });
+    });
+
+    it('reports a refused change', async () => {
+      const user = userEvent.setup();
+      vi.mocked(commands.getSessionDetail).mockResolvedValue(ok(withAyse()));
+      vi.mocked(commands.removeSessionParticipant).mockResolvedValue(fail('busy') as never);
+      renderDetail();
+
+      await user.click(await screen.findByRole('button', { name: 'Katılımcılardan çıkar: Ayşe' }));
+
+      expect(await screen.findByRole('alert')).toBeInTheDocument();
     });
   });
 

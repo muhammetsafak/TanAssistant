@@ -13,6 +13,11 @@
     "notAvailable": "—",
     "version": "Version {{version}}"
   },
+  "combobox": {
+    "empty": "No matches.",
+    "results_one": "{{count}} result",
+    "results_other": "{{count}} results"
+  },
   "nav": {
     "label": "Main navigation",
     "recordings": "Library",
@@ -501,9 +506,25 @@
       "empty": "This note has no action items.",
       "progress": "{{done}}/{{total}} done",
       "listLabel": "Action items",
-      "owner": "Owner: {{owner}}",
+      "ownerLabel": "Owner",
+      "noOwner": "No owner",
       "due": "Due: {{date}}",
       "title": "Action items"
+    },
+    "people": {
+      "self": "Me",
+      "participants": "Participants",
+      "others": "Other people",
+      "directory": "People",
+      "addNamed": "Add “{{name}}”"
+    },
+    "participants": {
+      "title": "Participants",
+      "listLabel": "Participants",
+      "empty": "This recording has no participants.",
+      "remove": "Remove from participants: {{name}}",
+      "addLabel": "Add a participant",
+      "addPlaceholder": "Type or pick a name"
     },
     "transcript": {
       "empty": "There is no transcript for this recording.",

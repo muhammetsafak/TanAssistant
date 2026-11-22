@@ -4,6 +4,7 @@ import { TanIllustration } from '../../components/ui/TanIllustration';
 import { ActionItems } from './ActionItems';
 import type { Note } from './api';
 import { formatDateTime } from './format';
+import { Participants } from './Participants';
 
 import './sessions.css';
 
@@ -24,6 +25,8 @@ export function NoteView({ note, sessionId }: { note: Note; sessionId: string })
         </div>
         <TanIllustration pose="approving" width={76} decorative className="note__tan" />
       </section>
+
+      <Participants sessionId={sessionId} />
 
       <section className="note__section" aria-labelledby="note-decisions">
         <h2 id="note-decisions">{t('sessions.note.decisions')}</h2>

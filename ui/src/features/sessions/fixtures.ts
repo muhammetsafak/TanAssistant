@@ -1,4 +1,4 @@
-import type { ProcessingJob, Session, SessionDetail } from './api';
+import type { Person, ProcessingJob, Session, SessionDetail } from './api';
 
 /** Test data shaped like the backend's answers. */
 export const session: Session = {
@@ -18,6 +18,13 @@ export const frames = [
   { id: 'f2', timestampMs: 65_000, path: 'frames/f2.png', description: 'Slide: Q4 budget' },
   { id: 'f3', timestampMs: 300_000, path: 'frames/f3.png', description: null },
 ];
+
+/** The person directory: the "me" person first, then by name. */
+export const me: Person = { id: 'me', displayName: 'Muhammet', isSelf: true };
+export const ayse: Person = { id: 'p1', displayName: 'Ayşe', isSelf: false };
+export const mehmet: Person = { id: 'p2', displayName: 'Mehmet', isSelf: false };
+export const caglar: Person = { id: 'p3', displayName: 'Çağlar', isSelf: false };
+export const people: Person[] = [me, ayse, mehmet, caglar];
 
 export const processedJob: ProcessingJob = {
   sessionId: 's1',

@@ -1,12 +1,23 @@
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useCommandErrorHandler } from '../../ipc/errors';
-import { useToggleActionItem, type ActionItem } from './api';
+import {
+  usePeople,
+  useSessionParticipants,
+  useSetActionItemOwner,
+  useToggleActionItem,
+  type ActionItem,
+} from './api';
 import { formatUtcDate } from './format';
+import { OwnerPicker } from './OwnerPicker';
 
 import './sessions.css';
 
-/** The note's tasks; ticking one saves at once and puts the tick back if the save fails. */
+/**
+ * The note's tasks. Ticking one, or changing its owner, saves at once and puts the old state back
+ * if the save fails.
+ */
 export function ActionItems({
   sessionId,
   items,
@@ -17,6 +28,14 @@ export function ActionItems({
   const { t, i18n } = useTranslation();
   const handleError = useCommandErrorHandler();
   const toggle = useToggleActionItem(sessionId);
+  const setOwner = useSetActionItemOwner(sessionId);
+  const people = usePeople();
+  const participants = useSessionParticipants(sessionId);
+
+  const participantIds = useMemo(
+    () => new Set((participants.data ?? []).map((participant) => participant.person.id)),
+    [participants.data],
+  );
 
   const done = items.filter((item) => item.done).length;
 
@@ -55,18 +74,27 @@ export function ActionItems({
                   {item.task}
                 </span>
               </label>
-              {item.ownerName || item.due !== null ? (
-                <p className="action-item__meta">
-                  {item.ownerName ? (
-                    <span>{t('sessions.actions.owner', { owner: item.ownerName })}</span>
-                  ) : null}
-                  {item.due !== null ? (
-                    <span>
-                      {t('sessions.actions.due', { date: formatUtcDate(item.due, i18n.language) })}
-                    </span>
-                  ) : null}
-                </p>
-              ) : null}
+              <div className="action-item__meta">
+                <OwnerPicker
+                  task={item.task}
+                  ownerPersonId={item.ownerPersonId}
+                  ownerName={item.ownerName}
+                  ownerIsSelf={item.ownerIsSelf}
+                  people={people.data ?? []}
+                  participantIds={participantIds}
+                  onChange={(owner, person) =>
+                    setOwner.mutate(
+                      { actionItemId: item.id, owner, person },
+                      { onError: handleError },
+                    )
+                  }
+                />
+                {item.due !== null ? (
+                  <p className="action-item__due">
+                    {t('sessions.actions.due', { date: formatUtcDate(item.due, i18n.language) })}
+                  </p>
+                ) : null}
+              </div>
             </li>
           ))}
         </ul>

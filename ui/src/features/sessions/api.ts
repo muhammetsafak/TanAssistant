@@ -14,6 +14,9 @@ import {
   type AudioTrackDto_Serialize,
   type FrameDto_Serialize,
   type NoteDto_Serialize,
+  type ParticipantDto,
+  type PersonDto,
+  type PersonRefInput,
   type ProcessingJobDto_Serialize,
   type ProcessingStatusDto_Serialize,
   type SearchHitDto_Serialize,
@@ -43,6 +46,9 @@ export type Frame = FrameDto_Serialize;
 export type AudioTrack = AudioTrackDto_Serialize;
 export type Note = NoteDto_Serialize;
 export type ActionItem = ActionItemDto_Serialize;
+export type Person = PersonDto;
+export type PersonRef = PersonRefInput;
+export type Participant = ParticipantDto;
 export type TranscriptLine = TranscriptLineDto_Serialize;
 export type ProcessingJob = ProcessingJobDto_Serialize;
 export type ProcessingStatus = ProcessingStatusDto_Serialize;
@@ -57,6 +63,9 @@ export const SESSION_STATUSES: readonly SessionStatus[] = [
 ];
 
 export const PAGE_SIZE = 20;
+
+/** The longest name the backend accepts for a person. */
+export const PERSON_NAME_MAX_LENGTH = 100;
 
 export function useSessionList(query: SessionListQuery) {
   return useQuery({
@@ -128,6 +137,114 @@ export function useToggleActionItem(sessionId: string) {
         queryClient.invalidateQueries({ queryKey: [...sessionKeys.all, 'list'] }),
       ]);
     },
+  });
+}
+
+// ---------------------------------------------------------------------------------------
+// People
+// ---------------------------------------------------------------------------------------
+
+/** Query key of the person directory; it is shared by every session. */
+export const peopleQueryKey = ['people'] as const;
+
+/** Everyone in the directory: the "me" person first, then by name. */
+export function usePeople() {
+  return useQuery({
+    queryKey: peopleQueryKey,
+    queryFn: () => unwrapSessions(commands.listPeople()),
+  });
+}
+
+/**
+ * The participants of a session, read from the detail the session page already holds. This
+ * observer never starts a fetch of its own for data that is there, so it adds no extra call.
+ */
+export function useSessionParticipants(sessionId: string) {
+  return useQuery({
+    ...sessionDetailQueryOptions(sessionId),
+    staleTime: Infinity,
+    select: (detail) => detail.participants,
+  });
+}
+
+/**
+ * Sets (or, with `owner: null`, clears) the owner of an action item. The owner shows at once; a
+ * refused call puts the previous one back. `person` is the directory entry when the user picked
+ * one; for a typed name the backend decides whether that is an existing person or a new one.
+ */
+export function useSetActionItemOwner(sessionId: string) {
+  const queryClient = useQueryClient();
+  const detailKey = sessionKeys.detail(sessionId);
+  return useMutation({
+    mutationFn: ({ actionItemId, owner }: SetOwnerVariables) =>
+      unwrapSessions(commands.setActionItemOwner(actionItemId, owner)),
+    onMutate: async ({ actionItemId, owner, person }) => {
+      await queryClient.cancelQueries({ queryKey: detailKey });
+      const previous = queryClient.getQueryData<SessionDetail>(detailKey);
+      if (previous?.note) {
+        const typedName = owner !== null && owner.newName !== undefined ? owner.newName : null;
+        queryClient.setQueryData<SessionDetail>(detailKey, {
+          ...previous,
+          note: {
+            ...previous.note,
+            actionItems: previous.note.actionItems.map((item) =>
+              item.id === actionItemId
+                ? {
+                    ...item,
+                    ownerPersonId: person?.id ?? null,
+                    ownerName: person?.displayName ?? typedName,
+                    ownerIsSelf: person?.isSelf ?? false,
+                    ownerEdited: true,
+                  }
+                : item,
+            ),
+          },
+        });
+      }
+      return { previous };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) queryClient.setQueryData(detailKey, context.previous);
+    },
+    onSettled: async () => {
+      // A typed name may have added someone to the directory.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: detailKey }),
+        queryClient.invalidateQueries({ queryKey: peopleQueryKey }),
+      ]);
+    },
+  });
+}
+
+export interface SetOwnerVariables {
+  actionItemId: string;
+  owner: PersonRef | null;
+  /** The directory entry behind `owner`, when `owner` points at one. */
+  person: Person | null;
+}
+
+/** Adds a person (from the directory, or a new name) to the participants of a session. */
+export function useAddParticipant(sessionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (person: PersonRef) =>
+      unwrapSessions(commands.addSessionParticipant(sessionId, person)),
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: sessionKeys.detail(sessionId) }),
+        queryClient.invalidateQueries({ queryKey: peopleQueryKey }),
+      ]);
+    },
+  });
+}
+
+/** Takes a person off the participants of a session; the person stays in the directory. */
+export function useRemoveParticipant(sessionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (personId: string) =>
+      unwrapSessions(commands.removeSessionParticipant(sessionId, personId)),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: sessionKeys.detail(sessionId) }),
   });
 }
 

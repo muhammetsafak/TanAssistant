@@ -13,6 +13,11 @@
     "notAvailable": "—",
     "version": "Sürüm {{version}}"
   },
+  "combobox": {
+    "empty": "Eşleşen sonuç yok.",
+    "results_one": "{{count}} sonuç",
+    "results_other": "{{count}} sonuç"
+  },
   "nav": {
     "label": "Ana gezinme",
     "recordings": "Kütüphane",
@@ -501,9 +506,25 @@
       "empty": "Bu notta aksiyon maddesi yok.",
       "progress": "{{done}}/{{total}} tamamlandı",
       "listLabel": "Aksiyon maddeleri",
-      "owner": "Sorumlu: {{owner}}",
+      "ownerLabel": "Sorumlu",
+      "noOwner": "Sorumlu yok",
       "due": "Tarih: {{date}}",
       "title": "Aksiyonlar"
+    },
+    "people": {
+      "self": "Ben",
+      "participants": "Katılımcılar",
+      "others": "Diğer kişiler",
+      "directory": "Kişiler",
+      "addNamed": "“{{name}}” olarak ekle"
+    },
+    "participants": {
+      "title": "Katılımcılar",
+      "listLabel": "Katılımcılar",
+      "empty": "Bu kayıtta katılımcı yok.",
+      "remove": "Katılımcılardan çıkar: {{name}}",
+      "addLabel": "Katılımcı ekle",
+      "addPlaceholder": "Ad yazın ya da seçin"
     },
     "transcript": {
       "empty": "Bu kayıt için transkript yok.",
