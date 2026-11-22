@@ -76,6 +76,7 @@ fn detail(note_language: LanguageCode) -> SessionDetail {
     SessionDetail {
         session: session(note_language.clone()),
         audio_tracks: Vec::new(),
+        track_mutes: Vec::new(),
         frames: vec![
             frame("f1", 3_000, "frames/a.png", Some("Açılış slaytı")),
             frame(

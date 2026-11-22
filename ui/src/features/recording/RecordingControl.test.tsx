@@ -48,6 +48,8 @@ const active = {
   microphoneLevel: 0.04,
   systemLevel: null,
   frameCount: 2,
+  microphoneMuted: false,
+  systemMuted: false,
 };
 
 function renderControl() {
@@ -208,6 +210,8 @@ describe('RecordingControl', () => {
         microphoneLevel: 0.2,
         systemLevel: 0.1,
         frameCount: 7,
+        microphoneMuted: false,
+        systemMuted: false,
       });
     });
 
@@ -273,6 +277,8 @@ describe('RecordingControl', () => {
         durationMs: 60_000,
         tracks: [],
         frameCount: 3,
+        microphoneMuted: false,
+        systemMuted: false,
         droppedFrames: 0,
         warnings: [
           {
@@ -306,6 +312,8 @@ describe('RecordingControl', () => {
         durationMs: 60_000,
         tracks: [],
         frameCount: 3,
+        microphoneMuted: false,
+        systemMuted: false,
         droppedFrames: 0,
         warnings: [{ code: 'other', track: null, message: 'Loopback device changed' }],
       }),
@@ -327,6 +335,8 @@ describe('RecordingControl', () => {
         durationMs: 60_000,
         tracks: [],
         frameCount: 3,
+        microphoneMuted: false,
+        systemMuted: false,
         droppedFrames: 0,
         warnings: [],
       }),
@@ -399,6 +409,8 @@ describe('RecordingControl', () => {
           microphoneLevel: 0.5,
           systemLevel: 0.5,
           frameCount: 9,
+          microphoneMuted: false,
+          systemMuted: false,
         });
       });
 
@@ -447,6 +459,8 @@ describe('RecordingControl', () => {
           durationMs: 42_000,
           tracks: [],
           frameCount: 3,
+          microphoneMuted: false,
+          systemMuted: false,
           droppedFrames: 0,
           warnings: [],
         }),

@@ -601,7 +601,10 @@ mod tests {
         )
         .unwrap();
         migrate_up(&mut conn).unwrap();
-        assert_eq!(schema_version(&conn).unwrap(), 4);
+        assert_eq!(
+            schema_version(&conn).unwrap(),
+            crate::db::LATEST_SCHEMA_VERSION
+        );
         let (finished_at, profile): (i64, Option<String>) = conn
             .query_row(
                 "SELECT finished_at, transcription_profile_id FROM processing_jobs",

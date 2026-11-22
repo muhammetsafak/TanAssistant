@@ -26,7 +26,7 @@ use tan_application::{RepositoryError, RepositoryResult};
 use tan_domain::{
     AudioTrack, EpochMs, LanguageCode, LanguageSetting, ProviderKind, ProviderProfile,
     ProviderProfileId, Session, SessionId, SessionKind, TaskAssignment, TaskKind, TrackKind,
-    TranscriptSegment,
+    TrackMute, TranscriptSegment,
 };
 
 // ---- fakes -----------------------------------------------------------------------------
@@ -68,6 +68,28 @@ impl SessionRepository for MemSessions {
             .filter(|t| &t.session_id == session_id)
             .cloned()
             .collect())
+    }
+
+    async fn open_track_mute(
+        &self,
+        _session_id: &SessionId,
+        _kind: TrackKind,
+        _start_ms: u64,
+    ) -> RepositoryResult<()> {
+        Err(RepositoryError::Invalid("not used".to_owned()))
+    }
+
+    async fn close_track_mute(
+        &self,
+        _session_id: &SessionId,
+        _kind: TrackKind,
+        _end_ms: u64,
+    ) -> RepositoryResult<()> {
+        Err(RepositoryError::Invalid("not used".to_owned()))
+    }
+
+    async fn list_track_mutes(&self, _session_id: &SessionId) -> RepositoryResult<Vec<TrackMute>> {
+        Ok(Vec::new())
     }
 }
 

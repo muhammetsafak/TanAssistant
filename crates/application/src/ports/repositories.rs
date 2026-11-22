@@ -13,12 +13,12 @@ use std::future::Future;
 use tan_domain::{
     ActionItem, ActionItemId, AppSettings, AudioTrack, Frame, FrameId, Note, NoteId,
     ProviderProfile, ProviderProfileId, SecretId, SecretRef, Session, SessionId, SettingsPatch,
-    TaskAssignment, TaskKind, TranscriptSegment, Variable, VariableId,
+    TaskAssignment, TaskKind, TrackKind, TrackMute, TranscriptSegment, Variable, VariableId,
 };
 
 use crate::error::RepositoryResult;
 
-/// Persistence of sessions and their audio tracks.
+/// Persistence of sessions, their audio tracks and the mute intervals of those tracks.
 pub trait SessionRepository: Send + Sync {
     /// Inserts a new session.
     fn create(&self, session: &Session) -> impl Future<Output = RepositoryResult<()>> + Send;
@@ -47,6 +47,30 @@ pub trait SessionRepository: Send + Sync {
         &self,
         session_id: &SessionId,
     ) -> impl Future<Output = RepositoryResult<Vec<AudioTrack>>> + Send;
+
+    /// Records that `kind` was muted from `start_ms` (active recording time). The interval
+    /// stays open (no end) until [`Self::close_track_mute`].
+    fn open_track_mute(
+        &self,
+        session_id: &SessionId,
+        kind: TrackKind,
+        start_ms: u64,
+    ) -> impl Future<Output = RepositoryResult<()>> + Send;
+
+    /// Ends the open mute interval of `kind` at `end_ms`. Does nothing when `kind` has no
+    /// open interval, so it is safe to call for every kind when settling a session.
+    fn close_track_mute(
+        &self,
+        session_id: &SessionId,
+        kind: TrackKind,
+        end_ms: u64,
+    ) -> impl Future<Output = RepositoryResult<()>> + Send;
+
+    /// The session's mute intervals, oldest first.
+    fn list_track_mutes(
+        &self,
+        session_id: &SessionId,
+    ) -> impl Future<Output = RepositoryResult<Vec<TrackMute>>> + Send;
 }
 
 /// Persistence of captured frames.

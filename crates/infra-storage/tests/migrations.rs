@@ -203,3 +203,78 @@ fn a_fresh_database_has_the_vision_column_defaulting_to_false() {
     .unwrap();
     assert_eq!(vision_flags(&conn), [("x".to_owned(), 0)]);
 }
+
+/// A database at schema version 4 with a session in it, as an installed app would have.
+fn version_four_database() -> Connection {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_up(&mut conn).unwrap();
+    migrate_down_to(&mut conn, 4).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), 4);
+    conn.execute(
+        "INSERT INTO sessions (id, kind, title, started_at, language, note_language, status)
+         VALUES ('s1', 'meeting', 'Old meeting', 1000, 'auto', 'tr', 'recorded')",
+        [],
+    )
+    .unwrap();
+    conn
+}
+
+#[test]
+fn track_mutes_migration_keeps_existing_data_and_adds_the_table() {
+    let mut conn = version_four_database();
+    assert!(columns(&conn, "track_mutes").is_empty());
+
+    migrate_up(&mut conn).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
+    assert_eq!(
+        columns(&conn, "track_mutes"),
+        ["id", "session_id", "kind", "start_ms", "end_ms"]
+    );
+    let sessions: i64 = conn
+        .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sessions, 1, "existing rows are untouched");
+
+    // An open interval has no end; an end before the start is rejected.
+    conn.execute(
+        "INSERT INTO track_mutes (session_id, kind, start_ms, end_ms) VALUES ('s1', 'microphone', 5, NULL)",
+        [],
+    )
+    .unwrap();
+    assert!(conn
+        .execute(
+            "INSERT INTO track_mutes (session_id, kind, start_ms, end_ms) VALUES ('s1', 'system', 9, 3)",
+            [],
+        )
+        .is_err());
+
+    // The rows go with their session.
+    conn.execute("DELETE FROM sessions WHERE id = 's1'", [])
+        .unwrap();
+    let mutes: i64 = conn
+        .query_row("SELECT count(*) FROM track_mutes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mutes, 0);
+}
+
+#[test]
+fn track_mutes_migration_reverts_to_version_four_without_touching_sessions() {
+    let mut conn = version_four_database();
+    migrate_up(&mut conn).unwrap();
+    conn.execute(
+        "INSERT INTO track_mutes (session_id, kind, start_ms, end_ms) VALUES ('s1', 'microphone', 5, 8)",
+        [],
+    )
+    .unwrap();
+
+    migrate_down_to(&mut conn, 4).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), 4);
+    assert!(columns(&conn, "track_mutes").is_empty());
+    let sessions: i64 = conn
+        .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sessions, 1);
+
+    migrate_up(&mut conn).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
+}

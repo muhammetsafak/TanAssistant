@@ -20,7 +20,7 @@ use tan_application::recording::{
     RecordingStatus, RecordingSummary, RecordingWarning, RecordingWarningCode, StartOptions,
     TrackSummary,
 };
-use tan_domain::{LanguageCode, LanguageSetting, SessionStatus};
+use tan_domain::{LanguageCode, LanguageSetting, SessionStatus, TrackKind};
 use tauri::{AppHandle, Manager, State};
 use tauri_specta::Event;
 
@@ -234,6 +234,8 @@ pub struct TrackSummaryDto {
 pub enum RecordingWarningCodeDto {
     /// An audio track had repeated short dropouts.
     AudioDropouts,
+    /// A muted track could not be unmuted (its source would not open again) and stays muted.
+    TrackUnmuteFailed,
     /// Anything else; only the English message describes it.
     Other,
 }
@@ -242,6 +244,7 @@ impl From<RecordingWarningCode> for RecordingWarningCodeDto {
     fn from(code: RecordingWarningCode) -> Self {
         match code {
             RecordingWarningCode::AudioDropouts => Self::AudioDropouts,
+            RecordingWarningCode::TrackUnmuteFailed => Self::TrackUnmuteFailed,
             RecordingWarningCode::Other => Self::Other,
         }
     }
@@ -349,6 +352,10 @@ pub struct ActiveRecordingDto {
     pub system_level: f32,
     /// Frames stored so far.
     pub frame_count: u32,
+    /// Whether the microphone is muted: its stream is closed and silence is recorded.
+    pub microphone_muted: bool,
+    /// Whether the system audio is muted.
+    pub system_muted: bool,
 }
 
 impl From<ActiveRecordingStatus> for ActiveRecordingDto {
@@ -363,6 +370,8 @@ impl From<ActiveRecordingStatus> for ActiveRecordingDto {
             microphone_level: active.microphone_level,
             system_level: active.system_level,
             frame_count: active.frame_count,
+            microphone_muted: active.microphone_muted,
+            system_muted: active.system_muted,
         }
     }
 }
@@ -570,6 +579,19 @@ pub struct RecordingStateEvent {
     pub session_id: String,
 }
 
+/// Emitted when a channel is muted or unmuted, whoever caused it (the window, the tray or
+/// the global shortcut). The UI keeps its mute buttons in step with it.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingTrackMuteEvent {
+    /// The session being recorded.
+    pub session_id: String,
+    /// `microphone` or `system`.
+    pub track: String,
+    /// Whether the channel is muted now.
+    pub muted: bool,
+}
+
 /// Emitted when a source has a problem but recording continues.
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
 #[serde(rename_all = "camelCase")]
@@ -632,6 +654,21 @@ impl RecordingEvents for TauriRecordingEvents {
                 frame_count: progress.frame_count,
             }
             .emit(&self.app),
+            RecordingEvent::TrackMuteChanged {
+                session_id,
+                kind,
+                muted,
+            } => {
+                if kind == TrackKind::Microphone {
+                    tray::set_microphone_muted(&self.app, muted);
+                }
+                RecordingTrackMuteEvent {
+                    session_id: session_id.to_string(),
+                    track: kind.as_str().to_owned(),
+                    muted,
+                }
+                .emit(&self.app)
+            }
             RecordingEvent::Warning {
                 session_id,
                 warning,
@@ -714,6 +751,29 @@ pub async fn resume_recording(
         resume_paused(&state.recording).await.map(Into::into)
     })
     .await
+}
+
+/// Mutes or unmutes one audio channel of the running (or paused) recording. A muted channel's
+/// OS stream is closed (the microphone indicator goes off) and silence is recorded for the
+/// span; the other channel and the screen keep going and the timeline is not squeezed. While
+/// paused the state is remembered and applied at resume.
+///
+/// A channel that cannot be opened again stays muted: the returned status says so and a
+/// `track_unmute_failed` warning event is published.
+#[tauri::command]
+#[specta::specta]
+#[tracing::instrument(skip_all)]
+pub async fn set_track_muted(
+    state: State<'_, AppState>,
+    track: String,
+    muted: bool,
+) -> Result<RecordingStatusDto, RecordingIpcError> {
+    let kind = track
+        .parse::<TrackKind>()
+        .map_err(|_| RecordingIpcError::validation("the track must be `microphone` or `system`"))?;
+    mute_on_pool(&state.recording, kind, muted)
+        .await
+        .map(Into::into)
 }
 
 /// Whether a recording is running, with its live numbers.
@@ -883,6 +943,33 @@ async fn resume_paused(
     run_blocking(move || service.resume().map(RecordingStatus::Recording))
         .await?
         .map_err(Into::into)
+}
+
+/// Mutes or unmutes a channel on the blocking pool (closing or opening the stream waits on
+/// the OS). The status it returns keeps the paused/recording distinction.
+async fn mute_on_pool(
+    service: &Arc<crate::state::Recording>,
+    kind: TrackKind,
+    muted: bool,
+) -> Result<RecordingStatus, RecordingIpcError> {
+    let service = service.clone();
+    run_blocking(move || {
+        service.set_track_muted(kind, muted)?;
+        Ok::<_, RecordingError>(service.status())
+    })
+    .await?
+    .map_err(Into::into)
+}
+
+/// Flips the microphone mute of the running or paused recording (tray menu, global
+/// shortcut).
+pub async fn toggle_microphone_mute(app: &AppHandle) -> Result<(), RecordingIpcError> {
+    let service = app.state::<AppState>().recording.clone();
+    // The service reads and flips under one lock, so quick presses never see the same state.
+    run_blocking(move || service.toggle_track_muted(TrackKind::Microphone))
+        .await?
+        .map_err(RecordingIpcError::from)?;
+    Ok(())
 }
 
 /// Pauses the running recording (tray menu).
@@ -1100,6 +1187,8 @@ mod tests {
             microphone_level: 0.0,
             system_level: 0.0,
             frame_count: 3,
+            microphone_muted: false,
+            system_muted: false,
         }
     }
 
@@ -1118,6 +1207,25 @@ mod tests {
         assert_eq!(active.elapsed_ms, 12_345);
         assert_eq!(active.session_id, "s1");
         assert_eq!(active.frame_count, 3);
+    }
+
+    #[test]
+    fn the_status_reports_which_channels_are_muted_and_a_warning_code_for_a_failed_unmute() {
+        let status = ActiveRecordingStatus {
+            microphone_muted: true,
+            ..active_status(1_000)
+        };
+        let dto = RecordingStatusDto::from(RecordingStatus::Recording(status));
+        let active = dto.active.unwrap();
+        assert!(active.microphone_muted);
+        assert!(!active.system_muted);
+
+        let warning = RecordingWarningDto::from(RecordingWarning::track_unmute_failed(
+            TrackKind::Microphone,
+            &tan_application::ports::CaptureError::failed("busy"),
+        ));
+        assert_eq!(warning.code, RecordingWarningCodeDto::TrackUnmuteFailed);
+        assert_eq!(warning.track.as_deref(), Some("microphone"));
     }
 
     #[test]

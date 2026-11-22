@@ -30,6 +30,24 @@ pub struct AudioTrack {
     pub duration_ms: u64,
 }
 
+/// A span of the recording during which one audio channel was muted (ADR-014).
+///
+/// Times are on the active time axis of the recording (paused time is not counted), the same
+/// axis as frame timestamps and transcript offsets. The channel's stream was closed for the
+/// span and its audio file holds silence there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackMute {
+    /// Owning session.
+    pub session_id: SessionId,
+    /// The muted channel.
+    pub kind: TrackKind,
+    /// Start of the muted span, in milliseconds from the recording start.
+    pub start_ms: u64,
+    /// End of the span; `None` while the channel is still muted (an interval a crash left
+    /// open is closed at recovery).
+    pub end_ms: Option<u64>,
+}
+
 /// A stored screen capture (only visibly changed frames are kept).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {

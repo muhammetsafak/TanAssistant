@@ -44,6 +44,7 @@ export function sessionDetail(overrides: Partial<SessionDetail> = {}): SessionDe
         deletedAt: null,
       },
     ],
+    trackMutes: [],
     frames,
     transcript: [
       {

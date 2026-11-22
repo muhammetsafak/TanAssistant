@@ -118,6 +118,8 @@ describe('language switching', () => {
           microphoneLevel: null,
           systemLevel: null,
           frameCount: 0,
+          microphoneMuted: false,
+          systemMuted: false,
         },
       }),
     );

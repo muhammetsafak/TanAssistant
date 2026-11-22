@@ -14,7 +14,8 @@ use tan_application::sessions::{
     SessionPage, SessionSearchResult, SessionsError, StorageUsage,
 };
 use tan_domain::{
-    ActionItem, ActionItemId, EpochMs, Frame, Session, SessionId, SessionStatus, TranscriptSegment,
+    ActionItem, ActionItemId, EpochMs, Frame, Session, SessionId, SessionStatus, TrackMute,
+    TranscriptSegment,
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -434,6 +435,30 @@ impl From<&AudioTrackState> for AudioTrackDto {
     }
 }
 
+/// A span of the recording during which one channel was muted: its file holds silence there.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackMuteDto {
+    /// `microphone` or `system`.
+    pub track: String,
+    /// Start, in milliseconds from the recording start (paused time is not counted, like
+    /// every other timestamp of the session).
+    pub start_ms: u32,
+    /// End; `null` while the channel is still muted (a session a crash interrupted is
+    /// closed at startup, so a finished session has none).
+    pub end_ms: Option<u32>,
+}
+
+impl From<&TrackMute> for TrackMuteDto {
+    fn from(mute: &TrackMute) -> Self {
+        Self {
+            track: mute.kind.as_str().to_owned(),
+            start_ms: saturating_u32(mute.start_ms),
+            end_ms: mute.end_ms.map(saturating_u32),
+        }
+    }
+}
+
 /// A stored screen frame.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -570,6 +595,8 @@ pub struct SessionDetailDto {
     pub session_dir: String,
     /// Its audio tracks.
     pub audio_tracks: Vec<AudioTrackDto>,
+    /// The spans during which a channel was muted, oldest first.
+    pub track_mutes: Vec<TrackMuteDto>,
     /// Its frames in time order.
     pub frames: Vec<FrameDto>,
     /// The transcript in time order.
@@ -586,6 +613,7 @@ impl SessionDetailDto {
             session: (&detail.session).into(),
             session_dir,
             audio_tracks: detail.audio_tracks.iter().map(Into::into).collect(),
+            track_mutes: detail.track_mutes.iter().map(Into::into).collect(),
             frames: detail.frames.iter().map(Into::into).collect(),
             transcript: detail.transcript.iter().map(Into::into).collect(),
             note: detail.note.as_ref().map(Into::into),

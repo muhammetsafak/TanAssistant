@@ -109,7 +109,7 @@ impl EpochMs {
 pub use credentials::{SecretRef, Variable};
 pub use ids::{ActionItemId, FrameId, NoteId, ProviderProfileId, SecretId, SessionId, VariableId};
 pub use language::{InvalidLanguageCode, LanguageCode, LanguageSetting, UiLanguage};
-pub use media::{AudioTrack, Frame, TrackKind};
+pub use media::{AudioTrack, Frame, TrackKind, TrackMute};
 pub use note::{ActionItem, Note};
 pub use processing::{
     ProcessingError, ProcessingJob, ProcessingJobRecord, ProcessingStep, StepState,

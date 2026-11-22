@@ -12,7 +12,7 @@ use tan_application::RepositoryError;
 use tan_domain::{
     ActionItem, ActionItemId, AudioTrack, EpochMs, Frame, FrameId, LanguageCode, LanguageSetting,
     Note, NoteId, ProviderKind, ProviderProfile, ProviderProfileId, SecretId, SecretRef, SessionId,
-    SessionStatus, TaskAssignment, TaskKind, TrackKind, Variable, VariableId,
+    SessionStatus, TaskAssignment, TaskKind, TrackKind, TrackMute, Variable, VariableId,
 };
 use tan_infra_storage::{
     new_id, SqliteFrameRepository, SqliteNoteRepository, SqliteProviderProfileRepository,
@@ -126,6 +126,80 @@ fn audio_tracks_upsert_per_kind() {
         block_on(repo.save_audio_track(&orphan)),
         Err(RepositoryError::Conflict(_))
     ));
+}
+
+#[test]
+fn track_mutes_open_close_and_list_in_order() {
+    let t = test_db();
+    with_session(&t, "s1");
+    with_session(&t, "s2");
+    let repo = SqliteSessionRepository::new(t.db.clone());
+
+    block_on(repo.open_track_mute(&sid("s1"), TrackKind::Microphone, 5_000)).unwrap();
+    // Open: no end yet.
+    let mutes = block_on(repo.list_track_mutes(&sid("s1"))).unwrap();
+    assert_eq!(
+        mutes,
+        [TrackMute {
+            session_id: sid("s1"),
+            kind: TrackKind::Microphone,
+            start_ms: 5_000,
+            end_ms: None,
+        }]
+    );
+
+    // Closing one kind leaves the other kind's open interval alone.
+    block_on(repo.open_track_mute(&sid("s1"), TrackKind::System, 6_000)).unwrap();
+    block_on(repo.close_track_mute(&sid("s1"), TrackKind::Microphone, 9_000)).unwrap();
+    // A second mute of the same channel later, still open.
+    block_on(repo.open_track_mute(&sid("s1"), TrackKind::Microphone, 12_000)).unwrap();
+    // Closing a kind with no open interval, or another session's, changes nothing.
+    block_on(repo.close_track_mute(&sid("s2"), TrackKind::System, 1)).unwrap();
+
+    let mutes = block_on(repo.list_track_mutes(&sid("s1"))).unwrap();
+    let spans: Vec<_> = mutes
+        .iter()
+        .map(|m| (m.kind, m.start_ms, m.end_ms))
+        .collect();
+    assert_eq!(
+        spans,
+        [
+            (TrackKind::Microphone, 5_000, Some(9_000)),
+            (TrackKind::System, 6_000, None),
+            (TrackKind::Microphone, 12_000, None),
+        ]
+    );
+    assert!(block_on(repo.list_track_mutes(&sid("s2")))
+        .unwrap()
+        .is_empty());
+
+    // Settling a session closes whatever is open, once.
+    for kind in TrackKind::ALL {
+        block_on(repo.close_track_mute(&sid("s1"), *kind, 20_000)).unwrap();
+    }
+    let mutes = block_on(repo.list_track_mutes(&sid("s1"))).unwrap();
+    assert_eq!(
+        mutes.iter().map(|m| m.end_ms).collect::<Vec<_>>(),
+        [Some(9_000), Some(20_000), Some(20_000)]
+    );
+
+    // An end before the start is clamped to the start, never an error.
+    block_on(repo.open_track_mute(&sid("s2"), TrackKind::System, 8_000)).unwrap();
+    block_on(repo.close_track_mute(&sid("s2"), TrackKind::System, 3_000)).unwrap();
+    let mutes = block_on(repo.list_track_mutes(&sid("s2"))).unwrap();
+    assert_eq!(mutes[0].end_ms, Some(8_000));
+
+    // A span for a nonexistent session violates the foreign key.
+    assert!(matches!(
+        block_on(repo.open_track_mute(&sid("nope"), TrackKind::System, 1)),
+        Err(RepositoryError::Conflict(_))
+    ));
+
+    // The spans go with their session.
+    block_on(repo.delete(&sid("s1"))).unwrap();
+    assert!(block_on(repo.list_track_mutes(&sid("s1")))
+        .unwrap()
+        .is_empty());
 }
 
 // ---------------------------------------------------------------------------------------------

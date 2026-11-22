@@ -25,7 +25,7 @@ use tan_application::recording::{
 use tan_application::{RepositoryError, RepositoryResult};
 use tan_domain::{
     AppSettings, AudioTrack, EpochMs, Frame, FrameId, LanguageCode, LanguageSetting, Session,
-    SessionId, SessionKind, SessionStatus, SettingsPatch, TrackKind,
+    SessionId, SessionKind, SessionStatus, SettingsPatch, TrackKind, TrackMute,
 };
 
 // ---- fakes -----------------------------------------------------------------------------
@@ -34,6 +34,9 @@ use tan_domain::{
 struct MemSessions {
     sessions: Mutex<BTreeMap<String, Session>>,
     tracks: Mutex<Vec<AudioTrack>>,
+    mutes: Mutex<Vec<TrackMute>>,
+    /// While set, closing a mute interval fails.
+    fail_close: AtomicBool,
 }
 
 impl MemSessions {
@@ -95,6 +98,51 @@ impl SessionRepository for MemSessions {
             .filter(|t| &t.session_id == session_id)
             .cloned()
             .collect())
+    }
+
+    async fn open_track_mute(
+        &self,
+        session_id: &SessionId,
+        kind: TrackKind,
+        start_ms: u64,
+    ) -> RepositoryResult<()> {
+        self.mutes.lock().unwrap().push(TrackMute {
+            session_id: session_id.clone(),
+            kind,
+            start_ms,
+            end_ms: None,
+        });
+        Ok(())
+    }
+
+    async fn close_track_mute(
+        &self,
+        session_id: &SessionId,
+        kind: TrackKind,
+        end_ms: u64,
+    ) -> RepositoryResult<()> {
+        if self.fail_close.load(Ordering::SeqCst) {
+            return Err(RepositoryError::Invalid("cannot write".to_owned()));
+        }
+        for mute in self.mutes.lock().unwrap().iter_mut() {
+            if &mute.session_id == session_id && mute.kind == kind && mute.end_ms.is_none() {
+                mute.end_ms = Some(end_ms.max(mute.start_ms));
+            }
+        }
+        Ok(())
+    }
+
+    async fn list_track_mutes(&self, session_id: &SessionId) -> RepositoryResult<Vec<TrackMute>> {
+        let mut mutes: Vec<TrackMute> = self
+            .mutes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| &m.session_id == session_id)
+            .cloned()
+            .collect();
+        mutes.sort_by_key(|m| m.start_ms);
+        Ok(mutes)
     }
 }
 
@@ -193,6 +241,8 @@ struct FakeStream {
     stopped: Arc<AtomicBool>,
     /// Streams of this fake that are open right now.
     live: Arc<AtomicU32>,
+    /// Streams of the same channel that are open right now.
+    kind_live: Option<Arc<AtomicU32>>,
 }
 
 impl FakeStream {
@@ -201,12 +251,28 @@ impl FakeStream {
         Self {
             stopped: stopped.clone(),
             live: live.clone(),
+            kind_live: None,
+        }
+    }
+
+    fn open_for_kind(
+        stopped: &Arc<AtomicBool>,
+        live: &Arc<AtomicU32>,
+        kind_live: &Arc<AtomicU32>,
+    ) -> Self {
+        kind_live.fetch_add(1, Ordering::SeqCst);
+        Self {
+            kind_live: Some(kind_live.clone()),
+            ..Self::open(stopped, live)
         }
     }
 
     fn close(&self) {
         self.stopped.store(true, Ordering::SeqCst);
         self.live.fetch_sub(1, Ordering::SeqCst);
+        if let Some(kind_live) = &self.kind_live {
+            kind_live.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -236,6 +302,8 @@ struct FakeAudio {
     failing: Mutex<Vec<TrackKind>>,
     stopped: Arc<AtomicBool>,
     live: Arc<AtomicU32>,
+    /// Open streams per channel.
+    live_by_kind: Mutex<HashMap<TrackKind, Arc<AtomicU32>>>,
     /// While set, `start` waits (a slow OS call).
     gate: AtomicBool,
 }
@@ -243,6 +311,15 @@ struct FakeAudio {
 impl FakeAudio {
     fn sink(&self, kind: TrackKind) -> Arc<dyn AudioSink> {
         self.sinks.lock().unwrap()[&kind].clone()
+    }
+
+    /// Streams of `kind` that are open right now.
+    fn live_of(&self, kind: TrackKind) -> u32 {
+        self.live_by_kind
+            .lock()
+            .unwrap()
+            .get(&kind)
+            .map_or(0, |live| live.load(Ordering::SeqCst))
     }
 }
 
@@ -266,7 +343,18 @@ impl AudioCapture for FakeAudio {
             ));
         }
         self.sinks.lock().unwrap().insert(request.source, sink);
-        Ok(Box::new(FakeStream::open(&self.stopped, &self.live)))
+        let kind_live = self
+            .live_by_kind
+            .lock()
+            .unwrap()
+            .entry(request.source)
+            .or_default()
+            .clone();
+        Ok(Box::new(FakeStream::open_for_kind(
+            &self.stopped,
+            &self.live,
+            &kind_live,
+        )))
     }
 }
 
@@ -1749,4 +1837,621 @@ fn begin_stop_waits_for_a_resume_and_the_service_stays_busy_until_finish_stop() 
         h.service.begin_stop().err(),
         Some(RecordingError::NotRecording)
     ));
+}
+
+// ---- muting one channel ----------------------------------------------------------------
+
+fn mute_status(h: &Harness) -> (bool, bool) {
+    match h.service.status() {
+        RecordingStatus::Recording(active) | RecordingStatus::Paused(active) => {
+            (active.microphone_muted, active.system_muted)
+        }
+        RecordingStatus::Idle => panic!("expected a recording"),
+    }
+}
+
+fn sample_ms(h: &Harness, kind: TrackKind) -> u64 {
+    h.media.log(kind).lock().unwrap().sample_frames * 1_000 / 48_000
+}
+
+fn silence_ms(h: &Harness, kind: TrackKind) -> u64 {
+    h.media.log(kind).lock().unwrap().silence_frames * 1_000 / 48_000
+}
+
+fn mute_events(h: &Harness) -> Vec<(TrackKind, bool)> {
+    h.events
+        .all()
+        .into_iter()
+        .filter_map(|event| match event {
+            RecordingEvent::TrackMuteChanged { kind, muted, .. } => Some((kind, muted)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn unmute_warnings(h: &Harness) -> usize {
+    h.events
+        .all()
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                RecordingEvent::Warning { warning, .. }
+                    if warning.code == RecordingWarningCode::TrackUnmuteFailed
+                        && warning.track == Some(TrackKind::Microphone)
+            )
+        })
+        .count()
+}
+
+#[test]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn muting_the_microphone_closes_only_its_stream_and_the_system_channel_keeps_recording() {
+    // 0.3 s both, 0.4 s with the microphone muted, 0.3 s both again.
+    let h = harness();
+    let session = block_on(h.service.start(StartOptions::titled("mute"))).unwrap();
+    let [mic, system] = both_sinks(&h);
+    assert_eq!(mute_status(&h), (false, false));
+
+    feed_for(&[mic.clone(), system.clone()], Duration::from_millis(300));
+    let status = h
+        .service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    assert!(status.microphone_muted && !status.system_muted);
+    assert_eq!(mute_status(&h), (true, false));
+    assert_eq!(
+        h.audio.live_of(TrackKind::Microphone),
+        0,
+        "mic stream closed"
+    );
+    assert_eq!(h.audio.live_of(TrackKind::System), 1, "system stream open");
+    assert_eq!(h.screen.live.load(Ordering::SeqCst), 1, "screen untouched");
+
+    // The ambient speech the microphone would have picked up is not captured, and the
+    // system channel is not interrupted.
+    std::thread::sleep(Duration::from_millis(50));
+    let mic_before = sample_ms(&h, TrackKind::Microphone);
+    let system_before = sample_ms(&h, TrackKind::System);
+    let end = Instant::now() + Duration::from_millis(400);
+    let mut last = Instant::now();
+    while last < end {
+        std::thread::sleep(Duration::from_millis(10));
+        let now = Instant::now();
+        mic.on_chunk(chunk(480, 0.9, now));
+        let frames = ((now - last).as_secs_f64() * 48_000.0) as usize;
+        system.on_chunk(chunk(frames, 0.2, now));
+        last = now;
+    }
+
+    h.service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+    assert_eq!(mute_status(&h), (false, false));
+    assert_eq!(
+        h.audio.live_of(TrackKind::Microphone),
+        1,
+        "mic stream reopened"
+    );
+    feed_for(&[mic, system], Duration::from_millis(300));
+    let summary = block_on(h.service.stop()).unwrap();
+
+    // The microphone file holds the two stretches of speech around a silent gap; the
+    // system file has audio all along.
+    let mic_audio = sample_ms(&h, TrackKind::Microphone);
+    let system_audio = sample_ms(&h, TrackKind::System);
+    assert!(mic_audio >= mic_before, "mic {mic_audio} ms");
+    assert!(
+        system_audio >= system_before + 650,
+        "system audio went on: {system_before} -> {system_audio} ms"
+    );
+    assert!(
+        system_audio > mic_audio + 300,
+        "the muted span holds no microphone audio: mic {mic_audio} ms, system {system_audio} ms"
+    );
+    let gap = silence_ms(&h, TrackKind::Microphone);
+    assert!(
+        (300..700).contains(&gap),
+        "silence in the mic file: {gap} ms"
+    );
+
+    // The timeline is not squeezed: both files have the same length, which is the session's.
+    let mic_len = file_ms(&h, TrackKind::Microphone);
+    let system_len = file_ms(&h, TrackKind::System);
+    assert!(
+        mic_len.abs_diff(system_len) < 250,
+        "mic {mic_len} ms, system {system_len} ms"
+    );
+    let session_ms = summary.session.duration_ms().unwrap();
+    assert!(
+        mic_len.abs_diff(session_ms) < 300,
+        "file {mic_len} ms, session {session_ms} ms"
+    );
+    assert_eq!(summary.session.status(), SessionStatus::Recorded);
+    assert!(summary.warnings.is_empty(), "{:?}", summary.warnings);
+
+    // One closed interval on the active time axis.
+    let mutes = block_on(h.sessions.list_track_mutes(&session.id)).unwrap();
+    assert_eq!(mutes.len(), 1, "{mutes:?}");
+    assert_eq!(mutes[0].kind, TrackKind::Microphone);
+    let end_ms = mutes[0].end_ms.expect("the interval was closed");
+    assert!(
+        (150..600).contains(&mutes[0].start_ms),
+        "start {}",
+        mutes[0].start_ms
+    );
+    assert!(
+        (300..700).contains(&(end_ms - mutes[0].start_ms)),
+        "length {}",
+        end_ms - mutes[0].start_ms
+    );
+    assert_eq!(
+        mute_events(&h),
+        [
+            (TrackKind::Microphone, true),
+            (TrackKind::Microphone, false)
+        ]
+    );
+}
+
+#[test]
+fn muting_the_system_channel_leaves_the_microphone_open() {
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("system mute"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+
+    let status = h.service.set_track_muted(TrackKind::System, true).unwrap();
+    assert!(status.system_muted && !status.microphone_muted);
+    assert_eq!(h.audio.live_of(TrackKind::System), 0);
+    assert_eq!(h.audio.live_of(TrackKind::Microphone), 1);
+
+    // Asking for the state a channel is already in changes and publishes nothing.
+    h.service.set_track_muted(TrackKind::System, true).unwrap();
+    h.service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+    assert_eq!(mute_events(&h), [(TrackKind::System, true)]);
+    block_on(h.service.stop()).unwrap();
+}
+
+#[test]
+fn a_pause_wins_over_a_mute_and_the_channel_stays_closed_at_resume() {
+    let h = harness();
+    let session = block_on(h.service.start(StartOptions::titled("pause + mute"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(150));
+    h.service.pause().unwrap();
+    assert_eq!(h.audio.live.load(Ordering::SeqCst), 0);
+
+    // The state can be changed while paused; nothing opens or closes.
+    let status = h
+        .service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    assert!(status.microphone_muted);
+    assert!(matches!(h.service.status(), RecordingStatus::Paused(_)));
+    assert_eq!(h.audio.live.load(Ordering::SeqCst), 0);
+
+    h.service.resume().unwrap();
+    assert!(matches!(h.service.status(), RecordingStatus::Recording(_)));
+    assert_eq!(h.audio.live_of(TrackKind::Microphone), 0, "still muted");
+    assert_eq!(h.audio.live_of(TrackKind::System), 1);
+
+    // A second pause and resume keep it closed.
+    h.service.pause().unwrap();
+    h.service.resume().unwrap();
+    assert_eq!(h.audio.live_of(TrackKind::Microphone), 0);
+
+    // Unmuting while paused opens it at resume, not before.
+    h.service.pause().unwrap();
+    h.service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+    assert_eq!(h.audio.live.load(Ordering::SeqCst), 0, "paused: all closed");
+    h.service.resume().unwrap();
+    assert_eq!(h.audio.live_of(TrackKind::Microphone), 1);
+    assert_eq!(mute_status(&h), (false, false));
+
+    let summary = block_on(h.service.stop()).unwrap();
+    assert_eq!(summary.session.status(), SessionStatus::Recorded);
+    let mutes = block_on(h.sessions.list_track_mutes(&session.id)).unwrap();
+    assert_eq!(mutes.len(), 1);
+    assert!(mutes[0].end_ms.is_some());
+}
+
+#[test]
+fn a_channel_that_cannot_reopen_stays_muted_and_warns_every_time() {
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("denied"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+    h.service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+
+    *h.audio.failing.lock().unwrap() = vec![TrackKind::Microphone];
+    let status = h
+        .service
+        .set_track_muted(TrackKind::Microphone, false)
+        .expect("a source that will not open is a warning, not an error");
+    assert!(status.microphone_muted, "the mute is not lifted");
+    assert_eq!(mute_status(&h), (true, false));
+    assert_eq!(h.audio.live_of(TrackKind::Microphone), 0);
+    assert_eq!(unmute_warnings(&h), 1);
+    let warning = h
+        .events
+        .all()
+        .into_iter()
+        .find_map(|event| match event {
+            RecordingEvent::Warning { warning, .. } => Some(warning),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(warning.code, RecordingWarningCode::TrackUnmuteFailed);
+    assert_eq!(warning.track, Some(TrackKind::Microphone));
+
+    // Trying again is reported again, even though it is the same warning.
+    h.service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+    assert_eq!(unmute_warnings(&h), 2);
+    assert_eq!(mute_events(&h), [(TrackKind::Microphone, true)]);
+
+    // Once the device works it unmutes.
+    h.audio.failing.lock().unwrap().clear();
+    let status = h
+        .service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+    assert!(!status.microphone_muted);
+    assert_eq!(h.audio.live_of(TrackKind::Microphone), 1);
+
+    let summary = block_on(h.service.stop()).unwrap();
+    let warnings: Vec<_> = summary
+        .warnings
+        .iter()
+        .filter(|w| w.code == RecordingWarningCode::TrackUnmuteFailed)
+        .collect();
+    assert_eq!(warnings.len(), 1, "the summary keeps it once");
+}
+
+#[test]
+fn pausing_and_resuming_with_every_audio_channel_muted_is_not_an_error() {
+    let h = harness();
+    let session = block_on(h.service.start(StartOptions::titled("all muted"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+    h.service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    h.service.set_track_muted(TrackKind::System, true).unwrap();
+    assert_eq!(h.audio.live.load(Ordering::SeqCst), 0);
+
+    h.service.pause().unwrap();
+    h.service
+        .resume()
+        .expect("nothing to open is not a failure");
+    assert!(matches!(h.service.status(), RecordingStatus::Recording(_)));
+    assert_eq!(h.audio.live.load(Ordering::SeqCst), 0);
+    assert_eq!(mute_status(&h), (true, true));
+
+    std::thread::sleep(Duration::from_millis(300));
+    let summary = block_on(h.service.stop()).unwrap();
+    assert_eq!(summary.session.status(), SessionStatus::Recorded);
+    assert_eq!(summary.tracks.len(), 2);
+    // Both files are padded with silence up to the end, so they stay aligned.
+    let mic = file_ms(&h, TrackKind::Microphone);
+    let system = file_ms(&h, TrackKind::System);
+    assert!(
+        mic.abs_diff(system) < 250,
+        "mic {mic} ms, system {system} ms"
+    );
+    assert!(mic >= 300, "{mic} ms");
+
+    // Both spans were closed at the stop.
+    let mutes = block_on(h.sessions.list_track_mutes(&session.id)).unwrap();
+    assert_eq!(mutes.len(), 2);
+    assert!(mutes.iter().all(|m| m.end_ms.is_some()), "{mutes:?}");
+}
+
+#[test]
+fn a_microphone_only_recording_with_its_microphone_muted_survives_a_pause() {
+    let h = harness();
+    *h.audio.failing.lock().unwrap() = vec![TrackKind::System];
+    block_on(h.service.start(StartOptions::titled("mic only"))).unwrap();
+    h.audio.failing.lock().unwrap().clear();
+    feed_for(
+        &[h.audio.sink(TrackKind::Microphone)],
+        Duration::from_millis(100),
+    );
+
+    h.service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    h.service.pause().unwrap();
+    h.service.resume().expect("no source to open, none failed");
+    assert_eq!(h.audio.live.load(Ordering::SeqCst), 0);
+
+    // The channel that never started cannot be muted.
+    match h.service.set_track_muted(TrackKind::System, true) {
+        Err(RecordingError::Invalid(_)) => {}
+        other => panic!("unexpected result: {other:?}"),
+    }
+    h.service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+    assert_eq!(h.audio.live_of(TrackKind::Microphone), 1);
+    block_on(h.service.stop()).unwrap();
+}
+
+#[test]
+fn muting_needs_a_recording() {
+    let h = harness();
+    match h.service.set_track_muted(TrackKind::Microphone, true) {
+        Err(RecordingError::NotRecording) => {}
+        other => panic!("unexpected result: {other:?}"),
+    }
+    assert_eq!(mute_events(&h).len(), 0);
+}
+
+#[test]
+fn a_mute_still_open_at_the_stop_ends_at_the_stop() {
+    let h = harness();
+    let session = block_on(h.service.start(StartOptions::titled("muted to the end"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(200));
+    h.service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let summary = block_on(h.service.stop()).unwrap();
+
+    let mutes = block_on(h.sessions.list_track_mutes(&session.id)).unwrap();
+    assert_eq!(mutes.len(), 1);
+    let session_ms = summary.session.duration_ms().unwrap();
+    assert_eq!(mutes[0].end_ms, Some(session_ms));
+    let mic = file_ms(&h, TrackKind::Microphone);
+    assert!(mic.abs_diff(session_ms) < 250, "{mic} vs {session_ms}");
+}
+
+#[test]
+fn recovery_closes_the_mute_a_crash_left_open() {
+    let h = harness();
+    let crashed = interrupted_session("crashed-muted", 1_000_000);
+    block_on(h.sessions.create(&crashed)).unwrap();
+    h.media.on_disk.lock().unwrap().insert(
+        ("crashed-muted".to_owned(), TrackKind::System),
+        AudioFileInfo {
+            relative_path: "audio/system.wav".to_owned(),
+            sample_rate: 48_000,
+            channels: 1,
+            frames: 48_000 * 60,
+        },
+    );
+    block_on(
+        h.sessions
+            .open_track_mute(&crashed.id, TrackKind::Microphone, 20_000),
+    )
+    .unwrap();
+
+    block_on(h.service.recover_interrupted()).unwrap();
+
+    let mutes = block_on(h.sessions.list_track_mutes(&crashed.id)).unwrap();
+    assert_eq!(
+        mutes,
+        [TrackMute {
+            session_id: crashed.id.clone(),
+            kind: TrackKind::Microphone,
+            start_ms: 20_000,
+            end_ms: Some(60_000),
+        }]
+    );
+}
+
+#[test]
+fn a_mute_lifted_during_a_pause_stays_muted_with_a_warning_when_the_source_will_not_reopen() {
+    let h = harness();
+    let session = block_on(h.service.start(StartOptions::titled("pause + unmute"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+    h.service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    h.service.pause().unwrap();
+    h.service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+    assert_eq!(mute_status(&h), (false, false), "paused: looks unmuted");
+
+    // The microphone is gone by the time the recording resumes.
+    *h.audio.failing.lock().unwrap() = vec![TrackKind::Microphone];
+    h.service
+        .resume()
+        .expect("the system channel opened, so the recording resumes");
+    assert!(matches!(h.service.status(), RecordingStatus::Recording(_)));
+    assert_eq!(
+        mute_status(&h),
+        (true, false),
+        "the channel is not reported open while nothing is captured"
+    );
+    assert_eq!(h.audio.live_of(TrackKind::Microphone), 0);
+    assert_eq!(h.audio.live_of(TrackKind::System), 1);
+    assert_eq!(unmute_warnings(&h), 1);
+    assert_eq!(
+        mute_events(&h).last(),
+        Some(&(TrackKind::Microphone, true)),
+        "the correction is published"
+    );
+
+    // And it can be tried again once the device is back.
+    h.audio.failing.lock().unwrap().clear();
+    let status = h
+        .service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+    assert!(!status.microphone_muted);
+    assert_eq!(h.audio.live_of(TrackKind::Microphone), 1);
+
+    block_on(h.service.stop()).unwrap();
+    // Closed (zero length at the pause), then muted again from the resume until the retry.
+    let mutes = block_on(h.sessions.list_track_mutes(&session.id)).unwrap();
+    assert_eq!(mutes.len(), 2, "{mutes:?}");
+    assert!(mutes.iter().all(|m| m.end_ms.is_some()), "{mutes:?}");
+}
+
+#[test]
+fn a_mute_lifted_during_a_pause_that_cannot_reopen_does_not_fail_the_resume_when_all_else_is_muted()
+{
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("pause + unmute"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+    h.service.set_track_muted(TrackKind::System, true).unwrap();
+    h.service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    h.service.pause().unwrap();
+    h.service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+
+    *h.audio.failing.lock().unwrap() = vec![TrackKind::Microphone];
+    h.service.resume().expect("everything is muted again");
+    assert_eq!(mute_status(&h), (true, true));
+    assert_eq!(unmute_warnings(&h), 1);
+    block_on(h.service.stop()).unwrap();
+}
+
+#[test]
+fn a_failed_interval_closing_does_not_stretch_the_interval_over_the_next_mute() {
+    let h = harness();
+    let session = block_on(h.service.start(StartOptions::titled("close fails"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+
+    h.service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    h.sessions.fail_close.store(true, Ordering::SeqCst);
+    h.service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+    h.sessions.fail_close.store(false, Ordering::SeqCst);
+    assert_eq!(
+        mute_status(&h),
+        (false, false),
+        "unmuted despite the failure"
+    );
+
+    // The microphone records for a while, then is muted again, then unmuted.
+    feed_for(&both_sinks(&h), Duration::from_millis(300));
+    h.service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    h.service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+    block_on(h.service.stop()).unwrap();
+
+    let mutes = block_on(h.sessions.list_track_mutes(&session.id)).unwrap();
+    assert_eq!(mutes.len(), 2, "{mutes:?}");
+    let first_end = mutes[0].end_ms.expect("the first interval was closed");
+    assert!(
+        first_end < mutes[1].start_ms,
+        "the microphone recorded between the intervals: {mutes:?}"
+    );
+    assert!(mutes[1].end_ms.is_some(), "{mutes:?}");
+}
+
+#[test]
+fn quick_toggles_from_two_places_each_flip_the_state_they_find() {
+    let h = harness();
+    block_on(h.service.start(StartOptions::titled("toggles"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(50));
+
+    // Two presses racing (tray and shortcut): one ends muted, the other unmuted again, never
+    // two presses that both mean "mute".
+    std::thread::scope(|scope| {
+        for _ in 0..2 {
+            scope.spawn(|| {
+                h.service.toggle_track_muted(TrackKind::Microphone).unwrap();
+            });
+        }
+    });
+    assert_eq!(mute_status(&h), (false, false));
+    assert_eq!(
+        mute_events(&h),
+        [
+            (TrackKind::Microphone, true),
+            (TrackKind::Microphone, false)
+        ]
+    );
+
+    let status = h.service.toggle_track_muted(TrackKind::Microphone).unwrap();
+    assert!(status.microphone_muted);
+    block_on(h.service.stop()).unwrap();
+    match h.service.toggle_track_muted(TrackKind::Microphone) {
+        Err(RecordingError::NotRecording) => {}
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn a_failed_interval_closing_is_retried_at_the_stop_with_the_real_end() {
+    let h = harness();
+    let session = block_on(h.service.start(StartOptions::titled("close fails at stop"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+    h.service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    h.sessions.fail_close.store(true, Ordering::SeqCst);
+    h.service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+    h.sessions.fail_close.store(false, Ordering::SeqCst);
+
+    // The microphone records for a good while after the unmute, with no further mute.
+    feed_for(&both_sinks(&h), Duration::from_millis(500));
+    let summary = block_on(h.service.stop()).unwrap();
+
+    let mutes = block_on(h.sessions.list_track_mutes(&session.id)).unwrap();
+    assert_eq!(mutes.len(), 1, "{mutes:?}");
+    let end = mutes[0].end_ms.expect("closed at the stop");
+    let session_ms = summary.session.duration_ms().unwrap();
+    assert!(
+        end + 400 < session_ms,
+        "the interval ended at the unmute ({end} ms), not at the stop ({session_ms} ms)"
+    );
+}
+
+#[test]
+fn a_mute_is_refused_while_the_previous_interval_still_cannot_be_closed() {
+    let h = harness();
+    let session = block_on(h.service.start(StartOptions::titled("still failing"))).unwrap();
+    feed_for(&both_sinks(&h), Duration::from_millis(100));
+    h.service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    h.sessions.fail_close.store(true, Ordering::SeqCst);
+    h.service
+        .set_track_muted(TrackKind::Microphone, false)
+        .unwrap();
+
+    match h.service.set_track_muted(TrackKind::Microphone, true) {
+        Err(RecordingError::Storage(_)) => {}
+        other => panic!("unexpected result: {other:?}"),
+    }
+    assert_eq!(
+        mute_status(&h),
+        (false, false),
+        "the channel is left as it was"
+    );
+    assert_eq!(h.audio.live_of(TrackKind::Microphone), 1);
+
+    // Once the database works again the mute goes through, with no stale open row.
+    h.sessions.fail_close.store(false, Ordering::SeqCst);
+    h.service
+        .set_track_muted(TrackKind::Microphone, true)
+        .unwrap();
+    block_on(h.service.stop()).unwrap();
+    let mutes = block_on(h.sessions.list_track_mutes(&session.id)).unwrap();
+    assert_eq!(mutes.len(), 2, "{mutes:?}");
+    assert!(mutes.iter().all(|m| m.end_ms.is_some()), "{mutes:?}");
+    assert!(mutes[0].end_ms.unwrap() <= mutes[1].start_ms, "{mutes:?}");
 }

@@ -20,6 +20,8 @@ const active = {
   microphoneLevel: null,
   systemLevel: null,
   frameCount: 0,
+  microphoneMuted: false,
+  systemMuted: false,
 };
 
 describe('RecordingIndicator', () => {
@@ -52,6 +54,8 @@ describe('RecordingIndicator', () => {
         microphoneLevel: null,
         systemLevel: null,
         frameCount: 0,
+        microphoneMuted: false,
+        systemMuted: false,
       });
     });
     expect(link).toHaveTextContent('01:01');

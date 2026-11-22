@@ -21,6 +21,7 @@ use tan_application::{RepositoryError, RepositoryResult};
 use tan_domain::{
     AppSettings, AudioTrack, EpochMs, LanguageCode, LanguageSetting, ProcessingJob, ProcessingStep,
     Session, SessionId, SessionKind, SessionRecord, SessionStatus, SettingsPatch, TrackKind,
+    TrackMute,
 };
 
 const DAY_MS: i64 = 86_400_000;
@@ -92,6 +93,28 @@ impl SessionRepository for World {
             .filter(|t| &t.session_id == session_id)
             .cloned()
             .collect())
+    }
+
+    async fn open_track_mute(
+        &self,
+        _session_id: &SessionId,
+        _kind: TrackKind,
+        _start_ms: u64,
+    ) -> RepositoryResult<()> {
+        Err(RepositoryError::Invalid("not used".to_owned()))
+    }
+
+    async fn close_track_mute(
+        &self,
+        _session_id: &SessionId,
+        _kind: TrackKind,
+        _end_ms: u64,
+    ) -> RepositoryResult<()> {
+        Err(RepositoryError::Invalid("not used".to_owned()))
+    }
+
+    async fn list_track_mutes(&self, _session_id: &SessionId) -> RepositoryResult<Vec<TrackMute>> {
+        Ok(Vec::new())
     }
 }
 

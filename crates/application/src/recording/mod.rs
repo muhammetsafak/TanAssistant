@@ -7,6 +7,10 @@
 //! recording started, so a frame timestamp and a transcript offset mean the same thing.
 //! Paused time is not part of that timeline: the clock stops while paused, the audio continues
 //! where the pause began and the session length is the active time only.
+//!
+//! A single channel can also be muted (ADR-014): its stream is closed, so the OS microphone
+//! indicator goes off, and its file holds silence for the span while the other channel and
+//! the clock go on. Unlike a pause, a mute does not take the span out of the timeline.
 
 pub mod frame_selector;
 mod service;
@@ -79,6 +83,10 @@ pub struct ActiveRecordingStatus {
     pub system_level: f32,
     /// Frames stored so far.
     pub frame_count: u32,
+    /// Whether the microphone is muted (its stream is closed and silence is recorded).
+    pub microphone_muted: bool,
+    /// Whether the system audio is muted.
+    pub system_muted: bool,
 }
 
 /// Whether a recording is running.
@@ -112,6 +120,9 @@ pub struct RecordingProgress {
 pub enum RecordingWarningCode {
     /// An audio track had repeated short dropouts (see [`DROPOUT_WARN_COUNT`]).
     AudioDropouts,
+    /// A muted track could not be unmuted because its source would not open again; it stays
+    /// muted.
+    TrackUnmuteFailed,
     /// Anything else; only the English message describes it.
     Other,
 }
@@ -147,6 +158,16 @@ impl RecordingWarning {
             message: format!("{track} audio had short dropouts; recording continues"),
         }
     }
+
+    /// `track` could not be unmuted ([`RecordingWarningCode::TrackUnmuteFailed`]).
+    #[must_use]
+    pub fn track_unmute_failed(track: TrackKind, reason: &CaptureError) -> Self {
+        Self {
+            code: RecordingWarningCode::TrackUnmuteFailed,
+            track: Some(track),
+            message: format!("{track} audio could not be unmuted and stays muted: {reason}"),
+        }
+    }
 }
 
 /// Something that happened to a recording.
@@ -172,6 +193,15 @@ pub enum RecordingEvent {
     Resumed {
         /// The resumed session.
         session_id: SessionId,
+    },
+    /// A track was muted or unmuted (also when a paused recording changes it).
+    TrackMuteChanged {
+        /// The session being recorded.
+        session_id: SessionId,
+        /// The channel.
+        kind: TrackKind,
+        /// Whether it is muted now.
+        muted: bool,
     },
     /// A source had a problem but recording continues (a stream failed to start, repeated
     /// dropouts, a write error...).

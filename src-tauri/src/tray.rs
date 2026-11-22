@@ -1,6 +1,8 @@
 //! The system tray icon: shows whether a recording is running or paused and offers
-//! start/stop and pause/resume, so a recording can be controlled (and survives) without the
-//! main window.
+//! start/stop, pause/resume and the microphone mute, so a recording can be controlled (and
+//! survives) without the main window.
+
+use std::sync::{Mutex, PoisonError};
 
 use tan_domain::UiLanguage;
 use tauri::image::Image;
@@ -13,6 +15,7 @@ use crate::commands::recording;
 const TRAY_ID: &str = "tan-tray";
 const MENU_TOGGLE: &str = "toggle-recording";
 const MENU_PAUSE: &str = "pause-recording";
+const MENU_MUTE: &str = "mute-microphone";
 const MENU_SHOW: &str = "show-window";
 const MENU_QUIT: &str = "quit";
 /// Label of the main window (`tauri.conf.json`).
@@ -49,11 +52,15 @@ struct TrayText {
     stop: &'static str,
     pause: &'static str,
     resume: &'static str,
+    mute: &'static str,
+    unmute: &'static str,
     show: &'static str,
     quit: &'static str,
     idle_tooltip: &'static str,
     recording_tooltip: &'static str,
     paused_tooltip: &'static str,
+    recording_muted_tooltip: &'static str,
+    paused_muted_tooltip: &'static str,
 }
 
 /// What the tray shows.
@@ -74,22 +81,30 @@ fn text_for(language: UiLanguage) -> TrayText {
             stop: "Kaydı durdur",
             pause: "Duraklat",
             resume: "Devam et",
+            mute: "Mikrofonu kapat",
+            unmute: "Mikrofonu aç",
             show: "Pencereyi göster",
             quit: "Çık",
             idle_tooltip: "Tan",
             recording_tooltip: "Tan: kayıt sürüyor",
             paused_tooltip: "Tan: kayıt duraklatıldı",
+            recording_muted_tooltip: "Tan: kayıt sürüyor, mikrofon kapalı",
+            paused_muted_tooltip: "Tan: kayıt duraklatıldı, mikrofon kapalı",
         },
         UiLanguage::En => TrayText {
             start: "Start recording",
             stop: "Stop recording",
             pause: "Pause",
             resume: "Resume",
+            mute: "Mute microphone",
+            unmute: "Unmute microphone",
             show: "Show window",
             quit: "Quit",
             idle_tooltip: "Tan",
             recording_tooltip: "Tan: recording",
             paused_tooltip: "Tan: recording paused",
+            recording_muted_tooltip: "Tan: recording, microphone muted",
+            paused_muted_tooltip: "Tan: recording paused, microphone muted",
         },
     }
 }
@@ -101,11 +116,20 @@ struct TrayImage {
     template: bool,
 }
 
+/// What the tray currently shows: the recording state and whether the microphone is muted.
+#[derive(Debug, Clone, Copy)]
+struct TrayView {
+    state: TrayState,
+    microphone_muted: bool,
+}
+
 /// What the tray needs to flip between its states. Managed by Tauri.
 pub struct TrayHandles {
     tray: TrayIcon<Wry>,
     toggle: MenuItem<Wry>,
     pause: MenuItem<Wry>,
+    mute: MenuItem<Wry>,
+    view: Mutex<TrayView>,
     text: TrayText,
     idle_icon: TrayImage,
     recording_icon: TrayImage,
@@ -118,10 +142,11 @@ pub fn init(app: &AppHandle, language: UiLanguage) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, MENU_TOGGLE, text.start, true, None::<&str>)?;
     // Only meaningful while a recording exists.
     let pause = MenuItem::with_id(app, MENU_PAUSE, text.pause, false, None::<&str>)?;
+    let mute = MenuItem::with_id(app, MENU_MUTE, text.mute, false, None::<&str>)?;
     let show = MenuItem::with_id(app, MENU_SHOW, text.show, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, text.quit, true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&toggle, &pause, &show, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&toggle, &pause, &mute, &show, &separator, &quit])?;
 
     let idle_icon = TrayImage {
         image: idle_image(),
@@ -159,6 +184,11 @@ pub fn init(app: &AppHandle, language: UiLanguage) -> tauri::Result<()> {
         tray,
         toggle,
         pause,
+        mute,
+        view: Mutex::new(TrayView {
+            state: TrayState::Idle,
+            microphone_muted: false,
+        }),
         text,
         idle_icon,
         recording_icon,
@@ -169,36 +199,86 @@ pub fn init(app: &AppHandle, language: UiLanguage) -> tauri::Result<()> {
 
 /// Switches the tray between "idle", "recording" and "paused" (icon, tooltip, menu
 /// labels). A missing tray (failed to build) is not an error: recording does not depend on it.
+/// Going idle forgets the microphone mute: the next recording starts unmuted.
 pub fn set_state(app: &AppHandle, state: TrayState) {
     let Some(handles) = app.try_state::<TrayHandles>() else {
         return;
     };
+    let view = {
+        let mut view = handles.view.lock().unwrap_or_else(PoisonError::into_inner);
+        view.state = state;
+        if state == TrayState::Idle {
+            view.microphone_muted = false;
+        }
+        *view
+    };
+    apply(&handles, view);
+}
+
+/// Shows whether the microphone is muted (menu label and tooltip). Ignored without a tray.
+pub fn set_microphone_muted(app: &AppHandle, muted: bool) {
+    let Some(handles) = app.try_state::<TrayHandles>() else {
+        return;
+    };
+    let view = {
+        let mut view = handles.view.lock().unwrap_or_else(PoisonError::into_inner);
+        view.microphone_muted = muted;
+        *view
+    };
+    apply(&handles, view);
+}
+
+/// Pushes `view` to the icon, the tooltip and the menu.
+fn apply(handles: &TrayHandles, view: TrayView) {
     let text = &handles.text;
-    let (icon, tooltip, label, pause_label) = match state {
-        TrayState::Idle => (
+    let (icon, tooltip, label, pause_label) = match (view.state, view.microphone_muted) {
+        (TrayState::Idle, _) => (
             &handles.idle_icon,
             text.idle_tooltip,
             text.start,
             text.pause,
         ),
-        TrayState::Recording => (
+        (TrayState::Recording, false) => (
             &handles.recording_icon,
             text.recording_tooltip,
             text.stop,
             text.pause,
         ),
-        TrayState::Paused => (
+        (TrayState::Recording, true) => (
+            &handles.recording_icon,
+            text.recording_muted_tooltip,
+            text.stop,
+            text.pause,
+        ),
+        (TrayState::Paused, false) => (
             &handles.paused_icon,
             text.paused_tooltip,
             text.stop,
             text.resume,
         ),
+        (TrayState::Paused, true) => (
+            &handles.paused_icon,
+            text.paused_muted_tooltip,
+            text.stop,
+            text.resume,
+        ),
+    };
+    let mute_label = if view.microphone_muted {
+        text.unmute
+    } else {
+        text.mute
     };
     if let Err(error) = handles.pause.set_text(pause_label) {
         tracing::debug!(%error, "cannot update the tray pause label");
     }
-    if let Err(error) = handles.pause.set_enabled(state != TrayState::Idle) {
+    if let Err(error) = handles.pause.set_enabled(view.state != TrayState::Idle) {
         tracing::debug!(%error, "cannot update the tray pause item");
+    }
+    if let Err(error) = handles.mute.set_text(mute_label) {
+        tracing::debug!(%error, "cannot update the tray mute label");
+    }
+    if let Err(error) = handles.mute.set_enabled(view.state != TrayState::Idle) {
+        tracing::debug!(%error, "cannot update the tray mute item");
     }
     // Sets the image and its template flag together, so macOS does not flicker in between.
     if let Err(error) = handles
@@ -249,6 +329,14 @@ fn on_menu_event(app: &AppHandle, event: &MenuEvent) {
                     recording::pause_current(&app).await
                 };
                 if let Err(error) = result {
+                    tracing::error!(code = ?error.code, "{}", error.message);
+                }
+            });
+        }
+        MENU_MUTE => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = recording::toggle_microphone_mute(&app).await {
                     tracing::error!(code = ?error.code, "{}", error.message);
                 }
             });

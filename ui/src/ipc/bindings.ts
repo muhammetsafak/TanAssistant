@@ -67,6 +67,16 @@ export const commands = {
 	pauseRecording: () => typedError<RecordingStatusDto_Serialize, RecordingIpcError>(__TAURI_INVOKE("pause_recording")),
 	/**  Resumes a paused recording; it continues where the pause began. */
 	resumeRecording: () => typedError<RecordingStatusDto_Serialize, RecordingIpcError>(__TAURI_INVOKE("resume_recording")),
+	/**
+	 *  Mutes or unmutes one audio channel of the running (or paused) recording. A muted channel's
+	 *  OS stream is closed (the microphone indicator goes off) and silence is recorded for the
+	 *  span; the other channel and the screen keep going and the timeline is not squeezed. While
+	 *  paused the state is remembered and applied at resume.
+	 * 
+	 *  A channel that cannot be opened again stays muted: the returned status says so and a
+	 *  `track_unmute_failed` warning event is published.
+	 */
+	setTrackMuted: (track: string, muted: boolean) => typedError<RecordingStatusDto_Serialize, RecordingIpcError>(__TAURI_INVOKE("set_track_muted", { track, muted })),
 	/**  Whether a recording is running, with its live numbers. */
 	recordingStatus: () => typedError<RecordingStatusDto_Serialize, RecordingIpcError>(__TAURI_INVOKE("recording_status")),
 	/**  What the platform can record (screen capture availability and why not). */
@@ -210,6 +220,7 @@ export const events = {
 	processingProgressEvent: makeEvent<ProcessingProgressEvent, ProcessingProgressEvent>("processing-progress-event"),
 	recordingProgressEvent: makeEvent<RecordingProgressEvent, RecordingProgressEvent>("recording-progress-event"),
 	recordingStateEvent: makeEvent<RecordingStateEvent, RecordingStateEvent>("recording-state-event"),
+	recordingTrackMuteEvent: makeEvent<RecordingTrackMuteEvent, RecordingTrackMuteEvent>("recording-track-mute-event"),
 	recordingWarningEvent: makeEvent<RecordingWarningEvent_Serialize, RecordingWarningEvent_Deserialize>("recording-warning-event"),
 	transcriptionProgressEvent: makeEvent<TranscriptionProgressEvent_Serialize, TranscriptionProgressEvent_Deserialize>("transcription-progress-event"),
 	updateDownloadProgress: makeEvent<UpdateDownloadProgress_Serialize, UpdateDownloadProgress_Deserialize>("update-download-progress"),
@@ -264,6 +275,10 @@ export type ActiveRecordingDto = {
 	systemLevel: number | null,
 	/**  Frames stored so far. */
 	frameCount: number,
+	/**  Whether the microphone is muted: its stream is closed and silence is recorded. */
+	microphoneMuted: boolean,
+	/**  Whether the system audio is muted. */
+	systemMuted: boolean,
 };
 
 /**  Machine-readable failure class of the AI commands. */
@@ -1162,10 +1177,25 @@ export type RecordingSummaryDto_Serialize = {
 	warnings: RecordingWarningDto_Serialize[],
 };
 
+/**
+ *  Emitted when a channel is muted or unmuted, whoever caused it (the window, the tray or
+ *  the global shortcut). The UI keeps its mute buttons in step with it.
+ */
+export type RecordingTrackMuteEvent = {
+	/**  The session being recorded. */
+	sessionId: string,
+	/**  `microphone` or `system`. */
+	track: string,
+	/**  Whether the channel is muted now. */
+	muted: boolean,
+};
+
 /**  What kind of problem a recording warning reports, so the UI can show its own wording. */
 export type RecordingWarningCodeDto = 
 /**  An audio track had repeated short dropouts. */
 "audio_dropouts" | 
+/**  A muted track could not be unmuted (its source would not open again) and stays muted. */
+"track_unmute_failed" | 
 /**  Anything else; only the English message describes it. */
 "other";
 
@@ -1317,6 +1347,8 @@ export type SessionDetailDto_Deserialize = {
 	sessionDir: string,
 	/**  Its audio tracks. */
 	audioTracks: AudioTrackDto_Deserialize[],
+	/**  The spans during which a channel was muted, oldest first. */
+	trackMutes: TrackMuteDto_Deserialize[],
 	/**  Its frames in time order. */
 	frames: FrameDto_Deserialize[],
 	/**  The transcript in time order. */
@@ -1335,6 +1367,8 @@ export type SessionDetailDto_Serialize = {
 	sessionDir: string,
 	/**  Its audio tracks. */
 	audioTracks: AudioTrackDto_Serialize[],
+	/**  The spans during which a channel was muted, oldest first. */
+	trackMutes: TrackMuteDto_Serialize[],
 	/**  Its frames in time order. */
 	frames: FrameDto_Serialize[],
 	/**  The transcript in time order. */
@@ -1723,6 +1757,41 @@ export type TaskKindDto =
 "vision" | 
 /**  Note/summary generation. */
 "summary";
+
+/**  A span of the recording during which one channel was muted: its file holds silence there. */
+export type TrackMuteDto = TrackMuteDto_Serialize | TrackMuteDto_Deserialize;
+
+/**  A span of the recording during which one channel was muted: its file holds silence there. */
+export type TrackMuteDto_Deserialize = {
+	/**  `microphone` or `system`. */
+	track: string,
+	/**
+	 *  Start, in milliseconds from the recording start (paused time is not counted, like
+	 *  every other timestamp of the session).
+	 */
+	startMs: number,
+	/**
+	 *  End; `null` while the channel is still muted (a session a crash interrupted is
+	 *  closed at startup, so a finished session has none).
+	 */
+	endMs?: number | null,
+};
+
+/**  A span of the recording during which one channel was muted: its file holds silence there. */
+export type TrackMuteDto_Serialize = {
+	/**  `microphone` or `system`. */
+	track: string,
+	/**
+	 *  Start, in milliseconds from the recording start (paused time is not counted, like
+	 *  every other timestamp of the session).
+	 */
+	startMs: number,
+	/**
+	 *  End; `null` while the channel is still muted (a session a crash interrupted is
+	 *  closed at startup, so a finished session has none).
+	 */
+	endMs: number | null,
+};
 
 /**  One audio track of a finished recording. */
 export type TrackSummaryDto = {

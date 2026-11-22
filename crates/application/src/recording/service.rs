@@ -18,6 +18,14 @@
 //! continues where the pause began, frame timestamps stay monotonic on the same axis and the
 //! session length counts only active time.
 //!
+//! Muting one channel ([`RecordingService::set_track_muted`]) closes only that channel's
+//! stream, again so the OS indicator goes off. The clock keeps running and the file is padded
+//! with silence for the span, exactly like a gap in delivery: the track worker aligns the
+//! first block after the stream reopens to its real start. The spans are stored in the
+//! database as they open and close, so a crash leaves at most one open span per channel.
+//! A pause takes precedence: the sources of a paused recording stay closed and a muted one
+//! is not opened again at resume.
+//!
 //! Crash safety: audio files are checkpointed every few seconds
 //! ([`CHECKPOINT_INTERVAL`]), frame rows are inserted as they are kept, and the session
 //! stays `Recording` in the database until `stop`. [`RecordingService::recover_interrupted`]
@@ -322,6 +330,21 @@ impl WarningLog {
         });
     }
 
+    /// Like [`Self::push_warning`], but the event is published every time: for a problem the
+    /// user can retry and must hear about again.
+    fn raise(&self, warning: RecordingWarning) {
+        {
+            let mut items = lock(&self.items);
+            if items.len() < MAX_WARNINGS && !items.contains(&warning) {
+                items.push(warning.clone());
+            }
+        }
+        self.events.publish(RecordingEvent::Warning {
+            session_id: self.session_id.clone(),
+            warning,
+        });
+    }
+
     fn snapshot(&self) -> Vec<RecordingWarning> {
         lock(&self.items).clone()
     }
@@ -391,6 +414,31 @@ impl DropoutWindow {
     }
 }
 
+/// Which channels are muted right now. Read by the capture callbacks (a block still in flight
+/// when a stream is closed belongs to the mute) and by `status`.
+#[derive(Default)]
+struct Mutes {
+    microphone: AtomicBool,
+    system: AtomicBool,
+}
+
+impl Mutes {
+    fn flag(&self, kind: TrackKind) -> &AtomicBool {
+        match kind {
+            TrackKind::Microphone => &self.microphone,
+            TrackKind::System => &self.system,
+        }
+    }
+
+    fn is_muted(&self, kind: TrackKind) -> bool {
+        self.flag(kind).load(Ordering::Acquire)
+    }
+
+    fn set(&self, kind: TrackKind, muted: bool) {
+        self.flag(kind).store(muted, Ordering::Release);
+    }
+}
+
 #[derive(Default)]
 struct TrackShared {
     meter: LevelMeter,
@@ -416,8 +464,8 @@ fn load_level(bits: &AtomicU32) -> f32 {
 
 enum TrackMessage {
     Chunk(PcmChunk),
-    /// The recording was paused at `offset` (active time): pad the file up to it, make it
-    /// durable and align the next block exactly.
+    /// The recording was paused (or this track muted) at `offset` (active time): pad the file
+    /// up to it, make it durable and align the next block exactly.
     Pause {
         offset: Duration,
     },
@@ -433,12 +481,14 @@ struct TrackSink {
     shared: Arc<TrackShared>,
     warnings: Arc<WarningLog>,
     ledger: Arc<PauseLedger>,
+    mutes: Arc<Mutes>,
 }
 
 impl AudioSink for TrackSink {
     fn on_chunk(&self, chunk: PcmChunk) {
-        // A block still in flight when the stream was stopped belongs to the pause.
-        if self.ledger.is_paused() {
+        // A block still in flight when the stream was stopped belongs to the pause (or the
+        // mute).
+        if self.ledger.is_paused() || self.mutes.is_muted(self.kind) {
             return;
         }
         match self.queue.try_send(TrackMessage::Chunk(chunk)) {
@@ -463,8 +513,8 @@ impl AudioSink for TrackSink {
 impl TrackSink {
     /// Counts a dropout seen at `at` and raises the burst warning when it is due.
     fn note_dropout(&self, at: Instant) {
-        // A dropout reported while paused belongs to the stream being torn down.
-        if self.ledger.is_paused() {
+        // A dropout reported while paused or muted belongs to the stream being torn down.
+        if self.ledger.is_paused() || self.mutes.is_muted(self.kind) {
             return;
         }
         self.shared.dropouts.fetch_add(1, Ordering::Relaxed);
@@ -798,6 +848,13 @@ struct ActiveRecording {
     ticker: (mpsc::Sender<()>, Option<JoinHandle<()>>),
     levels: Arc<Levels>,
     warnings: Arc<WarningLog>,
+    mutes: Arc<Mutes>,
+    /// Channels unmuted while paused: their sources open at resume, and one that will not
+    /// open is muted again there (with a warning) instead of looking open.
+    unmuted_while_paused: Vec<TrackKind>,
+    /// Mute intervals whose closing failed, with the instant they ended: retried before the
+    /// next interval of that channel opens, so a failed write cannot stretch the interval.
+    unclosed_mutes: Vec<(TrackKind, u64)>,
 }
 
 /// The levels the ticker last measured, readable without waiting for the next event.
@@ -829,6 +886,7 @@ struct StatusView {
     ledger: Arc<PauseLedger>,
     levels: Arc<Levels>,
     frame_shared: Arc<FrameShared>,
+    mutes: Arc<Mutes>,
 }
 
 impl StatusView {
@@ -840,6 +898,7 @@ impl StatusView {
             ledger: active.ledger.clone(),
             levels: active.levels.clone(),
             frame_shared: active.frame_shared.clone(),
+            mutes: active.mutes.clone(),
         }
     }
 
@@ -852,6 +911,8 @@ impl StatusView {
             microphone_level: load_level(&self.levels.microphone),
             system_level: load_level(&self.levels.system),
             frame_count: self.frame_shared.kept.load(Ordering::Relaxed),
+            microphone_muted: self.mutes.is_muted(TrackKind::Microphone),
+            system_muted: self.mutes.is_muted(TrackKind::System),
         }
     }
 }
@@ -1049,13 +1110,14 @@ where
             items: Mutex::default(),
         });
 
+        let mutes = Arc::new(Mutes::default());
         let mut tracks = Vec::new();
         let mut first_error: Option<CaptureError> = None;
         for (kind, device_id) in [
             (TrackKind::Microphone, microphone_device_id),
             (TrackKind::System, None),
         ] {
-            match self.start_track(&session.id, kind, device_id, &ledger, &warnings) {
+            match self.start_track(&session.id, kind, device_id, &ledger, &warnings, &mutes) {
                 Ok(track) => tracks.push(track),
                 Err(error) => {
                     warnings.push(format!("{kind} audio could not start: {error}"));
@@ -1092,6 +1154,9 @@ where
             ticker,
             levels,
             warnings,
+            mutes,
+            unmuted_while_paused: Vec::new(),
+            unclosed_mutes: Vec::new(),
         })
     }
 
@@ -1102,6 +1167,7 @@ where
         device_id: Option<String>,
         ledger: &Arc<PauseLedger>,
         warnings: &Arc<WarningLog>,
+        mutes: &Arc<Mutes>,
     ) -> Result<TrackHandle, CaptureError> {
         let shared = Arc::new(TrackShared {
             dropout_window: Mutex::new(DropoutWindow::new(self.dropout_policy)),
@@ -1114,6 +1180,7 @@ where
             shared: shared.clone(),
             warnings: warnings.clone(),
             ledger: ledger.clone(),
+            mutes: mutes.clone(),
         });
         let stream = self.audio.start(
             &AudioStreamRequest {
@@ -1374,11 +1441,17 @@ where
         Ok(status)
     }
 
-    /// Opens the audio streams of a paused recording again. Fails when none could be opened.
+    /// Opens the audio streams of a paused recording again, except the muted ones. Fails when
+    /// at least one source failed and none could be opened.
     fn reopen_audio(&self, active: &mut ActiveRecording) -> Result<(), RecordingError> {
         let mut first_error: Option<CaptureError> = None;
         let mut reopened = 0_usize;
+        let unmuted_while_paused = std::mem::take(&mut active.unmuted_while_paused);
         for track in &mut active.tracks {
+            // A muted source stays closed: the mute outlasts the pause.
+            if active.mutes.is_muted(track.kind) {
+                continue;
+            }
             let request = AudioStreamRequest {
                 source: track.kind,
                 device_id: track.device_id.clone(),
@@ -1388,6 +1461,30 @@ where
                     track.stream = Some(stream);
                     reopened += 1;
                 }
+                Err(error) if unmuted_while_paused.contains(&track.kind) => {
+                    // The user asked for this channel to be open: it stays muted, and says
+                    // so, rather than looking open while nothing is captured.
+                    let kind = track.kind;
+                    active.mutes.set(kind, true);
+                    let start = duration_ms(active.ledger.active_offset(Instant::now()));
+                    if let Err(store_error) = block_on(self.sessions.open_track_mute(
+                        &active.session.id,
+                        kind,
+                        start,
+                    )) {
+                        active.warnings.push(format!(
+                            "the {kind} mute interval could not be stored: {store_error}"
+                        ));
+                    }
+                    active
+                        .warnings
+                        .raise(RecordingWarning::track_unmute_failed(kind, &error));
+                    self.events.publish(RecordingEvent::TrackMuteChanged {
+                        session_id: active.session.id.clone(),
+                        kind,
+                        muted: true,
+                    });
+                }
                 Err(error) => {
                     active
                         .warnings
@@ -1396,10 +1493,12 @@ where
                 }
             }
         }
+        // Nothing opened and nothing failed means every source is muted: the recording goes
+        // on and writes silence.
         if reopened == 0 {
-            return Err(RecordingError::Capture(first_error.unwrap_or_else(|| {
-                CaptureError::failed("no audio source is available")
-            })));
+            if let Some(error) = first_error {
+                return Err(RecordingError::Capture(error));
+            }
         }
         Ok(())
     }
@@ -1414,6 +1513,183 @@ where
                     .push(format!("the screen could not resume: {error}")),
             }
         }
+    }
+
+    /// Mutes or unmutes one audio channel of the running (or paused) recording (ADR-014).
+    ///
+    /// Muting closes the channel's stream (the OS microphone indicator goes off), pads the
+    /// file with silence up to that instant and stores the start of the muted span. The
+    /// other channel, the screen and the clock go on, and the muted span stays on the
+    /// timeline as silence (unlike a pause, which removes its span). Unmuting opens the
+    /// stream again onto the same queue and worker and closes the stored span. The state can
+    /// be changed while paused: the channels stay closed, and at resume a muted one is not
+    /// opened.
+    ///
+    /// Returns the status afterwards. A source that cannot be opened again leaves the channel
+    /// muted: that is a [`RecordingWarningCode::TrackUnmuteFailed`] warning (published on
+    /// every attempt), not an error, and the returned status says it is still muted. Setting
+    /// the state a channel is already in changes nothing. Fails with
+    /// [`RecordingError::NotRecording`] when there is no recording, with
+    /// [`RecordingError::Invalid`] for a channel that is not being recorded (its source never
+    /// started) and with [`RecordingError::Storage`] when the span cannot be stored (the
+    /// channel is then left as it was).
+    ///
+    /// Blocks the calling thread while the stream closes or opens, but not the state: like
+    /// [`Self::pause`], `status` answers meanwhile and calls queue up behind each other.
+    ///
+    /// [`RecordingWarningCode::TrackUnmuteFailed`]: super::RecordingWarningCode::TrackUnmuteFailed
+    pub fn set_track_muted(
+        &self,
+        kind: TrackKind,
+        muted: bool,
+    ) -> Result<ActiveRecordingStatus, RecordingError> {
+        self.change_track_mute(kind, Some(muted))
+    }
+
+    /// Flips the mute of one audio channel: [`Self::set_track_muted`] with the opposite of the
+    /// state the channel has when the call gets its turn. The state is read under the same
+    /// lock as the change, so two quick toggles (tray and shortcut) always end where the user
+    /// expects instead of both reading the old state.
+    pub fn toggle_track_muted(
+        &self,
+        kind: TrackKind,
+    ) -> Result<ActiveRecordingStatus, RecordingError> {
+        self.change_track_mute(kind, None)
+    }
+
+    /// `muted` of `None` means "the opposite of now".
+    fn change_track_mute(
+        &self,
+        kind: TrackKind,
+        muted: Option<bool>,
+    ) -> Result<ActiveRecordingStatus, RecordingError> {
+        let _transition = lock(&self.transition);
+        let (mut active, paused) = {
+            let mut state = lock(&self.state);
+            match std::mem::replace(&mut *state, State::Idle) {
+                State::Recording(active) => {
+                    *state = State::Switching(StatusView::of(&active));
+                    (active, false)
+                }
+                State::Paused(active) => {
+                    *state = State::Switching(StatusView::of(&active));
+                    (active, true)
+                }
+                other => {
+                    *state = other;
+                    return Err(RecordingError::NotRecording);
+                }
+            }
+        };
+
+        let muted = muted.unwrap_or_else(|| !active.mutes.is_muted(kind));
+        let result = self.apply_mute(&mut active, kind, muted);
+
+        let status = StatusView::of(&active).status();
+        let event = match result {
+            Ok(true) => Some(RecordingEvent::TrackMuteChanged {
+                session_id: active.session.id.clone(),
+                kind,
+                muted,
+            }),
+            Ok(false) | Err(_) => None,
+        };
+        *lock(&self.state) = if paused {
+            State::Paused(active)
+        } else {
+            State::Recording(active)
+        };
+        if let Some(event) = event {
+            self.events.publish(event);
+        }
+        result.map(|_| status)
+    }
+
+    /// Does the work of [`Self::set_track_muted`] on a recording taken out of the state.
+    /// Returns whether the channel's state changed.
+    fn apply_mute(
+        &self,
+        active: &mut ActiveRecording,
+        kind: TrackKind,
+        muted: bool,
+    ) -> Result<bool, RecordingError> {
+        let Some(index) = active.tracks.iter().position(|t| t.kind == kind) else {
+            return Err(RecordingError::Invalid(format!(
+                "the {kind} audio is not being recorded"
+            )));
+        };
+        if active.mutes.is_muted(kind) == muted {
+            return Ok(false);
+        }
+        let session_id = active.session.id.clone();
+        let at = Instant::now();
+        let offset = active.ledger.active_offset(at);
+
+        if muted {
+            // An earlier interval of this channel whose closing failed ends where it ended,
+            // not where this one starts.
+            if let Some(position) = active.unclosed_mutes.iter().position(|(k, _)| *k == kind) {
+                let (_, ended) = active.unclosed_mutes[position];
+                // Still failing: opening another interval would leave two open ones that
+                // close together later, so the mute is refused and the channel stays as it is.
+                block_on(self.sessions.close_track_mute(&session_id, kind, ended))?;
+                active.unclosed_mutes.remove(position);
+            }
+            active.unmuted_while_paused.retain(|k| *k != kind);
+            // The stored span first: a failure leaves the recording as it was.
+            block_on(
+                self.sessions
+                    .open_track_mute(&session_id, kind, duration_ms(offset)),
+            )?;
+            // From here on the capture callback drops what is still in flight.
+            active.mutes.set(kind, true);
+            let track = &mut active.tracks[index];
+            if let Some(stream) = track.stream.take() {
+                stream.stop();
+                // Pad the file up to the instant and align the next block exactly.
+                let _ = track.queue.send(TrackMessage::Pause { offset });
+            }
+            return Ok(true);
+        }
+
+        // Unmute. While paused the source opens at resume; otherwise it opens now. The flag
+        // goes first: the stream delivers as soon as it runs.
+        active.mutes.set(kind, false);
+        if active.ledger.is_paused() {
+            if !active.unmuted_while_paused.contains(&kind) {
+                active.unmuted_while_paused.push(kind);
+            }
+        } else {
+            let track = &mut active.tracks[index];
+            let request = AudioStreamRequest {
+                source: kind,
+                device_id: track.device_id.clone(),
+            };
+            match self.audio.start(&request, track.sink.clone()) {
+                Ok(stream) => track.stream = Some(stream),
+                Err(error) => {
+                    active.mutes.set(kind, true);
+                    active
+                        .warnings
+                        .raise(RecordingWarning::track_unmute_failed(kind, &error));
+                    return Ok(false);
+                }
+            }
+        }
+        let end = active.ledger.active_offset(Instant::now());
+        if let Err(error) = block_on(self.sessions.close_track_mute(
+            &session_id,
+            kind,
+            duration_ms(end),
+        )) {
+            // The channel is unmuted either way; the closing is retried before the next
+            // mute of this channel, and at the latest when the recording stops.
+            active.unclosed_mutes.push((kind, duration_ms(end)));
+            active.warnings.push(format!(
+                "the {kind} mute interval could not be closed: {error}"
+            ));
+        }
+        Ok(true)
     }
 
     /// Stops the running (or paused) recording and settles its session (`Recorded`, or
@@ -1477,6 +1753,9 @@ where
             ticker,
             levels: _,
             warnings,
+            mutes: _,
+            unmuted_while_paused: _,
+            unclosed_mutes,
         } = active;
 
         // One stop instant for every stream; tracks are padded up to it. It is active time:
@@ -1505,6 +1784,31 @@ where
         }
 
         let (summaries, stored) = finish_tracks(tracks, stop_offset, &session.id, &warnings);
+
+        // Intervals whose closing failed earlier ended when the channel was unmuted, not now.
+        for (kind, ended) in unclosed_mutes {
+            if let Err(error) = self
+                .sessions
+                .close_track_mute(&session.id, kind, ended)
+                .await
+            {
+                warnings.push(format!(
+                    "the {kind} mute interval could not be closed: {error}"
+                ));
+            }
+        }
+        // A channel still muted at the end was muted until the end.
+        for &kind in TrackKind::ALL {
+            if let Err(error) = self
+                .sessions
+                .close_track_mute(&session.id, kind, duration_ms(stop_offset))
+                .await
+            {
+                warnings.push(format!(
+                    "the {kind} mute interval could not be closed: {error}"
+                ));
+            }
+        }
 
         for track in &stored {
             self.sessions.save_audio_track(track).await?;
@@ -1586,6 +1890,12 @@ where
 
             for track in &tracks {
                 self.sessions.save_audio_track(track).await?;
+            }
+            // A mute the crash left open lasted until the end of what survived.
+            for &kind in TrackKind::ALL {
+                self.sessions
+                    .close_track_mute(&session.id, kind, length_ms)
+                    .await?;
             }
             let transition = if tracks.is_empty() && frames.is_empty() {
                 session.mark_failed(session.started_at)
@@ -1870,6 +2180,7 @@ mod tests {
             shared: Arc::new(TrackShared::default()),
             warnings: warnings.clone(),
             ledger: ledger.clone(),
+            mutes: Arc::new(Mutes::default()),
         };
         (sink, warnings, ledger)
     }
@@ -1904,6 +2215,42 @@ mod tests {
         }
         assert_eq!(sink.shared.dropouts.load(Ordering::Relaxed), 0);
         assert_eq!(warnings.snapshot().len(), 0);
+    }
+
+    #[test]
+    fn a_muted_sink_drops_what_is_still_in_flight_and_ignores_dropouts() {
+        let (sink, warnings, _) = sink_with_events(TrackKind::Microphone);
+        let (queue, receiver) = mpsc::sync_channel(4);
+        let sink = TrackSink { queue, ..sink };
+        let block = || PcmChunk {
+            format: AudioFormat {
+                sample_rate: 48_000,
+                channels: 1,
+            },
+            captured_at: Instant::now(),
+            samples: vec![0.5; 480],
+        };
+
+        sink.on_chunk(block());
+        assert!(matches!(receiver.try_recv(), Ok(TrackMessage::Chunk(_))));
+
+        sink.mutes.set(TrackKind::Microphone, true);
+        sink.on_chunk(block());
+        for _ in 0..DROPOUT_WARN_COUNT * 2 {
+            sink.on_dropout();
+        }
+        assert!(
+            receiver.try_recv().is_err(),
+            "nothing is queued while muted"
+        );
+        assert_eq!(sink.shared.dropouts.load(Ordering::Relaxed), 0);
+        assert_eq!(warnings.snapshot().len(), 0);
+
+        // The other channel's mute does not affect this sink.
+        sink.mutes.set(TrackKind::Microphone, false);
+        sink.mutes.set(TrackKind::System, true);
+        sink.on_chunk(block());
+        assert!(matches!(receiver.try_recv(), Ok(TrackMessage::Chunk(_))));
     }
 
     struct YieldOnce(bool);

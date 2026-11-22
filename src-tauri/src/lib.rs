@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod error;
 pub mod logging;
+pub mod shortcuts;
 pub mod state;
 pub mod tray;
 
@@ -51,6 +52,7 @@ pub fn ipc_builder() -> Builder<tauri::Wry> {
             commands::recording::stop_recording,
             commands::recording::pause_recording,
             commands::recording::resume_recording,
+            commands::recording::set_track_muted,
             commands::recording::recording_status,
             commands::recording::recording_capabilities,
             commands::recording::list_audio_devices,
@@ -82,6 +84,7 @@ pub fn ipc_builder() -> Builder<tauri::Wry> {
         .events(collect_events![
             commands::recording::RecordingProgressEvent,
             commands::recording::RecordingStateEvent,
+            commands::recording::RecordingTrackMuteEvent,
             commands::recording::RecordingWarningEvent,
             commands::transcription::WhisperModelDownloadEvent,
             commands::transcription::TranscriptionProgressEvent,
@@ -225,6 +228,14 @@ pub fn run() {
             // The tray is a convenience; the app works without it.
             if let Err(error) = tray::init(app.handle(), ui_language) {
                 tracing::warn!(%error, "cannot create the tray icon");
+            }
+            // So is the global mute shortcut: another application may already own the keys.
+            if let Err(error) = shortcuts::init(app.handle()) {
+                tracing::warn!(
+                    %error,
+                    shortcut = shortcuts::MUTE_MICROPHONE_SHORTCUT,
+                    "cannot register the global mute shortcut"
+                );
             }
             Ok(())
         })

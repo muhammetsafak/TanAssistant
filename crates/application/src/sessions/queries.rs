@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tan_domain::{
     ActionItem, AudioTrack, EpochMs, Frame, Note, ProcessingJob, Session, SessionId, SessionStatus,
-    TranscriptSegment,
+    TrackMute, TranscriptSegment,
 };
 
 use super::{AudioRetentionRepository, SessionsError, SessionsResult};
@@ -239,6 +239,8 @@ pub struct SessionDetail {
     pub session: Session,
     /// Its audio tracks.
     pub audio_tracks: Vec<AudioTrackState>,
+    /// The spans during which a channel was muted, oldest first.
+    pub track_mutes: Vec<TrackMute>,
     /// Its frames in time order, with their descriptions.
     pub frames: Vec<Frame>,
     /// The transcript in time order.
@@ -318,6 +320,7 @@ where
         };
         Ok(SessionDetail {
             audio_tracks,
+            track_mutes: self.sessions.list_track_mutes(id).await?,
             frames: self.frames.list_for_session(id).await?,
             transcript: self.transcripts.list_for_session(id).await?,
             note,

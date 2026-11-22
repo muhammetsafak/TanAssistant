@@ -36,7 +36,7 @@ use tan_domain::{
     ActionItem, ActionItemId, AudioTrack, EpochMs, Frame, FrameId, LanguageCode, LanguageSetting,
     Note, NoteId, ProcessingJob, ProcessingStep, ProviderKind, ProviderProfile, ProviderProfileId,
     Session, SessionId, SessionKind, SessionRecord, SessionStatus, StepState, TaskAssignment,
-    TaskKind, TrackKind, TranscriptSegment,
+    TaskKind, TrackKind, TrackMute, TranscriptSegment,
 };
 
 const STARTED_AT: i64 = 1_793_959_200_000; // 2026-11-06 10:00 UTC
@@ -240,6 +240,28 @@ impl SessionRepository for World {
             .filter(|t| &t.session_id == session_id)
             .cloned()
             .collect())
+    }
+
+    async fn open_track_mute(
+        &self,
+        _session_id: &SessionId,
+        _kind: TrackKind,
+        _start_ms: u64,
+    ) -> RepositoryResult<()> {
+        Err(RepositoryError::Invalid("not used".to_owned()))
+    }
+
+    async fn close_track_mute(
+        &self,
+        _session_id: &SessionId,
+        _kind: TrackKind,
+        _end_ms: u64,
+    ) -> RepositoryResult<()> {
+        Err(RepositoryError::Invalid("not used".to_owned()))
+    }
+
+    async fn list_track_mutes(&self, _session_id: &SessionId) -> RepositoryResult<Vec<TrackMute>> {
+        Ok(Vec::new())
     }
 }
 
