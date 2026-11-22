@@ -1,6 +1,6 @@
 //! Note artifacts: the generated summary and its action items.
 
-use crate::ids::{ActionItemId, FrameId, NoteId, SessionId};
+use crate::ids::{ActionItemId, FrameId, NoteId, PersonId, SessionId};
 use crate::language::LanguageCode;
 use crate::EpochMs;
 
@@ -34,8 +34,11 @@ pub struct ActionItem {
     pub note_id: NoteId,
     /// What has to be done.
     pub task: String,
-    /// Who is responsible, when known.
-    pub owner: Option<String>,
+    /// Who is responsible, when known. A person of the directory, never free text.
+    pub owner_person_id: Option<PersonId>,
+    /// Whether the user chose (or cleared) the owner. Such a choice survives regenerating the
+    /// note for an action item whose task text is unchanged.
+    pub owner_edited: bool,
     /// Due date, when known.
     pub due: Option<EpochMs>,
     /// Whether the user marked it completed.

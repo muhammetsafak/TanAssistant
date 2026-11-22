@@ -1,5 +1,5 @@
-//! IPC commands for browsing sessions: list, search, detail, action items, Markdown and audio
-//! export, disk usage and deletion.
+//! IPC commands for browsing sessions: list, search, detail, action items, the person directory
+//! and the participants of sessions, Markdown and audio export, disk usage and deletion.
 //!
 //! Thin adapters over the session use cases; the DTOs carry only what the UI shows.
 
@@ -7,15 +7,16 @@ use std::error::Error;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use tan_application::people::PersonRef;
 use tan_application::ports::{SearchHit, SearchSource};
 use tan_application::sessions::{
     resolve_export_destination_as, AudioTrackState, ExportDestination, ExportDestinationProblem,
-    ExportExtension, NoteWithItems, Page, SessionDetail, SessionFilter, SessionListItem,
-    SessionPage, SessionSearchResult, SessionsError, StorageUsage,
+    ExportExtension, NoteWithItems, Page, ParticipantDetail, SessionDetail, SessionFilter,
+    SessionListItem, SessionPage, SessionSearchResult, SessionsError, StorageUsage,
 };
 use tan_domain::{
-    ActionItem, ActionItemId, EpochMs, Frame, Session, SessionId, SessionStatus, TrackMute,
-    TranscriptSegment,
+    ActionItem, ActionItemId, EpochMs, Frame, ParticipantSource, Person, PersonId, Session,
+    SessionId, SessionStatus, TrackMute, TranscriptSegment,
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -515,28 +516,127 @@ impl From<&TranscriptSegment> for TranscriptLineDto {
     }
 }
 
+/// A person of the directory.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonDto {
+    /// Identity.
+    pub id: String,
+    /// The name as it was first written. For the "me" person (`isSelf`) the UI shows its own
+    /// localised label instead.
+    pub display_name: String,
+    /// Whether this is the person who makes the recordings. Exactly one person is.
+    pub is_self: bool,
+}
+
+impl From<&Person> for PersonDto {
+    fn from(person: &Person) -> Self {
+        Self {
+            id: person.id.to_string(),
+            display_name: person.display_name.clone(),
+            is_self: person.is_self,
+        }
+    }
+}
+
+/// Who added a participant to a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ParticipantSourceDto {
+    /// The AI extracted the participant while writing the note; regenerating the note replaces
+    /// it.
+    Ai,
+    /// The user added the participant; regenerating the note keeps it.
+    Manual,
+}
+
+impl From<ParticipantSource> for ParticipantSourceDto {
+    fn from(source: ParticipantSource) -> Self {
+        match source {
+            ParticipantSource::Ai => Self::Ai,
+            ParticipantSource::Manual => Self::Manual,
+        }
+    }
+}
+
+/// A person who took part in a session.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantDto {
+    /// The person.
+    pub person: PersonDto,
+    /// Who added them.
+    pub source: ParticipantSourceDto,
+}
+
+impl From<&ParticipantDetail> for ParticipantDto {
+    fn from(participant: &ParticipantDetail) -> Self {
+        Self {
+            person: (&participant.person).into(),
+            source: participant.source.into(),
+        }
+    }
+}
+
+/// A person the user points at: one already in the directory, or a name to look up (an existing
+/// person with that name is found; otherwise a new one is added). Exactly one key is set:
+/// `{ personId }` or `{ newName }`.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum PersonRefInput {
+    /// A person of the directory.
+    PersonId(String),
+    /// A name, 1 to 100 characters.
+    NewName(String),
+}
+
+impl TryFrom<PersonRefInput> for PersonRef {
+    type Error = SessionsIpcError;
+
+    fn try_from(input: PersonRefInput) -> Result<Self, Self::Error> {
+        match input {
+            PersonRefInput::PersonId(id) if id.trim().is_empty() => Err(
+                SessionsIpcError::validation("invalid input: the person id is empty"),
+            ),
+            PersonRefInput::PersonId(id) => Ok(Self::Existing(PersonId::new(id))),
+            // The name is validated by the use case (length, control characters).
+            PersonRefInput::NewName(name) => Ok(Self::NewName(name)),
+        }
+    }
+}
+
 /// A task from the note.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionItemDto {
-    /// Identity (pass it to `toggle_action_item`).
+    /// Identity (pass it to `toggle_action_item` and `set_action_item_owner`).
     pub id: String,
     /// What has to be done.
     pub task: String,
-    /// Who is responsible, when known.
-    pub owner: Option<String>,
+    /// Who is responsible, when known: a person of the directory.
+    pub owner_person_id: Option<String>,
+    /// The owner's name, when there is one (for the "me" person see `ownerIsSelf`).
+    pub owner_name: Option<String>,
+    /// Whether the owner is the person who makes the recordings.
+    pub owner_is_self: bool,
+    /// Whether the user chose (or cleared) the owner; regenerating the note keeps that choice
+    /// for a task whose text is unchanged.
+    pub owner_edited: bool,
     /// Due date at midnight UTC (milliseconds since the Unix epoch), when known.
     pub due: Option<f64>,
     /// Whether the user marked it done.
     pub done: bool,
 }
 
-impl From<&ActionItem> for ActionItemDto {
-    fn from(item: &ActionItem) -> Self {
+impl ActionItemDto {
+    fn new(item: &ActionItem, owner: Option<&Person>) -> Self {
         Self {
             id: item.id.to_string(),
             task: item.task.clone(),
-            owner: item.owner.clone(),
+            owner_person_id: item.owner_person_id.as_ref().map(ToString::to_string),
+            owner_name: owner.map(|person| person.display_name.clone()),
+            owner_is_self: owner.is_some_and(|person| person.is_self),
+            owner_edited: item.owner_edited,
             due: item.due.map(epoch_ms_to_f64),
             done: item.done,
         }
@@ -580,7 +680,11 @@ impl From<&NoteWithItems> for NoteDto {
                 .map(ToString::to_string)
                 .collect(),
             created_at: epoch_ms_to_f64(note.note.created_at),
-            action_items: note.action_items.iter().map(Into::into).collect(),
+            action_items: note
+                .action_items
+                .iter()
+                .map(|item| ActionItemDto::new(item, note.owner_of(item)))
+                .collect(),
         }
     }
 }
@@ -603,6 +707,8 @@ pub struct SessionDetailDto {
     pub transcript: Vec<TranscriptLineDto>,
     /// The latest note, if one was generated.
     pub note: Option<NoteDto>,
+    /// Who took part, in the order they were added.
+    pub participants: Vec<ParticipantDto>,
     /// The processing job, if the session was ever processed.
     pub job: Option<ProcessingJobDto>,
 }
@@ -617,6 +723,7 @@ impl SessionDetailDto {
             frames: detail.frames.iter().map(Into::into).collect(),
             transcript: detail.transcript.iter().map(Into::into).collect(),
             note: detail.note.as_ref().map(Into::into),
+            participants: detail.participants.iter().map(Into::into).collect(),
             job: detail.job.as_ref().map(Into::into),
         }
     }
@@ -755,6 +862,78 @@ pub async fn toggle_action_item(
     Ok(state
         .toggle_action_item
         .execute(&ActionItemId::new(action_item_id), done)
+        .await?)
+}
+
+/// Everyone in the person directory: the "me" person first, then by name.
+#[tauri::command]
+#[specta::specta]
+#[tracing::instrument(skip_all)]
+pub async fn list_people(state: State<'_, AppState>) -> Result<Vec<PersonDto>, SessionsIpcError> {
+    let people = state.list_people.execute().await?;
+    Ok(people.iter().map(Into::into).collect())
+}
+
+/// Makes `owner` the owner of an action item (`null` clears the owner) and returns that person.
+/// A `newName` finds the person already known by that name or adds one; the person does not
+/// become a participant of the session. The choice survives regenerating the note.
+#[tauri::command]
+#[specta::specta]
+#[tracing::instrument(skip_all)]
+pub async fn set_action_item_owner(
+    state: State<'_, AppState>,
+    action_item_id: String,
+    owner: Option<PersonRefInput>,
+) -> Result<Option<PersonDto>, SessionsIpcError> {
+    if action_item_id.trim().is_empty() {
+        return Err(SessionsIpcError::validation(
+            "invalid input: the action item id is empty",
+        ));
+    }
+    let owner = owner.map(PersonRef::try_from).transpose()?;
+    let person = state
+        .set_action_item_owner
+        .execute(&ActionItemId::new(action_item_id), owner)
+        .await?;
+    Ok(person.as_ref().map(Into::into))
+}
+
+/// Adds a person to the participants of a session (as the user's own choice, which regenerating
+/// the note keeps) and returns that person.
+#[tauri::command]
+#[specta::specta]
+#[tracing::instrument(skip_all)]
+pub async fn add_session_participant(
+    state: State<'_, AppState>,
+    session_id: String,
+    person: PersonRefInput,
+) -> Result<PersonDto, SessionsIpcError> {
+    let id = parse_session_id(session_id)?;
+    let person = state
+        .add_session_participant
+        .execute(&id, person.try_into()?)
+        .await?;
+    Ok((&person).into())
+}
+
+/// Removes a person from the participants of a session. The person stays in the directory.
+#[tauri::command]
+#[specta::specta]
+#[tracing::instrument(skip_all)]
+pub async fn remove_session_participant(
+    state: State<'_, AppState>,
+    session_id: String,
+    person_id: String,
+) -> Result<(), SessionsIpcError> {
+    let id = parse_session_id(session_id)?;
+    if person_id.trim().is_empty() {
+        return Err(SessionsIpcError::validation(
+            "invalid input: the person id is empty",
+        ));
+    }
+    Ok(state
+        .remove_session_participant
+        .execute(&id, &PersonId::new(person_id))
         .await?)
 }
 

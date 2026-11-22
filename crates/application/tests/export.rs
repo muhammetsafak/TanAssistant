@@ -13,8 +13,8 @@ use tan_application::sessions::{
 use tan_application::transcription::SessionAudioFiles;
 use tan_domain::{
     ActionItem, ActionItemId, AudioTrack, EpochMs, Frame, FrameId, LanguageCode, LanguageSetting,
-    Note, NoteId, ProcessingJob, ProcessingStep, Session, SessionId, SessionKind, SessionRecord,
-    SessionStatus, TrackKind, TranscriptSegment,
+    Note, NoteId, Person, PersonId, ProcessingJob, ProcessingStep, Session, SessionId, SessionKind,
+    SessionRecord, SessionStatus, TrackKind, TranscriptSegment,
 };
 
 const STARTED_AT: i64 = 1_793_959_200_000; // 2026-11-06 10:00 UTC
@@ -62,6 +62,15 @@ fn segment(
     }
 }
 
+fn person(id: &str, name: &str, is_self: bool) -> Person {
+    Person {
+        id: PersonId::new(id),
+        display_name: name.to_owned(),
+        is_self,
+        created_at: EpochMs::new(0),
+    }
+}
+
 fn detail(note_language: LanguageCode) -> SessionDetail {
     let note_id = NoteId::new("n1");
     let item =
@@ -69,7 +78,8 @@ fn detail(note_language: LanguageCode) -> SessionDetail {
             id: ActionItemId::new(id),
             note_id: note_id.clone(),
             task: task.to_owned(),
-            owner: owner.map(str::to_owned),
+            owner_person_id: owner.map(PersonId::new),
+            owner_edited: false,
             due: due.map(EpochMs::new),
             done,
         };
@@ -77,6 +87,7 @@ fn detail(note_language: LanguageCode) -> SessionDetail {
         session: session(note_language.clone()),
         audio_tracks: Vec::new(),
         track_mutes: Vec::new(),
+        participants: Vec::new(),
         frames: vec![
             frame("f1", 3_000, "frames/a.png", Some("Açılış slaytı")),
             frame(
@@ -118,8 +129,12 @@ fn detail(note_language: LanguageCode) -> SessionDetail {
                 created_at: EpochMs::new(STARTED_AT + 3_000_000),
             },
             action_items: vec![
-                item("a1", "Raporu hazırla", Some("Ayşe"), Some(DUE), false),
+                item("a1", "Raporu hazırla", Some("p-ayse"), Some(DUE), false),
                 item("a2", "Toplantı odasını ayır", None, None, true),
+            ],
+            owners: vec![
+                person("p-ayse", "Ayşe\n Yılmaz", false),
+                person("self", "Me", true),
             ],
         }),
         job: None,
@@ -138,7 +153,7 @@ fn the_turkish_export_has_every_section_and_checklist_lines() {
         "## Özet\n\nBütçe görüşüldü ve onaylandı.",
         "## Kararlar\n\n- Bütçe onaylandı",
         "## Aksiyon listesi\n",
-        "- [ ] Raporu hazırla (sorumlu: Ayşe, tarih: 2026-12-01)\n",
+        "- [ ] Raporu hazırla (sorumlu: Ayşe Yılmaz, tarih: 2026-12-01)\n",
         "- [x] Toplantı odasını ayır\n",
         "## Açık sorular\n\n- Lansman tarihi nedir?",
         "## Önemli ekran görüntüleri\n",
@@ -182,13 +197,44 @@ fn key_frames_are_image_links_relative_to_the_session_folder() {
 }
 
 #[test]
+fn the_owner_is_read_from_the_person_and_the_me_person_is_shown_in_the_notes_language() {
+    for (language, expected) in [
+        (LanguageCode::turkish(), "- [ ] Not tut (sorumlu: Ben)"),
+        (LanguageCode::english(), "- [ ] Not tut (owner: Me)"),
+    ] {
+        let mut d = detail(language);
+        let note = d.note.as_mut().unwrap();
+        note.action_items.push(ActionItem {
+            id: ActionItemId::new("a3"),
+            note_id: NoteId::new("n1"),
+            task: "Not tut".to_owned(),
+            owner_person_id: Some(PersonId::new("self")),
+            owner_edited: true,
+            due: None,
+            done: false,
+        });
+        let md = render_markdown(&d);
+        assert!(md.contains(expected), "missing {expected:?} in:\n{md}");
+    }
+
+    // An owner who is not among the loaded people (deleted meanwhile) is simply not shown.
+    let mut d = detail(LanguageCode::english());
+    d.note.as_mut().unwrap().owners.clear();
+    let md = render_markdown(&d);
+    assert!(
+        md.contains("- [ ] Raporu hazırla (due: 2026-12-01)"),
+        "{md}"
+    );
+}
+
+#[test]
 fn the_english_export_uses_english_headings() {
     let md = render_markdown(&detail(LanguageCode::english()));
     for expected in [
         "## Summary",
         "## Decisions",
         "## Action items",
-        "- [ ] Raporu hazırla (owner: Ayşe, due: 2026-12-01)",
+        "- [ ] Raporu hazırla (owner: Ayşe Yılmaz, due: 2026-12-01)",
         "- [x] Toplantı odasını ayır",
         "## Open questions",
         "## Key frames",

@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use tan_domain::{
-    ActionItem, AudioTrack, EpochMs, Frame, Note, ProcessingJob, Session, SessionId, SessionStatus,
-    TrackMute, TranscriptSegment,
+    ActionItem, AudioTrack, EpochMs, Frame, Note, ParticipantSource, Person, ProcessingJob,
+    Session, SessionId, SessionStatus, TrackMute, TranscriptSegment,
 };
 
 use super::{AudioRetentionRepository, SessionsError, SessionsResult};
 use crate::ports::{
-    FrameRepository, NoteRepository, SearchHit, SearchIndex, SessionRepository,
+    FrameRepository, NoteRepository, PersonRepository, SearchHit, SearchIndex, SessionRepository,
     TranscriptRepository,
 };
 use crate::processing::ProcessingJobRepository;
@@ -230,6 +230,27 @@ pub struct NoteWithItems {
     pub note: Note,
     /// Its action items, in order.
     pub action_items: Vec<ActionItem>,
+    /// The people who own at least one of the action items (look one up with
+    /// [`NoteWithItems::owner_of`]).
+    pub owners: Vec<Person>,
+}
+
+impl NoteWithItems {
+    /// The owner of `item`, when it has one.
+    #[must_use]
+    pub fn owner_of(&self, item: &ActionItem) -> Option<&Person> {
+        let owner_id = item.owner_person_id.as_ref()?;
+        self.owners.iter().find(|person| &person.id == owner_id)
+    }
+}
+
+/// A person who took part in a session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParticipantDetail {
+    /// The person.
+    pub person: Person,
+    /// Who added them: the AI while writing the note, or the user.
+    pub source: ParticipantSource,
 }
 
 /// Everything the session screen shows.
@@ -247,21 +268,24 @@ pub struct SessionDetail {
     pub transcript: Vec<TranscriptSegment>,
     /// The latest note, if one was generated.
     pub note: Option<NoteWithItems>,
+    /// Who took part, in the order they were added.
+    pub participants: Vec<ParticipantDetail>,
     /// The processing job, if the session was ever processed.
     pub job: Option<ProcessingJob>,
 }
 
-/// Loads a session with its tracks, frames, transcript, note and job.
-pub struct GetSessionDetail<S, Fr, T, N, J, R> {
+/// Loads a session with its tracks, frames, transcript, note, participants and job.
+pub struct GetSessionDetail<S, Fr, T, N, J, R, D> {
     sessions: Arc<S>,
     frames: Arc<Fr>,
     transcripts: Arc<T>,
     notes: Arc<N>,
     jobs: Arc<J>,
     retention: Arc<R>,
+    people: Arc<D>,
 }
 
-impl<S, Fr, T, N, J, R> GetSessionDetail<S, Fr, T, N, J, R>
+impl<S, Fr, T, N, J, R, D> GetSessionDetail<S, Fr, T, N, J, R, D>
 where
     S: SessionRepository,
     Fr: FrameRepository,
@@ -269,6 +293,7 @@ where
     N: NoteRepository,
     J: ProcessingJobRepository,
     R: AudioRetentionRepository,
+    D: PersonRepository,
 {
     /// Creates the use case.
     #[must_use]
@@ -279,6 +304,7 @@ where
         notes: Arc<N>,
         jobs: Arc<J>,
         retention: Arc<R>,
+        people: Arc<D>,
     ) -> Self {
         Self {
             sessions,
@@ -287,6 +313,7 @@ where
             notes,
             jobs,
             retention,
+            people,
         }
     }
 
@@ -311,19 +338,51 @@ where
                 track,
             })
             .collect();
+        let directory = self.people.list().await?;
         let note = match self.notes.latest_for_session(id).await? {
             Some(note) => {
                 let action_items = self.notes.list_action_items(&note.id).await?;
-                Some(NoteWithItems { note, action_items })
+                let owners = directory
+                    .iter()
+                    .filter(|person| {
+                        action_items
+                            .iter()
+                            .any(|item| item.owner_person_id.as_ref() == Some(&person.id))
+                    })
+                    .cloned()
+                    .collect();
+                Some(NoteWithItems {
+                    note,
+                    action_items,
+                    owners,
+                })
             }
             None => None,
         };
+        // A participant row cannot outlive its person (foreign key), so the lookup always hits.
+        let participants = self
+            .people
+            .list_participants(id)
+            .await?
+            .into_iter()
+            .filter_map(|participant| {
+                let person = directory
+                    .iter()
+                    .find(|person| person.id == participant.person_id)?
+                    .clone();
+                Some(ParticipantDetail {
+                    person,
+                    source: participant.source,
+                })
+            })
+            .collect();
         Ok(SessionDetail {
             audio_tracks,
             track_mutes: self.sessions.list_track_mutes(id).await?,
             frames: self.frames.list_for_session(id).await?,
             transcript: self.transcripts.list_for_session(id).await?,
             note,
+            participants,
             job: self.jobs.get(id).await?,
             session,
         })

@@ -80,6 +80,7 @@ pub mod ids;
 pub mod language;
 pub mod media;
 pub mod note;
+pub mod person;
 pub mod processing;
 pub mod provider;
 pub mod session;
@@ -107,10 +108,13 @@ impl EpochMs {
 }
 
 pub use credentials::{SecretRef, Variable};
-pub use ids::{ActionItemId, FrameId, NoteId, ProviderProfileId, SecretId, SessionId, VariableId};
+pub use ids::{
+    ActionItemId, FrameId, NoteId, PersonId, ProviderProfileId, SecretId, SessionId, VariableId,
+};
 pub use language::{InvalidLanguageCode, LanguageCode, LanguageSetting, UiLanguage};
 pub use media::{AudioTrack, Frame, TrackKind, TrackMute};
 pub use note::{ActionItem, Note};
+pub use person::{ParticipantSource, Person, SessionParticipant};
 pub use processing::{
     ProcessingError, ProcessingJob, ProcessingJobRecord, ProcessingStep, StepState,
 };

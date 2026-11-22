@@ -3,6 +3,7 @@
 pub mod ai;
 pub mod credentials;
 pub mod error;
+pub mod people;
 pub mod ports;
 pub mod processing;
 pub mod recording;

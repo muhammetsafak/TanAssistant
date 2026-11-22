@@ -5,8 +5,10 @@ Write plain text in {{language}} ({{language_code}}) with these headings, omitti
 that has nothing under it:
 - Summary: what was discussed in this part.
 - Decisions: decisions that were explicitly taken.
-- Action items: tasks someone has to do, each with the owner (as named in the conversation)
-  and the due date when one was stated.
+- Participants: the individual people named or addressed in this part, spelled as in the
+  conversation. Write `me` for the person who made the recording when they took part.
+- Action items: tasks someone has to do, each with the owner (as named in the conversation;
+  `me` for the person who made the recording) and the due date when one was stated.
 - Open questions: questions or problems left unresolved.
 - Screen: for every moment where the screen content matters (slide titles, tables, code),
   one line starting with its marker, for example `F3`, followed by why it matters.

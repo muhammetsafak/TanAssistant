@@ -107,6 +107,8 @@ pub(super) struct SynthesisInput<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ActionItemDraft {
     pub task: String,
+    /// The owner as the model named them (`me` for the person who made the recording); the
+    /// pipeline resolves it to a person of the directory.
     pub owner: Option<String>,
     pub due: Option<EpochMs>,
 }
@@ -116,6 +118,8 @@ pub(super) struct ActionItemDraft {
 pub(super) struct NoteDraft {
     pub summary: String,
     pub decisions: Vec<String>,
+    /// People named or addressed in the conversation, as the model wrote them (possibly empty).
+    pub participants: Vec<String>,
     pub action_items: Vec<ActionItemDraft>,
     pub open_questions: Vec<String>,
     pub key_frames: Vec<FrameId>,
@@ -127,10 +131,18 @@ fn note_schema() -> JsonSchema {
     let schema = json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["summary", "decisions", "action_items", "open_questions", "key_frames"],
+        "required": [
+            "summary",
+            "decisions",
+            "participants",
+            "action_items",
+            "open_questions",
+            "key_frames"
+        ],
         "properties": {
             "summary": { "type": "string" },
             "decisions": { "type": "array", "items": { "type": "string" } },
+            "participants": { "type": "array", "items": { "type": "string" } },
             "action_items": {
                 "type": "array",
                 "items": {
@@ -170,6 +182,9 @@ struct RawNote {
     summary: String,
     #[serde(default)]
     decisions: Vec<String>,
+    // Required (the field may be empty, but not missing): the schema is strict, so a reply
+    // without it did not follow the schema and gets the repair request.
+    participants: Vec<String>,
     #[serde(default)]
     action_items: Vec<RawActionItem>,
     #[serde(default)]
@@ -270,6 +285,7 @@ fn parse_note(
     Ok(NoteDraft {
         summary,
         decisions: list(raw.decisions),
+        participants: list(raw.participants),
         action_items,
         open_questions: list(raw.open_questions),
         key_frames,
@@ -593,6 +609,7 @@ mod tests {
         let reply = response(
             r#"```json
 {"summary": "  Roadmap review. ", "decisions": ["Ship in May", " "],
+ "participants": ["Ayşe", " ", "me"],
  "action_items": [
    {"task": "Write the spec", "owner": "Ayşe", "due": "2026-12-01"},
    {"task": "  ", "owner": null, "due": null},
@@ -606,6 +623,7 @@ mod tests {
         let draft = parse_note(&reply, &frames()).unwrap();
         assert_eq!(draft.summary, "Roadmap review.");
         assert_eq!(draft.decisions, ["Ship in May"]);
+        assert_eq!(draft.participants, ["Ayşe", "me"]);
         assert_eq!(draft.open_questions, ["Budget?"]);
         assert_eq!(draft.key_frames, [FrameId::new("frame-2")]);
         assert_eq!(draft.action_items.len(), 2);
@@ -620,19 +638,29 @@ mod tests {
     }
 
     #[test]
+    fn participants_may_be_empty_but_the_field_may_not_be_missing() {
+        let empty = response(r#"{"summary": "Short.", "participants": []}"#);
+        assert_eq!(parse_note(&empty, &frames()).unwrap().participants.len(), 0);
+        let missing = response(r#"{"summary": "Short.", "decisions": [], "action_items": []}"#);
+        assert!(parse_note(&missing, &frames())
+            .unwrap_err()
+            .contains("participants"));
+    }
+
+    #[test]
     fn invalid_replies_are_rejected_with_a_reason() {
         for bad in [
             "I could not do that.",
             r#"{"decisions": []}"#,
-            r#"{"summary": "   "}"#,
-            r#"{"summary": 5}"#,
+            r#"{"summary": "   ", "participants": []}"#,
+            r#"{"summary": 5, "participants": []}"#,
             "",
         ] {
             assert!(parse_note(&response(bad), &frames()).is_err(), "{bad}");
         }
         let cut = ChatResponse {
             truncated: true,
-            ..response(r#"{"summary": "x"}"#)
+            ..response(r#"{"summary": "x", "participants": []}"#)
         };
         assert!(parse_note(&cut, &frames()).unwrap_err().contains("cut off"));
     }

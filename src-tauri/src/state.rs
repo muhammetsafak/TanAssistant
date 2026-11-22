@@ -14,6 +14,9 @@ use tan_application::credentials::{
     ResolveSecret, RevealSecret, SetMasterPassword, UnlockSecretStore, UpdateSecret,
     UpsertVariable,
 };
+use tan_application::people::{
+    AddSessionParticipant, ListPeople, RemoveSessionParticipant, SetActionItemOwner,
+};
 use tan_application::ports::{Clock, IdGenerator};
 use tan_application::processing::{ProcessPorts, ProcessSession, SessionTranscriber};
 use tan_application::recording::{RecordingEvents, RecordingPorts, RecordingService};
@@ -30,7 +33,9 @@ use tan_domain::{ProviderProfileId, SessionId};
 use tan_infra_ai::AiProviderFactory;
 use tan_infra_capture::{DHasher, FileMediaStore, PlatformAudioCapture, PlatformScreenCapture};
 use tan_infra_secrets::{open_secret_store, SelectedSecretStore};
-use tan_infra_storage::repositories::{DataDirFiles, SqliteProcessingRepository};
+use tan_infra_storage::repositories::{
+    DataDirFiles, SqlitePersonRepository, SqliteProcessingRepository,
+};
 use tan_infra_storage::{
     new_id, DataLayout, Database, SqliteFrameRepository, SqliteNoteRepository,
     SqliteProviderProfileRepository, SqliteSearchIndex, SqliteSecretMetadataRepository,
@@ -163,6 +168,7 @@ pub type Process = ProcessSession<
     SqliteProcessingRepository,
     DataDirFiles,
     SessionTranscription,
+    SqlitePersonRepository,
 >;
 
 /// The retention policy wired to SQLite and the data directory.
@@ -248,9 +254,19 @@ pub struct AppState {
         SqliteNoteRepository,
         SqliteProcessingRepository,
         SqliteProcessingRepository,
+        SqlitePersonRepository,
     >,
     /// Marks an action item done or not done.
     pub toggle_action_item: ToggleActionItem<SqliteNoteRepository>,
+    /// Lists the person directory.
+    pub list_people: ListPeople<SqlitePersonRepository>,
+    /// Sets, replaces or clears the owner of an action item.
+    pub set_action_item_owner: SetActionItemOwner<SqliteNoteRepository, SqlitePersonRepository>,
+    /// Adds a person to the participants of a session.
+    pub add_session_participant:
+        AddSessionParticipant<SqliteSessionRepository, SqlitePersonRepository>,
+    /// Removes a person from the participants of a session.
+    pub remove_session_participant: RemoveSessionParticipant<SqlitePersonRepository>,
     /// Writes the Markdown export of a session.
     pub export_session: Arc<ExportSessionMarkdown<DataDirFiles>>,
     /// Mixes the audio tracks of a session into one WAV file.
@@ -295,6 +311,23 @@ impl AppState {
         let frames = Arc::new(SqliteFrameRepository::new(database.clone()));
         let transcripts = Arc::new(SqliteTranscriptRepository::new(database.clone()));
         let notes = Arc::new(SqliteNoteRepository::new(database.clone()));
+        let people = Arc::new(SqlitePersonRepository::new(database.clone()));
+        // Owners written before the person directory existed are free text; move them to
+        // people (idempotent). A failure only postpones it to the next start.
+        match people.backfill_legacy_owners(clock.now()) {
+            Ok(0) => {}
+            Ok(linked) => {
+                tracing::info!(
+                    linked,
+                    "moved old action item owners to the person directory"
+                );
+            }
+            Err(error) => tracing::warn!(
+                %error,
+                "could not move old action item owners to the person directory; \
+                 it will be retried at the next start"
+            ),
+        }
         let processing = Arc::new(SqliteProcessingRepository::new(database.clone()));
         let search_index = Arc::new(SqliteSearchIndex::new(database.clone()));
         let files = Arc::new(DataDirFiles::new(layout.clone()));
@@ -331,6 +364,7 @@ impl AppState {
             jobs: processing.clone(),
             files: files.clone(),
             transcriber: Arc::new(SessionTranscription(transcribe_session.clone())),
+            people: people.clone(),
             ids: ids.clone(),
             clock: clock.clone(),
         }));
@@ -382,10 +416,10 @@ impl AppState {
             upsert_provider_profile: UpsertProviderProfile::new(
                 profiles.clone(),
                 assignments.clone(),
-                ids,
+                ids.clone(),
             ),
             delete_provider_profile: DeleteProviderProfile::new(profiles.clone()),
-            test_provider: TestProvider::new(profiles.clone(), ai_factory.clone(), clock),
+            test_provider: TestProvider::new(profiles.clone(), ai_factory.clone(), clock.clone()),
             set_task_assignment: SetTaskAssignment::new(profiles, assignments.clone()),
             get_task_assignments: GetTaskAssignments::new(assignments.clone()),
             clear_task_assignment: ClearTaskAssignment::new(assignments),
@@ -405,8 +439,23 @@ impl AppState {
                 notes.clone(),
                 processing.clone(),
                 processing,
+                people.clone(),
             ),
-            toggle_action_item: ToggleActionItem::new(notes),
+            toggle_action_item: ToggleActionItem::new(notes.clone()),
+            list_people: ListPeople::new(people.clone()),
+            set_action_item_owner: SetActionItemOwner::new(
+                notes,
+                people.clone(),
+                ids.clone(),
+                clock.clone(),
+            ),
+            add_session_participant: AddSessionParticipant::new(
+                sessions.clone(),
+                people.clone(),
+                ids.clone(),
+                clock.clone(),
+            ),
+            remove_session_participant: RemoveSessionParticipant::new(people),
             export_session: Arc::new(ExportSessionMarkdown::new(files.clone())),
             export_audio: Arc::new(ExportSessionAudio::new(
                 Arc::new(WavMixer),

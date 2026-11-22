@@ -26,9 +26,9 @@ pub use export::{
     FRAMES_DIR_SUFFIX,
 };
 pub use queries::{
-    AudioTrackState, GetSessionDetail, ListSessions, NoteWithItems, Page, SearchSessions,
-    SessionDetail, SessionFilter, SessionListItem, SessionPage, SessionSearchResult,
-    DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
+    AudioTrackState, GetSessionDetail, ListSessions, NoteWithItems, Page, ParticipantDetail,
+    SearchSessions, SessionDetail, SessionFilter, SessionListItem, SessionPage,
+    SessionSearchResult, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
 };
 pub use retention::{ApplyRetention, GetStorageUsage, RetentionReport};
 

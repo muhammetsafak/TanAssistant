@@ -761,10 +761,10 @@ mod pipeline_tests {
     use futures_executor::block_on;
     use tan_application::ports::{
         AiError, AiResult, ChatModel, ChatRequest, ChatResponse, Clock, FrameRepository,
-        IdGenerator, ModelCatalog, NoteRepository, ProviderFactory, ProviderProfileRepository,
-        SearchIndex, SessionRepository, SettingsRepository, TaskAssignmentRepository,
-        TranscriptRepository, TranscriptSegmentDto, TranscriptionModel, TranscriptionRequest,
-        VisionModel, VisionRequest,
+        IdGenerator, ModelCatalog, NoteRepository, PersonRepository, ProviderFactory,
+        ProviderProfileRepository, SearchIndex, SessionRepository, SettingsRepository,
+        TaskAssignmentRepository, TranscriptRepository, TranscriptSegmentDto, TranscriptionModel,
+        TranscriptionRequest, VisionModel, VisionRequest,
     };
     use tan_application::processing::{
         ProcessError, ProcessPorts, ProcessSession, ProcessSummary, SessionTranscriber,
@@ -776,16 +776,17 @@ mod pipeline_tests {
         TranscribeProgress, TranscribeResult, TranscribeSummary, TranscriptionEngine,
     };
     use tan_domain::{
-        AudioTrack, Frame, FrameId, LanguageCode, LanguageSetting, ProviderKind, ProviderProfile,
-        ProviderProfileId, Session, SessionKind, SessionStatus, SettingsPatch, TaskAssignment,
-        TaskKind, TranscriptSegment,
+        ActionItem, ActionItemId, AudioTrack, Frame, FrameId, LanguageCode, LanguageSetting, Note,
+        NoteId, ParticipantSource, Person, PersonId, ProviderKind, ProviderProfile,
+        ProviderProfileId, Session, SessionKind, SessionParticipant, SessionStatus, SettingsPatch,
+        TaskAssignment, TaskKind, TranscriptSegment,
     };
 
     use super::*;
     use crate::repositories::{
-        SqliteFrameRepository, SqliteNoteRepository, SqliteProviderProfileRepository,
-        SqliteSessionRepository, SqliteSettingsRepository, SqliteTaskAssignmentRepository,
-        SqliteTranscriptRepository,
+        SqliteFrameRepository, SqliteNoteRepository, SqlitePersonRepository,
+        SqliteProviderProfileRepository, SqliteSessionRepository, SqliteSettingsRepository,
+        SqliteTaskAssignmentRepository, SqliteTranscriptRepository,
     };
     use crate::search::SqliteSearchIndex;
 
@@ -796,6 +797,7 @@ mod pipeline_tests {
     const NOTE_JSON: &str = r#"{
       "summary": "Bütçe görüşüldü.",
       "decisions": ["Bütçe onaylandı"],
+      "participants": ["Ayşe", "Can"],
       "action_items": [{"task": "Raporu hazırla", "owner": "Ayşe", "due": "2026-12-01"}],
       "open_questions": ["Lansman tarihi nedir?"],
       "key_frames": [{"frame_id": "F2", "reason": "fiyat tablosu"}]
@@ -942,6 +944,7 @@ mod pipeline_tests {
         SqliteProcessingRepository,
         DataDirFiles,
         Transcriber,
+        SqlitePersonRepository,
     >;
 
     struct Rig {
@@ -1046,6 +1049,7 @@ mod pipeline_tests {
                 script: script.clone(),
                 transcripts: (*transcripts).clone(),
             }),
+            people: Arc::new(SqlitePersonRepository::new(db.clone())),
             ids: Arc::new(Ids::default()),
             clock: clock.clone(),
         });
@@ -1100,6 +1104,7 @@ mod pipeline_tests {
                     Arc::new(SqliteNoteRepository::new(db.clone())),
                     repo.clone(),
                     repo,
+                    Arc::new(SqlitePersonRepository::new(db.clone())),
                 )
                 .execute(&sid()),
             )
@@ -1122,7 +1127,23 @@ mod pipeline_tests {
         assert_eq!(note.note.open_questions, ["Lansman tarihi nedir?"]);
         assert_eq!(note.note.frame_refs, [FrameId::new("f2")]);
         assert_eq!(note.action_items[0].task, "Raporu hazırla");
-        assert_eq!(note.action_items[0].owner.as_deref(), Some("Ayşe"));
+        assert_eq!(
+            note.owner_of(&note.action_items[0])
+                .map(|person| person.display_name.as_str()),
+            Some("Ayşe")
+        );
+        assert!(!note.action_items[0].owner_edited);
+        assert_eq!(
+            detail
+                .participants
+                .iter()
+                .map(|p| (p.person.display_name.as_str(), p.source))
+                .collect::<Vec<_>>(),
+            [
+                ("Ayşe", ParticipantSource::Ai),
+                ("Can", ParticipantSource::Ai)
+            ]
+        );
         assert_eq!(note.action_items[0].due, Some(EpochMs::new(DUE_2026_12_01)));
         assert!(!note.action_items[0].done);
         assert!(detail.frames.iter().all(|f| f
@@ -1138,6 +1159,114 @@ mod pipeline_tests {
         let index = SqliteSearchIndex::new(rig.db.clone());
         let hits = block_on(index.search("BÜTÇE", 10)).unwrap();
         assert!(hits.iter().any(|h| h.session_id == sid()), "{hits:?}");
+    }
+
+    fn directory(rig: &Rig) -> Vec<String> {
+        block_on(SqlitePersonRepository::new(rig.db.clone()).list())
+            .unwrap()
+            .into_iter()
+            .map(|person| person.display_name)
+            .collect()
+    }
+
+    #[test]
+    fn reprocessing_keeps_what_the_user_did_to_the_note_and_the_participants() {
+        let rig = rig();
+        rig.script(&[NOTE_JSON, NOTE_JSON], &[VISION, VISION, VISION, VISION]);
+        rig.run().unwrap();
+        assert_eq!(directory(&rig), ["Me", "Ayşe", "Can"]);
+
+        // The user ticks the task off, makes the "me" person its owner and adds Deniz.
+        let notes = SqliteNoteRepository::new(rig.db.clone());
+        let people = SqlitePersonRepository::new(rig.db.clone());
+        let item = rig.detail().note.unwrap().action_items[0].id.clone();
+        let me = block_on(people.self_person()).unwrap();
+        block_on(notes.set_action_item_done(&item, true)).unwrap();
+        block_on(notes.set_action_item_owner(&item, Some(&me.id))).unwrap();
+        let deniz = block_on(people.find_or_create(
+            "deniz",
+            &Person {
+                id: PersonId::new("deniz"),
+                display_name: "Deniz".to_owned(),
+                is_self: false,
+                created_at: EpochMs::new(1),
+            },
+        ))
+        .unwrap();
+        block_on(people.add_participant(&SessionParticipant {
+            session_id: sid(),
+            person_id: deniz.id,
+            source: ParticipantSource::Manual,
+        }))
+        .unwrap();
+
+        rig.clock.0.fetch_add(1_000, Ordering::SeqCst);
+        rig.run().unwrap();
+        let detail = rig.detail();
+        let note = detail.note.unwrap();
+        assert_ne!(note.action_items[0].id, item, "the note was regenerated");
+        assert!(note.action_items[0].done, "done is carried over");
+        assert!(note.action_items[0].owner_edited);
+        assert_eq!(
+            note.owner_of(&note.action_items[0]).map(|p| p.is_self),
+            Some(true),
+            "the user's owner wins over the model's Ayşe"
+        );
+        let mut names: Vec<_> = detail
+            .participants
+            .iter()
+            .map(|p| p.person.display_name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["Ayşe", "Can", "Deniz"], "the manual one is kept");
+        assert_eq!(directory(&rig).len(), 4, "nobody is created twice");
+    }
+
+    #[test]
+    fn a_synthesis_after_the_start_up_move_does_not_create_the_same_person_again() {
+        let rig = rig();
+        // An old note with an owner as free text, as an earlier version stored it.
+        let notes = SqliteNoteRepository::new(rig.db.clone());
+        let old_note = Note {
+            id: NoteId::new("old-note"),
+            session_id: sid(),
+            language: LanguageCode::turkish(),
+            summary: "Eski özet".to_owned(),
+            decisions: vec![],
+            open_questions: vec![],
+            frame_refs: vec![],
+            created_at: EpochMs::new(5),
+        };
+        let old_item = ActionItem {
+            id: ActionItemId::new("old-item"),
+            note_id: old_note.id.clone(),
+            task: "Eski iş".to_owned(),
+            owner_person_id: None,
+            owner_edited: false,
+            due: None,
+            done: false,
+        };
+        block_on(notes.save(&old_note, &[old_item])).unwrap();
+        rig.db
+            .with_conn(|c| {
+                c.execute("UPDATE action_items SET owner = 'AYŞE'", [])?;
+                Ok(())
+            })
+            .unwrap();
+        let people = SqlitePersonRepository::new(rig.db.clone());
+        assert_eq!(people.backfill_legacy_owners(EpochMs::new(9)).unwrap(), 1);
+        assert_eq!(directory(&rig), ["Me", "AYŞE"]);
+
+        rig.script(&[NOTE_JSON], &[VISION, VISION]);
+        rig.run().unwrap();
+        // The model wrote "Ayşe": the same person as the moved "AYŞE".
+        assert_eq!(directory(&rig), ["Me", "AYŞE", "Can"]);
+        let note = rig.detail().note.unwrap();
+        assert_eq!(
+            note.owner_of(&note.action_items[0])
+                .map(|p| p.display_name.as_str()),
+            Some("AYŞE")
+        );
     }
 
     #[test]

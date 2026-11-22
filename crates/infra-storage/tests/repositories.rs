@@ -5,15 +5,18 @@ mod common;
 
 use common::{block_on, segment, session, test_db, TestDb};
 use tan_application::ports::{
-    FrameRepository, NoteRepository, ProviderProfileRepository, SecretMetadataRepository,
-    SessionRepository, TaskAssignmentRepository, TranscriptRepository, VariableRepository,
+    FrameRepository, NoteRepository, PersonRepository, ProviderProfileRepository,
+    SecretMetadataRepository, SessionRepository, TaskAssignmentRepository, TranscriptRepository,
+    VariableRepository,
 };
 use tan_application::RepositoryError;
 use tan_domain::{
     ActionItem, ActionItemId, AudioTrack, EpochMs, Frame, FrameId, LanguageCode, LanguageSetting,
-    Note, NoteId, ProviderKind, ProviderProfile, ProviderProfileId, SecretId, SecretRef, SessionId,
-    SessionStatus, TaskAssignment, TaskKind, TrackKind, TrackMute, Variable, VariableId,
+    Note, NoteId, ParticipantSource, Person, PersonId, ProviderKind, ProviderProfile,
+    ProviderProfileId, SecretId, SecretRef, SessionId, SessionParticipant, SessionStatus,
+    TaskAssignment, TaskKind, TrackKind, TrackMute, Variable, VariableId,
 };
+use tan_infra_storage::repositories::SqlitePersonRepository;
 use tan_infra_storage::{
     new_id, SqliteFrameRepository, SqliteNoteRepository, SqliteProviderProfileRepository,
     SqliteSecretMetadataRepository, SqliteSessionRepository, SqliteTaskAssignmentRepository,
@@ -338,7 +341,9 @@ fn item(id: &str, note_id: &str, task: &str) -> ActionItem {
         id: ActionItemId::new(id),
         note_id: NoteId::new(note_id),
         task: task.to_owned(),
-        owner: Some("Ayşe".to_owned()),
+        // The seeded "me" person, so the foreign key is satisfied.
+        owner_person_id: Some(PersonId::new("self")),
+        owner_edited: true,
         due: Some(EpochMs::new(1_800_000_000_000)),
         done: false,
     }
@@ -358,7 +363,8 @@ fn note_with_frame_refs_and_action_items_round_trips() {
     let items = vec![
         item("a2", "n1", "İkinci iş"),
         ActionItem {
-            owner: None,
+            owner_person_id: None,
+            owner_edited: false,
             due: None,
             ..item("a1", "n1", "Birinci iş")
         },
@@ -398,13 +404,13 @@ fn replacing_a_sessions_note_leaves_exactly_the_new_note_and_is_atomic() {
     // A failing replacement (dangling frame reference) changes nothing.
     let mut dangling = note("new", "s1", 10);
     dangling.frame_refs = vec![FrameId::new("no-such-frame")];
-    assert!(block_on(repo.replace_for_session(&dangling, &[])).is_err());
+    assert!(block_on(repo.replace_for_session(&dangling, &[], &[])).is_err());
     assert!(block_on(repo.get(&NoteId::new("old-1"))).unwrap().is_some());
     assert!(block_on(repo.get(&NoteId::new("old-2"))).unwrap().is_some());
 
     let fresh = note("new", "s1", 10);
     let items = vec![item("a2", "new", "Yeni")];
-    block_on(repo.replace_for_session(&fresh, &items)).unwrap();
+    block_on(repo.replace_for_session(&fresh, &items, &[])).unwrap();
     assert_eq!(block_on(repo.get(&fresh.id)).unwrap(), Some(fresh.clone()));
     assert_eq!(block_on(repo.list_action_items(&fresh.id)).unwrap(), items);
     assert!(block_on(repo.get(&NoteId::new("old-1"))).unwrap().is_none());
@@ -415,7 +421,7 @@ fn replacing_a_sessions_note_leaves_exactly_the_new_note_and_is_atomic() {
     assert!(block_on(repo.get(&NoteId::new("other"))).unwrap().is_some());
 
     // Running it again with the same note id keeps it (an update, not a delete).
-    block_on(repo.replace_for_session(&fresh, &items)).unwrap();
+    block_on(repo.replace_for_session(&fresh, &items, &[])).unwrap();
     assert_eq!(block_on(repo.get(&fresh.id)).unwrap(), Some(fresh));
 }
 
@@ -543,6 +549,121 @@ fn deleting_a_session_removes_everything_derived_from_it() {
     assert!(block_on(notes.list_action_items(&NoteId::new("n1")))
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn replacing_a_note_replaces_the_ai_participants_in_the_same_transaction() {
+    let t = test_db();
+    with_session(&t, "s1");
+    let people = SqlitePersonRepository::new(t.db.clone());
+    let notes = SqliteNoteRepository::new(t.db.clone());
+    let new_person = |id: &str, name: &str| Person {
+        id: PersonId::new(id),
+        display_name: name.to_owned(),
+        is_self: false,
+        created_at: EpochMs::new(5),
+    };
+    for (id, name) in [("p1", "Ayşe"), ("p2", "Can"), ("p3", "Deniz")] {
+        block_on(people.find_or_create(&name.to_lowercase(), &new_person(id, name))).unwrap();
+    }
+    let participant = |id: &str, source| SessionParticipant {
+        session_id: sid("s1"),
+        person_id: PersonId::new(id),
+        source,
+    };
+    block_on(people.add_participant(&participant("p1", ParticipantSource::Ai))).unwrap();
+    block_on(people.add_participant(&participant("p3", ParticipantSource::Manual))).unwrap();
+    block_on(notes.save(&note("old", "s1", 1), &[])).unwrap();
+    let listed = || -> Vec<(String, ParticipantSource)> {
+        block_on(people.list_participants(&sid("s1")))
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.person_id.to_string(), p.source))
+            .collect()
+    };
+
+    // A failure anywhere (here: a person that does not exist) changes nothing, not even the
+    // note: the old note and the old participants are both still there.
+    let before = listed();
+    let ghost = [PersonId::new("p2"), PersonId::new("ghost")];
+    assert!(matches!(
+        block_on(notes.replace_for_session(&note("new", "s1", 2), &[], &ghost)),
+        Err(RepositoryError::Conflict(_))
+    ));
+    assert_eq!(listed(), before);
+    assert!(block_on(notes.get(&NoteId::new("old"))).unwrap().is_some());
+    assert!(block_on(notes.get(&NoteId::new("new"))).unwrap().is_none());
+
+    block_on(notes.replace_for_session(
+        &note("new", "s1", 2),
+        &[],
+        &[PersonId::new("p2"), PersonId::new("p3")],
+    ))
+    .unwrap();
+    assert_eq!(
+        listed(),
+        [
+            ("p3".to_owned(), ParticipantSource::Manual),
+            ("p2".to_owned(), ParticipantSource::Ai)
+        ],
+        "the stale AI row is gone, the user's stays and wins"
+    );
+}
+
+#[test]
+fn people_outlive_their_notes_and_sessions_take_participants_along() {
+    let t = test_db();
+    with_session(&t, "s1");
+    let people = SqlitePersonRepository::new(t.db.clone());
+    let notes = SqliteNoteRepository::new(t.db.clone());
+    let sessions = SqliteSessionRepository::new(t.db.clone());
+    let ayse = block_on(people.find_or_create(
+        "ayşe",
+        &Person {
+            id: PersonId::new("p1"),
+            display_name: "Ayşe".to_owned(),
+            is_self: false,
+            created_at: EpochMs::new(5),
+        },
+    ))
+    .unwrap();
+    let owned = ActionItem {
+        owner_person_id: Some(ayse.id.clone()),
+        ..item("a1", "n1", "x")
+    };
+    block_on(notes.save(&note("n1", "s1", 1), &[owned])).unwrap();
+    block_on(people.add_participant(&SessionParticipant {
+        session_id: sid("s1"),
+        person_id: ayse.id.clone(),
+        source: ParticipantSource::Manual,
+    }))
+    .unwrap();
+
+    // Deleting the person leaves the action item, ownerless, and drops their participation.
+    let conn = rusqlite::Connection::open(&t.path).unwrap();
+    conn.pragma_update(None, "foreign_keys", true).unwrap();
+    conn.execute("DELETE FROM people WHERE id = 'p1'", [])
+        .unwrap();
+    let items = block_on(notes.list_action_items(&NoteId::new("n1"))).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].owner_person_id, None);
+    assert!(block_on(people.list_participants(&sid("s1")))
+        .unwrap()
+        .is_empty());
+
+    // Deleting a session removes its participants but never the people.
+    let me = block_on(people.self_person()).unwrap();
+    block_on(people.add_participant(&SessionParticipant {
+        session_id: sid("s1"),
+        person_id: me.id.clone(),
+        source: ParticipantSource::Ai,
+    }))
+    .unwrap();
+    block_on(sessions.delete(&sid("s1"))).unwrap();
+    assert!(block_on(people.list_participants(&sid("s1")))
+        .unwrap()
+        .is_empty());
+    assert_eq!(block_on(people.get(&me.id)).unwrap(), Some(me));
 }
 
 // ---------------------------------------------------------------------------------------------

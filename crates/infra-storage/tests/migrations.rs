@@ -278,3 +278,198 @@ fn track_mutes_migration_reverts_to_version_four_without_touching_sessions() {
     migrate_up(&mut conn).unwrap();
     assert_eq!(schema_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
 }
+
+/// A database at schema version 5 with a session, a note and two action items (one owned by the
+/// old free-text column), as an installed app would have.
+fn version_five_database() -> Connection {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migrate_up(&mut conn).unwrap();
+    migrate_down_to(&mut conn, 5).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), 5);
+    conn.execute_batch(
+        "INSERT INTO sessions (id, kind, title, started_at, language, note_language, status)
+         VALUES ('s1', 'meeting', 'Old meeting', 1000, 'auto', 'tr', 'processed');
+         INSERT INTO notes (id, session_id, language, summary, created_at)
+         VALUES ('n1', 's1', 'tr', 'Summary', 1000);
+         INSERT INTO action_items (id, note_id, position, task, owner, due, done)
+         VALUES ('a1', 'n1', 0, 'Raporu hazırla', 'Özge', 5, 1),
+                ('a2', 'n1', 1, 'Sunumu yap', NULL, NULL, 0);",
+    )
+    .unwrap();
+    conn
+}
+
+#[test]
+fn people_migration_adds_the_schema_and_keeps_existing_rows() {
+    let mut conn = version_five_database();
+    assert!(columns(&conn, "people").is_empty());
+
+    migrate_up(&mut conn).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
+    assert_eq!(
+        columns(&conn, "people"),
+        [
+            "id",
+            "display_name",
+            "normalized_name",
+            "is_self",
+            "created_at"
+        ]
+    );
+    assert_eq!(
+        columns(&conn, "session_participants"),
+        ["session_id", "person_id", "source"]
+    );
+    let item_columns = columns(&conn, "action_items");
+    assert!(item_columns.contains(&"owner_person_id".to_owned()));
+    assert!(item_columns.contains(&"owner_edited".to_owned()));
+
+    // Existing items are untouched: the old text stays where it was, unlinked and not edited.
+    let (owner, person, edited, done): (Option<String>, Option<String>, i64, i64) = conn
+        .query_row(
+            "SELECT owner, owner_person_id, owner_edited, done FROM action_items WHERE id = 'a1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (owner.as_deref(), person, edited, done),
+        (Some("Özge"), None, 0, 1)
+    );
+
+    // Exactly one "me" person is seeded and there cannot be a second one.
+    let people: Vec<(String, i64)> = conn
+        .prepare("SELECT id, is_self FROM people")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(people, [("self".to_owned(), 1)]);
+    assert!(conn
+        .execute(
+            "INSERT INTO people (id, display_name, normalized_name, is_self, created_at)
+             VALUES ('p9', 'Other me', 'other me', 1, 0)",
+            [],
+        )
+        .is_err());
+}
+
+#[test]
+fn people_are_unique_by_normalized_name_and_the_references_cascade() {
+    let mut conn = version_five_database();
+    migrate_up(&mut conn).unwrap();
+    conn.pragma_update(None, "foreign_keys", true).unwrap();
+    conn.execute(
+        "INSERT INTO people (id, display_name, normalized_name, is_self, created_at)
+         VALUES ('p1', 'Özge', 'özge', 0, 0)",
+        [],
+    )
+    .unwrap();
+    assert!(conn
+        .execute(
+            "INSERT INTO people (id, display_name, normalized_name, is_self, created_at)
+             VALUES ('p2', 'ÖZGE', 'özge', 0, 0)",
+            [],
+        )
+        .is_err());
+    conn.execute(
+        "UPDATE action_items SET owner_person_id = 'p1', owner_edited = 1 WHERE id = 'a1'",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO session_participants (session_id, person_id, source) VALUES ('s1', 'p1', 'ai')",
+        [],
+    )
+    .unwrap();
+    assert!(
+        conn.execute(
+            "INSERT INTO session_participants (session_id, person_id, source) VALUES ('s1', 'p1', 'robot')",
+            [],
+        )
+        .is_err(),
+        "the source is one of ai/manual (and the pair is unique)"
+    );
+    assert!(conn
+        .execute(
+            "UPDATE action_items SET owner_person_id = 'ghost' WHERE id = 'a2'",
+            []
+        )
+        .is_err());
+
+    conn.execute("DELETE FROM people WHERE id = 'p1'", [])
+        .unwrap();
+    let owner: Option<String> = conn
+        .query_row(
+            "SELECT owner_person_id FROM action_items WHERE id = 'a1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(owner, None, "the item stays, ownerless");
+    let participants: i64 = conn
+        .query_row("SELECT count(*) FROM session_participants", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(participants, 0);
+}
+
+#[test]
+fn people_migration_reverts_to_version_five_and_keeps_the_owners_as_text() {
+    let mut conn = version_five_database();
+    migrate_up(&mut conn).unwrap();
+    conn.execute(
+        "INSERT INTO people (id, display_name, normalized_name, is_self, created_at)
+         VALUES ('p1', 'İlker', 'ilker', 0, 0)",
+        [],
+    )
+    .unwrap();
+    // a1 is linked to a person (the old text is also still there), a2 to the "me" person.
+    conn.execute(
+        "UPDATE action_items SET owner_person_id = 'p1', owner_edited = 1 WHERE id = 'a1'",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE action_items SET owner_person_id = 'self' WHERE id = 'a2'",
+        [],
+    )
+    .unwrap();
+
+    migrate_down_to(&mut conn, 5).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), 5);
+    assert!(columns(&conn, "people").is_empty());
+    assert!(columns(&conn, "session_participants").is_empty());
+    assert_eq!(
+        columns(&conn, "action_items"),
+        ["id", "note_id", "position", "task", "owner", "due", "done"]
+    );
+    let items: Vec<(String, Option<String>, i64, i64)> = conn
+        .prepare("SELECT id, owner, due IS NOT NULL, done FROM action_items ORDER BY position")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        items,
+        [
+            ("a1".to_owned(), Some("İlker".to_owned()), 1, 1),
+            ("a2".to_owned(), Some("Me".to_owned()), 0, 0),
+        ],
+        "the owners survive as text and nothing else about the items changes"
+    );
+    // The rebuilt table still hangs off its note.
+    conn.pragma_update(None, "foreign_keys", true).unwrap();
+    conn.execute("DELETE FROM notes WHERE id = 'n1'", [])
+        .unwrap();
+    let left: i64 = conn
+        .query_row("SELECT count(*) FROM action_items", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(left, 0);
+
+    migrate_up(&mut conn).unwrap();
+    assert_eq!(schema_version(&conn).unwrap(), LATEST_SCHEMA_VERSION);
+}

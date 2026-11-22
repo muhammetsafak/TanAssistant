@@ -8,8 +8,14 @@ its original language.
 Reply with one JSON object with exactly these fields:
 - `summary`: a concise summary of the meeting (a short paragraph, or a few short ones).
 - `decisions`: decisions that were explicitly taken, one string each. Empty array if none.
+- `participants`: the people who are named or addressed in the conversation, each written as
+  the conversation spells the name, one string each, without repeats. Only individual people,
+  not teams, companies or products. Use the exact word `me` for the person who made the
+  recording (the `me` speaker) when they took part. Empty array if nobody is named.
 - `action_items`: tasks someone has to do. Each item has `task` (what must be done),
-  `owner` (who, as named in the conversation; `null` when nobody was named) and `due`
+  `owner` (who, as named in the conversation, spelled like the same name in `participants`;
+  the exact word `me` when the task belongs to the person who made the recording; `null`
+  when nobody was named) and `due`
   (an ISO date `YYYY-MM-DD`; `null` unless a date was stated or can be computed exactly from
   the meeting date given in the message). Do not invent tasks nobody agreed to.
 - `open_questions`: questions or problems that were left unresolved. Empty array if none.

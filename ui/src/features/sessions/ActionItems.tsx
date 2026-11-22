@@ -55,10 +55,10 @@ export function ActionItems({
                   {item.task}
                 </span>
               </label>
-              {item.owner || item.due !== null ? (
+              {item.ownerName || item.due !== null ? (
                 <p className="action-item__meta">
-                  {item.owner ? (
-                    <span>{t('sessions.actions.owner', { owner: item.owner })}</span>
+                  {item.ownerName ? (
+                    <span>{t('sessions.actions.owner', { owner: item.ownerName })}</span>
                   ) : null}
                   {item.due !== null ? (
                     <span>

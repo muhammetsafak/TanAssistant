@@ -156,6 +156,21 @@ export const commands = {
 	getSessionDetail: (sessionId: string) => typedError<SessionDetailDto_Serialize, SessionsIpcError_Serialize>(__TAURI_INVOKE("get_session_detail", { sessionId })),
 	/**  Marks an action item done or not done. */
 	toggleActionItem: (actionItemId: string, done: boolean) => typedError<null, SessionsIpcError_Serialize>(__TAURI_INVOKE("toggle_action_item", { actionItemId, done })),
+	/**  Everyone in the person directory: the "me" person first, then by name. */
+	listPeople: () => typedError<PersonDto[], SessionsIpcError_Serialize>(__TAURI_INVOKE("list_people")),
+	/**
+	 *  Makes `owner` the owner of an action item (`null` clears the owner) and returns that person.
+	 *  A `newName` finds the person already known by that name or adds one; the person does not
+	 *  become a participant of the session. The choice survives regenerating the note.
+	 */
+	setActionItemOwner: (actionItemId: string, owner: PersonRefInput | null) => typedError<PersonDto | null, SessionsIpcError_Serialize>(__TAURI_INVOKE("set_action_item_owner", { actionItemId, owner })),
+	/**
+	 *  Adds a person to the participants of a session (as the user's own choice, which regenerating
+	 *  the note keeps) and returns that person.
+	 */
+	addSessionParticipant: (sessionId: string, person: PersonRefInput) => typedError<PersonDto, SessionsIpcError_Serialize>(__TAURI_INVOKE("add_session_participant", { sessionId, person })),
+	/**  Removes a person from the participants of a session. The person stays in the directory. */
+	removeSessionParticipant: (sessionId: string, personId: string) => typedError<null, SessionsIpcError_Serialize>(__TAURI_INVOKE("remove_session_participant", { sessionId, personId })),
 	/**
 	 *  Exports the session's note, key frames and transcript as a Markdown file and returns the
 	 *  file's absolute path.
@@ -233,12 +248,21 @@ export type ActionItemDto = ActionItemDto_Serialize | ActionItemDto_Deserialize;
 
 /**  A task from the note. */
 export type ActionItemDto_Deserialize = {
-	/**  Identity (pass it to `toggle_action_item`). */
+	/**  Identity (pass it to `toggle_action_item` and `set_action_item_owner`). */
 	id: string,
 	/**  What has to be done. */
 	task: string,
-	/**  Who is responsible, when known. */
-	owner?: string | null,
+	/**  Who is responsible, when known: a person of the directory. */
+	ownerPersonId?: string | null,
+	/**  The owner's name, when there is one (for the "me" person see `ownerIsSelf`). */
+	ownerName?: string | null,
+	/**  Whether the owner is the person who makes the recordings. */
+	ownerIsSelf: boolean,
+	/**
+	 *  Whether the user chose (or cleared) the owner; regenerating the note keeps that choice
+	 *  for a task whose text is unchanged.
+	 */
+	ownerEdited: boolean,
 	/**  Due date at midnight UTC (milliseconds since the Unix epoch), when known. */
 	due?: number | null,
 	/**  Whether the user marked it done. */
@@ -247,12 +271,21 @@ export type ActionItemDto_Deserialize = {
 
 /**  A task from the note. */
 export type ActionItemDto_Serialize = {
-	/**  Identity (pass it to `toggle_action_item`). */
+	/**  Identity (pass it to `toggle_action_item` and `set_action_item_owner`). */
 	id: string,
 	/**  What has to be done. */
 	task: string,
-	/**  Who is responsible, when known. */
-	owner: string | null,
+	/**  Who is responsible, when known: a person of the directory. */
+	ownerPersonId: string | null,
+	/**  The owner's name, when there is one (for the "me" person see `ownerIsSelf`). */
+	ownerName: string | null,
+	/**  Whether the owner is the person who makes the recordings. */
+	ownerIsSelf: boolean,
+	/**
+	 *  Whether the user chose (or cleared) the owner; regenerating the note keeps that choice
+	 *  for a task whose text is unchanged.
+	 */
+	ownerEdited: boolean,
 	/**  Due date at midnight UTC (milliseconds since the Unix epoch), when known. */
 	due: number | null,
 	/**  Whether the user marked it done. */
@@ -702,6 +735,48 @@ export type PageDto_Serialize = {
 	/**  Sessions to return (default 50, at most 200). */
 	limit: number | null,
 };
+
+/**  A person who took part in a session. */
+export type ParticipantDto = {
+	/**  The person. */
+	person: PersonDto,
+	/**  Who added them. */
+	source: ParticipantSourceDto,
+};
+
+/**  Who added a participant to a session. */
+export type ParticipantSourceDto = 
+/**
+ *  The AI extracted the participant while writing the note; regenerating the note replaces
+ *  it.
+ */
+"ai" | 
+/**  The user added the participant; regenerating the note keeps it. */
+"manual";
+
+/**  A person of the directory. */
+export type PersonDto = {
+	/**  Identity. */
+	id: string,
+	/**
+	 *  The name as it was first written. For the "me" person (`isSelf`) the UI shows its own
+	 *  localised label instead.
+	 */
+	displayName: string,
+	/**  Whether this is the person who makes the recordings. Exactly one person is. */
+	isSelf: boolean,
+};
+
+/**
+ *  A person the user points at: one already in the directory, or a name to look up (an existing
+ *  person with that name is found; otherwise a new one is added). Exactly one key is set:
+ *  `{ personId }` or `{ newName }`.
+ */
+export type PersonRefInput = 
+/**  A person of the directory. */
+({ personId: string }) & { newName?: never } | 
+/**  A name, 1 to 100 characters. */
+({ newName: string }) & { personId?: never };
 
 /**  What a finished run produced. */
 export type ProcessSummaryDto = {
@@ -1355,6 +1430,8 @@ export type SessionDetailDto_Deserialize = {
 	transcript: TranscriptLineDto_Deserialize[],
 	/**  The latest note, if one was generated. */
 	note?: NoteDto_Deserialize | null,
+	/**  Who took part, in the order they were added. */
+	participants: ParticipantDto[],
 	/**  The processing job, if the session was ever processed. */
 	job?: ProcessingJobDto_Deserialize | null,
 };
@@ -1375,6 +1452,8 @@ export type SessionDetailDto_Serialize = {
 	transcript: TranscriptLineDto_Serialize[],
 	/**  The latest note, if one was generated. */
 	note: NoteDto_Serialize | null,
+	/**  Who took part, in the order they were added. */
+	participants: ParticipantDto[],
 	/**  The processing job, if the session was ever processed. */
 	job: ProcessingJobDto_Serialize | null,
 };

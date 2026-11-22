@@ -3,8 +3,9 @@
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use tan_application::ports::NoteRepository;
 use tan_application::RepositoryError;
-use tan_domain::{ActionItem, ActionItemId, EpochMs, FrameId, Note, NoteId, SessionId};
+use tan_domain::{ActionItem, ActionItemId, EpochMs, FrameId, Note, NoteId, PersonId, SessionId};
 
+use super::people::replace_ai_participants;
 use super::{parse_column, require_changed};
 use crate::db::{Database, DbError};
 use crate::search::{add_doc, remove_ref_docs, SOURCE_NOTE};
@@ -69,11 +70,16 @@ fn action_item_from_row(row: &Row<'_>) -> rusqlite::Result<ActionItem> {
         id: ActionItemId::new(row.get::<_, String>(0)?),
         note_id: NoteId::new(row.get::<_, String>(1)?),
         task: row.get(2)?,
-        owner: row.get(3)?,
-        due: row.get::<_, Option<i64>>(4)?.map(EpochMs::new),
-        done: row.get(5)?,
+        owner_person_id: row.get::<_, Option<String>>(3)?.map(PersonId::new),
+        owner_edited: row.get(4)?,
+        due: row.get::<_, Option<i64>>(5)?.map(EpochMs::new),
+        done: row.get(6)?,
     })
 }
+
+/// The columns [`action_item_from_row`] reads. The old free-text `owner` column is never read
+/// or written any more (the application moves old values to people on start-up).
+const ACTION_ITEM_COLUMNS: &str = "id, note_id, task, owner_person_id, owner_edited, due, done";
 
 /// The text indexed for full-text search: summary, decisions and open questions.
 fn searchable_text(note: &Note) -> String {
@@ -145,14 +151,16 @@ fn write_note(
     )?;
     for (position, item) in (0_i64..).zip(action_items.iter()) {
         tx.execute(
-            "INSERT INTO action_items (id, note_id, position, task, owner, due, done)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO action_items
+                 (id, note_id, position, task, owner_person_id, owner_edited, due, done)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 item.id.as_str(),
                 note_id,
                 position,
                 item.task,
-                item.owner,
+                item.owner_person_id.as_ref().map(PersonId::as_str),
+                item.owner_edited,
                 item.due.map(EpochMs::get),
                 item.done,
             ],
@@ -211,6 +219,7 @@ impl NoteRepository for SqliteNoteRepository {
         &self,
         note: &Note,
         action_items: &[ActionItem],
+        ai_participants: &[PersonId],
     ) -> Result<(), RepositoryError> {
         check_items(note, action_items)?;
         self.db.with_conn(|conn| {
@@ -229,6 +238,7 @@ impl NoteRepository for SqliteNoteRepository {
                 tx.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
             }
             write_note(&tx, note, action_items)?;
+            replace_ai_participants(&tx, &note.session_id, ai_participants)?;
             tx.commit()?;
             Ok(())
         })
@@ -276,10 +286,10 @@ impl NoteRepository for SqliteNoteRepository {
         note_id: &NoteId,
     ) -> Result<Vec<ActionItem>, RepositoryError> {
         self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, note_id, task, owner, due, done
-                 FROM action_items WHERE note_id = ?1 ORDER BY position",
-            )?;
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {ACTION_ITEM_COLUMNS}
+                 FROM action_items WHERE note_id = ?1 ORDER BY position"
+            ))?;
             let rows = stmt.query_map(params![note_id.as_str()], action_item_from_row)?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
@@ -288,22 +298,25 @@ impl NoteRepository for SqliteNoteRepository {
     async fn upsert_action_item(&self, item: &ActionItem) -> Result<(), RepositoryError> {
         self.db.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO action_items (id, note_id, position, task, owner, due, done)
+                "INSERT INTO action_items
+                     (id, note_id, position, task, owner_person_id, owner_edited, due, done)
                  VALUES (?1, ?2,
                          (SELECT COALESCE(MAX(position) + 1, 0) FROM action_items
                           WHERE note_id = ?2),
-                         ?3, ?4, ?5, ?6)
+                         ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT (id) DO UPDATE SET
                      note_id = excluded.note_id,
                      task = excluded.task,
-                     owner = excluded.owner,
+                     owner_person_id = excluded.owner_person_id,
+                     owner_edited = excluded.owner_edited,
                      due = excluded.due,
                      done = excluded.done",
                 params![
                     item.id.as_str(),
                     item.note_id.as_str(),
                     item.task,
-                    item.owner,
+                    item.owner_person_id.as_ref().map(PersonId::as_str),
+                    item.owner_edited,
                     item.due.map(EpochMs::get),
                     item.done,
                 ],
@@ -321,6 +334,39 @@ impl NoteRepository for SqliteNoteRepository {
             let changed = conn.execute(
                 "UPDATE action_items SET done = ?2 WHERE id = ?1",
                 params![id.as_str(), done],
+            )?;
+            require_changed(changed, "action item", id.as_str())
+        })
+    }
+
+    async fn get_action_item(
+        &self,
+        id: &ActionItemId,
+    ) -> Result<Option<ActionItem>, RepositoryError> {
+        self.db.with_conn(|conn| {
+            Ok(conn
+                .query_row(
+                    &format!("SELECT {ACTION_ITEM_COLUMNS} FROM action_items WHERE id = ?1"),
+                    params![id.as_str()],
+                    action_item_from_row,
+                )
+                .optional()?)
+        })
+    }
+
+    async fn set_action_item_owner(
+        &self,
+        id: &ActionItemId,
+        owner: Option<&PersonId>,
+    ) -> Result<(), RepositoryError> {
+        self.db.with_conn(|conn| {
+            // The old free-text column is cleared as well: the start-up migration of old owners
+            // only looks at rows without a person, and must not bring a cleared owner back.
+            let changed = conn.execute(
+                "UPDATE action_items
+                 SET owner_person_id = ?2, owner_edited = 1, owner = NULL
+                 WHERE id = ?1",
+                params![id.as_str(), owner.map(PersonId::as_str)],
             )?;
             require_changed(changed, "action item", id.as_str())
         })

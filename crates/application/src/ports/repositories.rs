@@ -11,9 +11,10 @@
 use std::future::Future;
 
 use tan_domain::{
-    ActionItem, ActionItemId, AppSettings, AudioTrack, Frame, FrameId, Note, NoteId,
-    ProviderProfile, ProviderProfileId, SecretId, SecretRef, Session, SessionId, SettingsPatch,
-    TaskAssignment, TaskKind, TrackKind, TrackMute, TranscriptSegment, Variable, VariableId,
+    ActionItem, ActionItemId, AppSettings, AudioTrack, Frame, FrameId, Note, NoteId, Person,
+    PersonId, ProviderProfile, ProviderProfileId, SecretId, SecretRef, Session, SessionId,
+    SessionParticipant, SettingsPatch, TaskAssignment, TaskKind, TrackKind, TrackMute,
+    TranscriptSegment, Variable, VariableId,
 };
 
 use crate::error::RepositoryResult;
@@ -125,12 +126,16 @@ pub trait NoteRepository: Send + Sync {
         action_items: &[ActionItem],
     ) -> impl Future<Output = RepositoryResult<()>> + Send;
 
-    /// Saves `note` (as [`save`](Self::save) does) and removes every other note of the same
-    /// session, all in one transaction: afterwards the session has exactly this note.
+    /// Saves `note` (as [`save`](Self::save) does), removes every other note of the same
+    /// session and replaces the session's AI-extracted participants with `ai_participants`
+    /// (participants the user added are kept), all in one transaction: either the session has
+    /// exactly this note with its people, or nothing changed. A person that is not in the
+    /// directory is a conflict.
     fn replace_for_session(
         &self,
         note: &Note,
         action_items: &[ActionItem],
+        ai_participants: &[PersonId],
     ) -> impl Future<Output = RepositoryResult<()>> + Send;
 
     /// Loads one note.
@@ -164,10 +169,67 @@ pub trait NoteRepository: Send + Sync {
         done: bool,
     ) -> impl Future<Output = RepositoryResult<()>> + Send;
 
+    /// Loads one action item.
+    fn get_action_item(
+        &self,
+        id: &ActionItemId,
+    ) -> impl Future<Output = RepositoryResult<Option<ActionItem>>> + Send;
+
     /// Deletes one action item.
     fn delete_action_item(
         &self,
         id: &ActionItemId,
+    ) -> impl Future<Output = RepositoryResult<()>> + Send;
+
+    /// Sets the owner of an action item (`None` clears it) and marks the choice as the user's
+    /// (`owner_edited`). A person that is not in the directory is a conflict.
+    fn set_action_item_owner(
+        &self,
+        id: &ActionItemId,
+        owner: Option<&PersonId>,
+    ) -> impl Future<Output = RepositoryResult<()>> + Send;
+}
+
+/// Persistence of the person directory and of the participants of sessions.
+pub trait PersonRepository: Send + Sync {
+    /// Everyone in the directory: the "me" person first, the rest by normalized name.
+    fn list(&self) -> impl Future<Output = RepositoryResult<Vec<Person>>> + Send;
+
+    /// Loads one person.
+    fn get(&self, id: &PersonId) -> impl Future<Output = RepositoryResult<Option<Person>>> + Send;
+
+    /// The "me" person: the one who makes the recordings. It always exists.
+    fn self_person(&self) -> impl Future<Output = RepositoryResult<Person>> + Send;
+
+    /// The person whose normalized name is `normalized_name`; when there is none, `candidate`
+    /// is stored (with that normalized name) and returned. The caller computes the normalized
+    /// name (see the application's `people` module) so that there is one rule.
+    fn find_or_create(
+        &self,
+        normalized_name: &str,
+        candidate: &Person,
+    ) -> impl Future<Output = RepositoryResult<Person>> + Send;
+
+    /// The participants of a session in the order they were added.
+    fn list_participants(
+        &self,
+        session_id: &SessionId,
+    ) -> impl Future<Output = RepositoryResult<Vec<SessionParticipant>>> + Send;
+
+    /// Adds a participant. A person who already took part keeps the row, except that a
+    /// [`Manual`](tan_domain::ParticipantSource::Manual) addition upgrades an AI row (the
+    /// user's choice must survive reprocessing). An unknown session or person is a conflict.
+    fn add_participant(
+        &self,
+        participant: &SessionParticipant,
+    ) -> impl Future<Output = RepositoryResult<()>> + Send;
+
+    /// Removes a participant; [`NotFound`](crate::RepositoryError::NotFound) when the person
+    /// did not take part.
+    fn remove_participant(
+        &self,
+        session_id: &SessionId,
+        person_id: &PersonId,
     ) -> impl Future<Output = RepositoryResult<()>> + Send;
 }
 

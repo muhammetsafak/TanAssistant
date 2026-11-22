@@ -56,6 +56,10 @@ define_id!(
     ActionItemId
 );
 define_id!(
+    /// Identifies a [`crate::Person`].
+    PersonId
+);
+define_id!(
     /// Identifies a [`crate::Variable`].
     VariableId
 );

@@ -8,26 +8,29 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Poll, Waker};
 
 use tan_domain::{
-    ActionItem, ActionItemId, Note, NoteId, ProcessingJob, ProcessingStep, ProviderProfile,
-    ProviderProfileId, Session, SessionId, SessionStatus, TaskKind,
+    ActionItem, ActionItemId, EpochMs, Note, NoteId, Person, PersonId, ProcessingJob,
+    ProcessingStep, ProviderProfile, ProviderProfileId, Session, SessionId, SessionStatus,
+    TaskKind,
 };
 
 use super::chunking::TokenBudget;
 use super::describe_frames::describe_frames;
-use super::synthesize::{synthesize, SynthesisInput};
+use super::synthesize::{synthesize, NoteDraft, SynthesisInput};
 use super::{
     ProcessError, ProcessProgress, ProcessResult, ProcessSummary, ProcessingJobRepository,
     SessionTranscriber,
 };
+use crate::people::{normalize_task, resolve_person};
 use crate::ports::{
-    AiError, Capabilities, Clock, FrameRepository, IdGenerator, NoteRepository, ProviderFactory,
-    ProviderProfileRepository, SessionRepository, TaskAssignmentRepository, TranscriptRepository,
+    AiError, Capabilities, Clock, FrameRepository, IdGenerator, NoteRepository, PersonRepository,
+    ProviderFactory, ProviderProfileRepository, SessionRepository, TaskAssignmentRepository,
+    TranscriptRepository,
 };
 use crate::sessions::SessionFileStore;
 use crate::transcription::TranscribeError;
 
 /// Everything [`ProcessSession`] depends on.
-pub struct ProcessPorts<S, Fr, T, N, A, P, F, J, W, Q> {
+pub struct ProcessPorts<S, Fr, T, N, A, P, F, J, W, Q, D> {
     /// Sessions (status changes, audio tracks).
     pub sessions: Arc<S>,
     /// Frames and their descriptions.
@@ -48,6 +51,8 @@ pub struct ProcessPorts<S, Fr, T, N, A, P, F, J, W, Q> {
     pub files: Arc<W>,
     /// Runs the transcription step.
     pub transcriber: Arc<Q>,
+    /// The person directory and the session participants (the note's people are stored there).
+    pub people: Arc<D>,
     /// Mints ids and prompt delimiters.
     pub ids: Arc<dyn IdGenerator>,
     /// The current time.
@@ -173,13 +178,13 @@ fn internal(error: impl std::fmt::Display) -> ProcessError {
 /// At most one run per session at a time. A run can be cancelled; a cancelled or failed run
 /// leaves the session `Failed` with the job recording how far it got, and
 /// [`ProcessSession::retry`] continues from there.
-pub struct ProcessSession<S, Fr, T, N, A, P, F, J, W, Q> {
-    ports: ProcessPorts<S, Fr, T, N, A, P, F, J, W, Q>,
+pub struct ProcessSession<S, Fr, T, N, A, P, F, J, W, Q, D> {
+    ports: ProcessPorts<S, Fr, T, N, A, P, F, J, W, Q, D>,
     active: Mutex<HashMap<SessionId, Arc<CancelState>>>,
     budget_for: fn(&ProviderProfile) -> TokenBudget,
 }
 
-impl<S, Fr, T, N, A, P, F, J, W, Q> ProcessSession<S, Fr, T, N, A, P, F, J, W, Q>
+impl<S, Fr, T, N, A, P, F, J, W, Q, D> ProcessSession<S, Fr, T, N, A, P, F, J, W, Q, D>
 where
     S: SessionRepository,
     Fr: FrameRepository,
@@ -191,10 +196,11 @@ where
     J: ProcessingJobRepository,
     W: SessionFileStore,
     Q: SessionTranscriber,
+    D: PersonRepository,
 {
     /// Creates the use case with the default token budgets ([`TokenBudget::for_profile`]).
     #[must_use]
-    pub fn new(ports: ProcessPorts<S, Fr, T, N, A, P, F, J, W, Q>) -> Self {
+    pub fn new(ports: ProcessPorts<S, Fr, T, N, A, P, F, J, W, Q, D>) -> Self {
         Self {
             ports,
             active: Mutex::new(HashMap::new()),
@@ -631,37 +637,111 @@ where
         )
         .await?;
 
+        self.store_note(session, draft).await?;
+        Ok(StepEnd::Done)
+    }
+
+    /// Stores the note the model wrote: its people enter the directory (an existing person is
+    /// found by the normalized name, never created twice), the action items keep what the user
+    /// did to the previous note, and the new note replaces every earlier one.
+    async fn store_note(&self, session: &Session, draft: NoteDraft) -> ProcessResult<()> {
+        let id = &session.id;
+        let ids = &*self.ports.ids;
+        let now = self.ports.clock.now();
         let note = Note {
-            id: NoteId::new(self.ports.ids.new_id()),
+            id: NoteId::new(ids.new_id()),
             session_id: id.clone(),
             language: session.note_language.clone(),
             summary: draft.summary,
             decisions: draft.decisions,
             open_questions: draft.open_questions,
             frame_refs: draft.key_frames,
-            created_at: self.ports.clock.now(),
+            created_at: now,
         };
-        let action_items: Vec<ActionItem> = draft
-            .action_items
-            .into_iter()
-            .map(|item| ActionItem {
-                id: ActionItemId::new(self.ports.ids.new_id()),
+
+        // The participants the model listed and the owners of the action items all took part
+        // in the meeting.
+        let mut participants: Vec<PersonId> = Vec::new();
+        let mut owners: Vec<Option<PersonId>> = Vec::with_capacity(draft.action_items.len());
+        for name in &draft.participants {
+            if let Some(person) = self.person_named(name, now).await? {
+                remember(&mut participants, person.id);
+            }
+        }
+        for item in &draft.action_items {
+            let owner = match &item.owner {
+                Some(name) => self.person_named(name, now).await?,
+                None => None,
+            };
+            owners.push(owner.map(|person| {
+                remember(&mut participants, person.id.clone());
+                person.id
+            }));
+        }
+
+        // What the user did to the previous note must survive regenerating it: an action item
+        // whose task is unchanged (same normalized text) keeps its `done` flag and a chosen
+        // owner. Each old item is matched at most once, in order, so a repeated task text
+        // pairs up one to one.
+        let mut earlier: Vec<(String, ActionItem)> =
+            match self.ports.notes.latest_for_session(id).await? {
+                Some(old) => self
+                    .ports
+                    .notes
+                    .list_action_items(&old.id)
+                    .await?
+                    .into_iter()
+                    .map(|item| (normalize_task(&item.task), item))
+                    .collect(),
+                None => Vec::new(),
+            };
+        let mut action_items: Vec<ActionItem> = Vec::with_capacity(draft.action_items.len());
+        for (item, owner) in draft.action_items.into_iter().zip(owners) {
+            let key = normalize_task(&item.task);
+            let kept = earlier
+                .iter()
+                .position(|(old_key, _)| *old_key == key)
+                .map(|index| earlier.remove(index).1);
+            let (done, owner_person_id, owner_edited) = match kept {
+                Some(old) if old.owner_edited => (old.done, old.owner_person_id, true),
+                Some(old) => (old.done, owner, false),
+                None => (false, owner, false),
+            };
+            action_items.push(ActionItem {
+                id: ActionItemId::new(ids.new_id()),
                 note_id: note.id.clone(),
                 task: item.task,
-                owner: item.owner,
+                owner_person_id,
+                owner_edited,
                 due: item.due,
-                done: false,
-            })
-            .collect();
+                done,
+            });
+        }
 
         // The new note replaces every earlier one in a single transaction (a crash between two
         // runs may have left strays, and each one still sits in the search index), so the
-        // session is never without a note.
+        // session is never without a note. The same transaction replaces the AI's participants
+        // (the user's are kept), so a session never shows a new note with the old people. The
+        // people created above are directory entries only: if this fails they stay unattached
+        // and a retry finds them again by name.
         self.ports
             .notes
-            .replace_for_session(&note, &action_items)
+            .replace_for_session(&note, &action_items, &participants)
             .await?;
-        Ok(StepEnd::Done)
+        Ok(())
+    }
+
+    /// The person a name in the model's reply stands for (created when new); `None` when the
+    /// name is unusable.
+    async fn person_named(&self, name: &str, now: EpochMs) -> ProcessResult<Option<Person>> {
+        Ok(resolve_person(&*self.ports.people, &*self.ports.ids, now, name).await?)
+    }
+}
+
+/// Adds `person_id` to `participants` unless it is there already.
+fn remember(participants: &mut Vec<PersonId>, person_id: PersonId) {
+    if !participants.contains(&person_id) {
+        participants.push(person_id);
     }
 }
 

@@ -170,8 +170,14 @@ fn write_action_items(note: &NoteWithItems, labels: &Labels, out: &mut String) {
     for item in &note.action_items {
         let mark = if item.done { 'x' } else { ' ' };
         let mut details = Vec::new();
-        if let Some(owner) = &item.owner {
-            details.push(format!("{}: {}", labels.owner, one_line(owner)));
+        if let Some(owner) = note.owner_of(item) {
+            // The "me" person has no name of its own: it is shown in the note's language.
+            let name = if owner.is_self {
+                labels.me.to_owned()
+            } else {
+                one_line(&owner.display_name)
+            };
+            details.push(format!("{}: {name}", labels.owner));
         }
         if let Some(due) = item.due {
             details.push(format!("{}: {}", labels.due, utc_date_string(due)));

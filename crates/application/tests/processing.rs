@@ -13,12 +13,15 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering}
 use std::sync::{Arc, Mutex};
 
 use futures_executor::block_on;
+use tan_application::people::{
+    AddSessionParticipant, ListPeople, PersonRef, RemoveSessionParticipant, SetActionItemOwner,
+};
 use tan_application::ports::{
     AiError, AiResult, ChatModel, ChatRequest, ChatResponse, ChatRole, Clock, FrameRepository,
-    IdGenerator, ModelCatalog, NoteRepository, ProviderFactory, ProviderProfileRepository,
-    SearchHit, SearchIndex, SearchSource, SessionRepository, TaskAssignmentRepository,
-    TranscriptRepository, TranscriptSegmentDto, TranscriptionModel, TranscriptionRequest,
-    VisionModel, VisionRequest,
+    IdGenerator, ModelCatalog, NoteRepository, PersonRepository, ProviderFactory,
+    ProviderProfileRepository, SearchHit, SearchIndex, SearchSource, SessionRepository,
+    TaskAssignmentRepository, TranscriptRepository, TranscriptSegmentDto, TranscriptionModel,
+    TranscriptionRequest, VisionModel, VisionRequest,
 };
 use tan_application::processing::{
     ProcessError, ProcessPorts, ProcessProgress, ProcessSession, ProcessingJobRepository,
@@ -26,7 +29,7 @@ use tan_application::processing::{
 };
 use tan_application::sessions::{
     AudioRetentionRepository, GetSessionDetail, ListSessions, Page, SearchSessions,
-    SessionFileStore, SessionFilter, StorageUsage, ToggleActionItem,
+    SessionFileStore, SessionFilter, SessionsError, StorageUsage, ToggleActionItem,
 };
 use tan_application::transcription::{
     TranscribeError, TranscribeProgress, TranscribeResult, TranscribeSummary, TranscriptionEngine,
@@ -34,9 +37,10 @@ use tan_application::transcription::{
 use tan_application::{RepositoryError, RepositoryResult};
 use tan_domain::{
     ActionItem, ActionItemId, AudioTrack, EpochMs, Frame, FrameId, LanguageCode, LanguageSetting,
-    Note, NoteId, ProcessingJob, ProcessingStep, ProviderKind, ProviderProfile, ProviderProfileId,
-    Session, SessionId, SessionKind, SessionRecord, SessionStatus, StepState, TaskAssignment,
-    TaskKind, TrackKind, TrackMute, TranscriptSegment,
+    Note, NoteId, ParticipantSource, Person, PersonId, ProcessingJob, ProcessingStep, ProviderKind,
+    ProviderProfile, ProviderProfileId, Session, SessionId, SessionKind, SessionParticipant,
+    SessionRecord, SessionStatus, StepState, TaskAssignment, TaskKind, TrackKind, TrackMute,
+    TranscriptSegment,
 };
 
 const STARTED_AT: i64 = 1_793_959_200_000; // 2026-11-06 10:00 UTC
@@ -45,6 +49,7 @@ const DUE_2026_12_01: i64 = 1_796_083_200_000;
 const VALID_NOTE: &str = r#"{
   "summary": "Bütçe görüşüldü.",
   "decisions": ["Bütçe onaylandı"],
+  "participants": ["Ayşe", "Can"],
   "action_items": [{"task": "Raporu hazırla", "owner": "Ayşe", "due": "2026-12-01"}],
   "open_questions": ["Lansman tarihi nedir?"],
   "key_frames": [{"frame_id": "F2", "reason": "fiyat tablosu"}]
@@ -71,6 +76,9 @@ struct World {
     jobs: Mutex<HashMap<String, ProcessingJob>>,
     deleted_audio: Mutex<Vec<(TrackKind, EpochMs)>>,
     hits: Mutex<Vec<SearchHit>>,
+    // The person directory as (normalized name, person); starts with the "me" person.
+    people: Mutex<Vec<(String, Person)>>,
+    participants: Mutex<Vec<SessionParticipant>>,
     // The segments the fake transcriber stores.
     produced: Vec<TranscriptSegment>,
     transcribe_calls: AtomicUsize,
@@ -343,10 +351,26 @@ impl NoteRepository for World {
         &self,
         note: &Note,
         action_items: &[ActionItem],
+        ai_participants: &[PersonId],
     ) -> RepositoryResult<()> {
         let mut notes = self.notes.lock().unwrap();
         notes.retain(|(existing, _)| existing.session_id != note.session_id);
         notes.push((note.clone(), action_items.to_vec()));
+        let session_id = &note.session_id;
+        let mut all = self.participants.lock().unwrap();
+        all.retain(|p| !(&p.session_id == session_id && p.source == ParticipantSource::Ai));
+        for person_id in ai_participants {
+            if !all
+                .iter()
+                .any(|p| &p.session_id == session_id && &p.person_id == person_id)
+            {
+                all.push(SessionParticipant {
+                    session_id: session_id.clone(),
+                    person_id: person_id.clone(),
+                    source: ParticipantSource::Ai,
+                });
+            }
+        }
         Ok(())
     }
 
@@ -403,6 +427,123 @@ impl NoteRepository for World {
     }
 
     async fn delete_action_item(&self, _id: &ActionItemId) -> RepositoryResult<()> {
+        Ok(())
+    }
+
+    async fn get_action_item(&self, id: &ActionItemId) -> RepositoryResult<Option<ActionItem>> {
+        Ok(self
+            .notes
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|(_, items)| items.iter())
+            .find(|item| &item.id == id)
+            .cloned())
+    }
+
+    async fn set_action_item_owner(
+        &self,
+        id: &ActionItemId,
+        owner: Option<&PersonId>,
+    ) -> RepositoryResult<()> {
+        let mut notes = self.notes.lock().unwrap();
+        for (_, items) in notes.iter_mut() {
+            if let Some(item) = items.iter_mut().find(|i| &i.id == id) {
+                item.owner_person_id = owner.cloned();
+                item.owner_edited = true;
+                return Ok(());
+            }
+        }
+        Err(RepositoryError::not_found("action item", id.as_str()))
+    }
+}
+
+impl PersonRepository for World {
+    async fn list(&self) -> RepositoryResult<Vec<Person>> {
+        let mut all = self.people.lock().unwrap().clone();
+        all.sort_by(|(a_key, a), (b_key, b)| {
+            b.is_self.cmp(&a.is_self).then_with(|| a_key.cmp(b_key))
+        });
+        Ok(all.into_iter().map(|(_, person)| person).collect())
+    }
+
+    async fn get(&self, id: &PersonId) -> RepositoryResult<Option<Person>> {
+        Ok(self
+            .people
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, person)| &person.id == id)
+            .map(|(_, person)| person.clone()))
+    }
+
+    async fn self_person(&self) -> RepositoryResult<Person> {
+        Ok(self
+            .people
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, person)| person.is_self)
+            .map(|(_, person)| person.clone())
+            .expect("the me person is seeded"))
+    }
+
+    async fn find_or_create(
+        &self,
+        normalized_name: &str,
+        candidate: &Person,
+    ) -> RepositoryResult<Person> {
+        let mut people = self.people.lock().unwrap();
+        if let Some((_, existing)) = people.iter().find(|(key, _)| key == normalized_name) {
+            return Ok(existing.clone());
+        }
+        people.push((normalized_name.to_owned(), candidate.clone()));
+        Ok(candidate.clone())
+    }
+
+    async fn list_participants(
+        &self,
+        session_id: &SessionId,
+    ) -> RepositoryResult<Vec<SessionParticipant>> {
+        Ok(self
+            .participants
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| &p.session_id == session_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn add_participant(&self, participant: &SessionParticipant) -> RepositoryResult<()> {
+        let mut all = self.participants.lock().unwrap();
+        match all.iter_mut().find(|p| {
+            p.session_id == participant.session_id && p.person_id == participant.person_id
+        }) {
+            Some(existing) => {
+                if participant.source == ParticipantSource::Manual {
+                    existing.source = ParticipantSource::Manual;
+                }
+            }
+            None => all.push(participant.clone()),
+        }
+        Ok(())
+    }
+
+    async fn remove_participant(
+        &self,
+        session_id: &SessionId,
+        person_id: &PersonId,
+    ) -> RepositoryResult<()> {
+        let mut all = self.participants.lock().unwrap();
+        let before = all.len();
+        all.retain(|p| !(&p.session_id == session_id && &p.person_id == person_id));
+        if all.len() == before {
+            return Err(RepositoryError::not_found(
+                "participant",
+                person_id.as_str(),
+            ));
+        }
         Ok(())
     }
 }
@@ -601,7 +742,8 @@ impl Clock for World {
 
 // ---- builders --------------------------------------------------------------------------
 
-type Subject = ProcessSession<World, World, World, World, World, World, World, World, World, World>;
+type Subject =
+    ProcessSession<World, World, World, World, World, World, World, World, World, World, World>;
 
 struct Rig {
     process: Subject,
@@ -828,6 +970,16 @@ impl Setup {
             jobs: Mutex::new(HashMap::new()),
             deleted_audio: Mutex::new(Vec::new()),
             hits: Mutex::new(Vec::new()),
+            people: Mutex::new(vec![(
+                String::new(),
+                Person {
+                    id: PersonId::new("self"),
+                    display_name: "Me".to_owned(),
+                    is_self: true,
+                    created_at: EpochMs::new(0),
+                },
+            )]),
+            participants: Mutex::new(Vec::new()),
             produced: self.segments,
             transcribe_calls: AtomicUsize::new(0),
             transcribe_profiles: Mutex::new(Vec::new()),
@@ -850,6 +1002,7 @@ impl Setup {
             jobs: world.clone(),
             files: world.clone(),
             transcriber: world.clone(),
+            people: world.clone(),
             ids: world.clone(),
             clock: world.clone(),
         });
@@ -903,7 +1056,13 @@ fn a_recorded_session_becomes_a_stored_note_and_is_marked_processed() {
     // The action items.
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].task, "Raporu hazırla");
-    assert_eq!(items[0].owner.as_deref(), Some("Ayşe"));
+    let ayse = block_on(PersonRepository::list(&*rig.world))
+        .unwrap()
+        .into_iter()
+        .find(|person| person.display_name == "Ayşe")
+        .expect("the owner entered the directory");
+    assert_eq!(items[0].owner_person_id, Some(ayse.id));
+    assert!(!items[0].owner_edited);
     assert_eq!(items[0].due, Some(EpochMs::new(DUE_2026_12_01)));
     assert!(!items[0].done);
     assert_eq!(items[0].note_id, note.id);
@@ -1164,7 +1323,7 @@ fn a_reply_cut_off_by_the_length_limit_is_repaired_too() {
     .build();
     rig.script_chat(vec![
         Ok(format!("{TRUNCATED}{{\"summary\": \"Bütçe görüşü")),
-        Ok(r#"{"summary": "Bütçe görüşüldü.", "decisions": [], "action_items": [], "open_questions": [], "key_frames": []}"#.to_owned()),
+        Ok(r#"{"summary": "Bütçe görüşüldü.", "decisions": [], "participants": [], "action_items": [], "open_questions": [], "key_frames": []}"#.to_owned()),
     ]);
     rig.execute().unwrap();
     assert_eq!(rig.chat_calls(), 2);
@@ -1638,7 +1797,7 @@ fn long_meeting(segments: usize) -> Setup {
     }
 }
 
-const EMPTY_NOTE: &str = r#"{"summary": "Uzun toplantı.", "decisions": [], "action_items": [], "open_questions": [], "key_frames": []}"#;
+const EMPTY_NOTE: &str = r#"{"summary": "Uzun toplantı.", "decisions": [], "participants": [], "action_items": [], "open_questions": [], "key_frames": []}"#;
 
 /// Answers structured (final) calls with a note and every other call with `working_notes`.
 fn answer_by_kind(rig: &Rig, working_notes: String) {
@@ -2050,12 +2209,30 @@ fn the_detail_holds_tracks_frames_transcript_note_and_job() {
         rig.world.clone(),
         rig.world.clone(),
         rig.world.clone(),
+        rig.world.clone(),
     );
     let detail = block_on(detail.execute(&sid())).unwrap();
     assert_eq!(detail.session.id, sid());
     assert_eq!(detail.frames.len(), 2);
     assert_eq!(detail.transcript.len(), 3);
     assert_eq!(detail.note.as_ref().unwrap().action_items.len(), 1);
+    let note = detail.note.as_ref().unwrap();
+    assert_eq!(
+        note.owner_of(&note.action_items[0])
+            .map(|person| person.display_name.as_str()),
+        Some("Ayşe")
+    );
+    assert_eq!(
+        detail
+            .participants
+            .iter()
+            .map(|p| (p.person.display_name.as_str(), p.source))
+            .collect::<Vec<_>>(),
+        [
+            ("Ayşe", ParticipantSource::Ai),
+            ("Can", ParticipantSource::Ai)
+        ]
+    );
     assert!(detail.job.as_ref().unwrap().is_complete());
     assert_eq!(detail.audio_tracks.len(), 2);
     let deleted: Vec<_> = detail
@@ -2065,4 +2242,345 @@ fn the_detail_holds_tracks_frames_transcript_note_and_job() {
         .map(|t| t.track.kind)
         .collect();
     assert_eq!(deleted, [TrackKind::System]);
+}
+
+// ---- people ----------------------------------------------------------------------------
+
+/// A model reply with the given participants and action items (`(task, owner)`).
+fn note_reply(participants: &[&str], items: &[(&str, Option<&str>)]) -> String {
+    let items: Vec<serde_json::Value> = items
+        .iter()
+        .map(|(task, owner)| serde_json::json!({"task": task, "owner": owner, "due": null}))
+        .collect();
+    serde_json::json!({
+        "summary": "Toplantı özeti.",
+        "decisions": [],
+        "participants": participants,
+        "action_items": items,
+        "open_questions": [],
+        "key_frames": []
+    })
+    .to_string()
+}
+
+fn directory(rig: &Rig) -> Vec<Person> {
+    block_on(PersonRepository::list(&*rig.world)).unwrap()
+}
+
+fn person_named(rig: &Rig, name: &str) -> Person {
+    directory(rig)
+        .into_iter()
+        .find(|person| person.display_name == name)
+        .unwrap_or_else(|| panic!("no person named {name}"))
+}
+
+fn participants_of(rig: &Rig) -> Vec<(String, ParticipantSource)> {
+    block_on(PersonRepository::list_participants(&*rig.world, &sid()))
+        .unwrap()
+        .into_iter()
+        .map(|p| {
+            let name = block_on(PersonRepository::get(&*rig.world, &p.person_id))
+                .unwrap()
+                .unwrap()
+                .display_name;
+            (name, p.source)
+        })
+        .collect()
+}
+
+fn no_vision() -> Setup {
+    Setup {
+        vision: false,
+        ..Setup::new()
+    }
+}
+
+#[test]
+fn the_notes_people_enter_the_directory_once_and_become_participants() {
+    let rig = no_vision().build();
+    rig.script_chat(vec![Ok(note_reply(
+        &["Ayşe", "  AYŞE ", "Can", "   "],
+        &[
+            ("Raporu hazırla", Some("ayşe")),
+            ("Not al", Some("me")),
+            ("Odayı ayır", None),
+            ("Davet gönder", Some("İlker")),
+        ],
+    ))]);
+    rig.execute().unwrap();
+
+    let names: Vec<String> = directory(&rig)
+        .into_iter()
+        .map(|p| p.display_name)
+        .collect();
+    assert_eq!(names, ["Me", "Ayşe", "Can", "İlker"], "Ayşe is one person");
+    let (_, items) = rig.note().unwrap();
+    assert_eq!(
+        items[0].owner_person_id,
+        Some(person_named(&rig, "Ayşe").id)
+    );
+    // "me" is the person who made the recording.
+    let me = block_on(PersonRepository::self_person(&*rig.world)).unwrap();
+    assert!(me.is_self);
+    assert_eq!(items[1].owner_person_id, Some(me.id));
+    assert_eq!(items[2].owner_person_id, None);
+    assert_eq!(
+        items[3].owner_person_id,
+        Some(person_named(&rig, "İlker").id)
+    );
+    assert!(items.iter().all(|item| !item.owner_edited));
+    // Listed participants and the owners all took part; "me" took part as an owner.
+    assert_eq!(
+        participants_of(&rig),
+        [
+            ("Ayşe".to_owned(), ParticipantSource::Ai),
+            ("Can".to_owned(), ParticipantSource::Ai),
+            ("Me".to_owned(), ParticipantSource::Ai),
+            ("İlker".to_owned(), ParticipantSource::Ai),
+        ]
+    );
+}
+
+#[test]
+fn the_participants_field_may_be_empty_but_not_missing() {
+    let rig = no_vision().build();
+    rig.script_chat(vec![Ok(note_reply(&[], &[("Raporu hazırla", None)]))]);
+    rig.execute().unwrap();
+    assert_eq!(directory(&rig).len(), 1, "only the me person");
+    assert!(participants_of(&rig).is_empty());
+
+    // A reply without the field did not follow the strict schema: it is repaired, once.
+    let rig = no_vision().build();
+    rig.script_chat(vec![
+        Ok(r#"{"summary": "Özet", "decisions": [], "action_items": [], "open_questions": [], "key_frames": []}"#.to_owned()),
+        Ok(note_reply(&["Ayşe"], &[])),
+    ]);
+    rig.execute().unwrap();
+    assert_eq!(rig.chat_calls(), 2);
+    let chat = rig.model().chat_requests.lock().unwrap();
+    assert!(chat[1]
+        .messages
+        .last()
+        .unwrap()
+        .content
+        .contains("participants"));
+    assert!(chat[0]
+        .json_schema
+        .as_ref()
+        .unwrap()
+        .schema_json
+        .contains("\"participants\""));
+    drop(chat);
+    assert_eq!(participants_of(&rig).len(), 1);
+}
+
+#[test]
+fn the_participants_reach_the_prompts_of_every_stage() {
+    let rig = no_vision().build();
+    rig.script_chat(vec![Ok(note_reply(&[], &[]))]);
+    rig.execute().unwrap();
+    let chat = rig.model().chat_requests.lock().unwrap();
+    let system = chat[0].system.as_deref().unwrap();
+    assert!(system.contains("`participants`"));
+    assert!(system.contains("the exact word `me`"));
+}
+
+#[test]
+fn reprocessing_carries_done_and_a_chosen_owner_to_an_unchanged_task() {
+    let rig = no_vision().build();
+    rig.script_chat(vec![
+        Ok(note_reply(
+            &["Ayşe"],
+            &[
+                ("Raporu hazırla", Some("Ayşe")),
+                ("Sunumu yap", Some("Ayşe")),
+            ],
+        )),
+        Ok(note_reply(
+            &["Can"],
+            &[
+                ("  RAPORU   hazırla ", Some("Can")),
+                ("Sunumu yap!", Some("Can")),
+                ("Yeni iş", Some("Can")),
+            ],
+        )),
+    ]);
+    rig.execute().unwrap();
+    let (_, first) = rig.note().unwrap();
+
+    // The user ticks the first task off and chooses an owner who is new to the directory;
+    // they also add Deniz to the participants.
+    block_on(rig.world.set_action_item_done(&first[0].id, true)).unwrap();
+    let set_owner = SetActionItemOwner::new(
+        rig.world.clone(),
+        rig.world.clone(),
+        rig.world.clone(),
+        rig.world.clone(),
+    );
+    let owner =
+        block_on(set_owner.execute(&first[0].id, Some(PersonRef::NewName("ÖZGE".to_owned()))))
+            .unwrap()
+            .unwrap();
+    let add = AddSessionParticipant::new(
+        rig.world.clone(),
+        rig.world.clone(),
+        rig.world.clone(),
+        rig.world.clone(),
+    );
+    block_on(add.execute(&sid(), PersonRef::NewName("Deniz".to_owned()))).unwrap();
+
+    rig.execute().unwrap();
+    let (_, second) = rig.note().unwrap();
+    assert_eq!(second.len(), 3);
+    // Same task (case and spacing aside): done and the user's owner are kept.
+    assert!(second[0].done);
+    assert!(second[0].owner_edited);
+    assert_eq!(second[0].owner_person_id, Some(owner.id));
+    assert_ne!(second[0].id, first[0].id, "the items are new rows");
+    // A task whose text changed starts over, with the model's owner.
+    assert!(!second[1].done);
+    assert!(!second[1].owner_edited);
+    assert_eq!(
+        second[1].owner_person_id,
+        Some(person_named(&rig, "Can").id)
+    );
+    assert!(!second[2].done);
+
+    // Participants: the AI's are replaced, the user's stay.
+    let mut now = participants_of(&rig);
+    now.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        now,
+        [
+            ("Can".to_owned(), ParticipantSource::Ai),
+            ("Deniz".to_owned(), ParticipantSource::Manual),
+        ]
+    );
+    // Nobody was created twice.
+    let names: Vec<String> = directory(&rig)
+        .into_iter()
+        .map(|p| p.display_name)
+        .collect();
+    assert_eq!(names, ["Me", "Ayşe", "Can", "Deniz", "ÖZGE"]);
+}
+
+#[test]
+fn a_cleared_owner_stays_cleared_when_the_task_is_unchanged() {
+    let rig = no_vision().build();
+    rig.script_chat(vec![
+        Ok(note_reply(&[], &[("Raporu hazırla", Some("Ayşe"))])),
+        Ok(note_reply(&[], &[("Raporu hazırla", Some("Ayşe"))])),
+    ]);
+    rig.execute().unwrap();
+    let (_, first) = rig.note().unwrap();
+    let set_owner = SetActionItemOwner::new(
+        rig.world.clone(),
+        rig.world.clone(),
+        rig.world.clone(),
+        rig.world.clone(),
+    );
+    assert_eq!(
+        block_on(set_owner.execute(&first[0].id, None)).unwrap(),
+        None
+    );
+
+    rig.execute().unwrap();
+    let (_, second) = rig.note().unwrap();
+    assert_eq!(second[0].owner_person_id, None);
+    assert!(second[0].owner_edited);
+}
+
+#[test]
+fn people_use_cases_resolve_validate_and_report_what_is_missing() {
+    let rig = no_vision().build();
+    rig.script_chat(vec![Ok(note_reply(
+        &["Ayşe"],
+        &[("Raporu hazırla", Some("Ayşe"))],
+    ))]);
+    rig.execute().unwrap();
+    let (_, items) = rig.note().unwrap();
+    let item = items[0].id.clone();
+    let ayse = person_named(&rig, "Ayşe");
+
+    let set_owner = SetActionItemOwner::new(
+        rig.world.clone(),
+        rig.world.clone(),
+        rig.world.clone(),
+        rig.world.clone(),
+    );
+    // A new name that normalizes to a known person finds that person.
+    let found = block_on(set_owner.execute(&item, Some(PersonRef::NewName("  AYŞE ".to_owned()))))
+        .unwrap()
+        .unwrap();
+    assert_eq!(found, ayse);
+    let by_id = block_on(set_owner.execute(&item, Some(PersonRef::Existing(ayse.id.clone()))))
+        .unwrap()
+        .unwrap();
+    assert_eq!(by_id, ayse);
+    assert_eq!(directory(&rig).len(), 2);
+    assert!(rig.note().unwrap().1[0].owner_edited);
+    // The owner is not made a participant of anything by choosing them: they are one already
+    // here (the model listed them), so remove them and choose again.
+    block_on(RemoveSessionParticipant::new(rig.world.clone()).execute(&sid(), &ayse.id)).unwrap();
+    block_on(set_owner.execute(&item, Some(PersonRef::Existing(ayse.id.clone())))).unwrap();
+    assert!(participants_of(&rig).is_empty());
+
+    assert!(matches!(
+        block_on(set_owner.execute(&item, Some(PersonRef::Existing(PersonId::new("ghost"))))),
+        Err(SessionsError::NotFound("person"))
+    ));
+    assert!(matches!(
+        block_on(set_owner.execute(&item, Some(PersonRef::NewName("   ".to_owned())))),
+        Err(SessionsError::Invalid(_))
+    ));
+    assert!(matches!(
+        block_on(set_owner.execute(&item, Some(PersonRef::NewName("x".repeat(101))))),
+        Err(SessionsError::Invalid(_))
+    ));
+    // An action item that is gone (regenerating a note gives new ids) is refused before any
+    // name enters the directory.
+    let people_before = directory(&rig);
+    assert!(matches!(
+        block_on(set_owner.execute(
+            &ActionItemId::new("nope"),
+            Some(PersonRef::NewName("Zeynep".to_owned()))
+        )),
+        Err(SessionsError::NotFound("action item"))
+    ));
+    assert_eq!(directory(&rig), people_before, "Zeynep was not added");
+    assert!(matches!(
+        block_on(set_owner.execute(&ActionItemId::new("nope"), None)),
+        Err(SessionsError::NotFound("action item"))
+    ));
+
+    let add = AddSessionParticipant::new(
+        rig.world.clone(),
+        rig.world.clone(),
+        rig.world.clone(),
+        rig.world.clone(),
+    );
+    assert!(matches!(
+        block_on(add.execute(
+            &SessionId::new("ghost"),
+            PersonRef::Existing(ayse.id.clone())
+        )),
+        Err(SessionsError::NotFound("session"))
+    ));
+    // The word "me" is not special in what the user types: only the model's reply maps it.
+    block_on(add.execute(&sid(), PersonRef::Existing(ayse.id.clone()))).unwrap();
+    block_on(add.execute(&sid(), PersonRef::Existing(ayse.id.clone()))).unwrap();
+    assert_eq!(
+        participants_of(&rig),
+        [("Ayşe".to_owned(), ParticipantSource::Manual)],
+        "added once, as the user's"
+    );
+    let remove = RemoveSessionParticipant::new(rig.world.clone());
+    block_on(remove.execute(&sid(), &ayse.id)).unwrap();
+    assert!(matches!(
+        block_on(remove.execute(&sid(), &ayse.id)),
+        Err(SessionsError::NotFound("participant"))
+    ));
+
+    let all = block_on(ListPeople::new(rig.world.clone()).execute()).unwrap();
+    assert!(all[0].is_self, "the me person comes first");
 }
