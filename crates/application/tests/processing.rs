@@ -407,8 +407,7 @@ impl NoteRepository for World {
             .unwrap()
             .iter()
             .find(|(n, _)| &n.id == note_id)
-            .map(|(_, items)| items.clone())
-            .unwrap_or_default())
+            .map_or_default(|(_, items)| items.clone()))
     }
 
     async fn upsert_action_item(&self, _item: &ActionItem) -> RepositoryResult<()> {

@@ -49,13 +49,11 @@ fn body(len: usize) -> Vec<u8> {
 }
 
 fn files_in(dir: &Path) -> Vec<String> {
-    let mut names: Vec<_> = std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut names: Vec<_> = std::fs::read_dir(dir).map_or_default(|entries| {
+        entries
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    });
     names.sort();
     names
 }

@@ -388,8 +388,7 @@ impl Generation {
         };
         let text: String = candidate
             .content
-            .map(|c| c.parts)
-            .unwrap_or_default()
+            .map_or_default(|c| c.parts)
             .into_iter()
             .filter(|p| !p.thought)
             .filter_map(|p| p.text)
