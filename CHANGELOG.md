@@ -8,6 +8,31 @@ both, and the tag) and `src-tauri/tauri.conf.json` has no `version` of its own.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-23
+
+### Added
+
+- The microphone and the system audio can be muted separately during a recording, from the
+  recording controls, the tray menu or the `Ctrl+Alt+M` (`Cmd+Option+M` on macOS) shortcut for
+  the microphone. A muted channel's stream is closed, so the system's microphone indicator goes
+  off; nothing from that interval reaches the transcript or the notes, while the other channel
+  and the screen keep recording. The transcript marks when a channel was muted.
+- An app-wide people directory and the participants of each meeting. Participants are taken from
+  the conversation when the notes are generated and can be added or removed by hand.
+- The owner of an action item can be changed with a searchable picker that lists you, the
+  meeting's participants and the other known people; searching ignores case and diacritics, and a
+  name that is not in the list can be added.
+- An action brief for every action item, generated on request: its context, details, related
+  decisions and open questions, the relevant screen frames, timestamped quotes that jump the audio
+  player to that moment, and suggested steps marked as a suggestion. The brief is read-only, can
+  be regenerated and copied as Markdown.
+
+### Changed
+
+- Re-processing a session keeps, for every action item whose task is unchanged, its done flag,
+  the owner chosen by hand and its brief, and keeps the participants added by hand.
+- Existing owner names are moved into the people directory the first time the app starts.
+
 ## [0.2.2] - 2026-11-10
 
 ### Fixed

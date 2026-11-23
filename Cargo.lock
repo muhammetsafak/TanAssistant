@@ -5353,7 +5353,7 @@ dependencies = [
 
 [[package]]
 name = "tan-app"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -5385,7 +5385,7 @@ dependencies = [
 
 [[package]]
 name = "tan-application"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -5397,11 +5397,11 @@ dependencies = [
 
 [[package]]
 name = "tan-domain"
-version = "0.2.2"
+version = "0.3.0"
 
 [[package]]
 name = "tan-infra-ai"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64 0.23.1",
  "reqwest",
@@ -5418,7 +5418,7 @@ dependencies = [
 
 [[package]]
 name = "tan-infra-capture"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "ashpd",
  "cpal",
@@ -5437,7 +5437,7 @@ dependencies = [
 
 [[package]]
 name = "tan-infra-secrets"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -5452,7 +5452,7 @@ dependencies = [
 
 [[package]]
 name = "tan-infra-storage"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "directories",
  "futures-executor",
@@ -5465,7 +5465,7 @@ dependencies = [
 
 [[package]]
 name = "tan-infra-transcription"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "flacenc",
  "hound",
